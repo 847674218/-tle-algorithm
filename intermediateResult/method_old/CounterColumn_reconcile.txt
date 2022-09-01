@@ -1,0 +1,32 @@
+@Override
+    public IColumn reconcile(IColumn column, Allocator allocator)
+    {
+        assert (column instanceof CounterColumn) || (column instanceof DeletedColumn) : "Wrong class type: " + column.getClass();
+
+        if (column.isMarkedForDelete()) // live + tombstone: track last tombstone
+        {
+            if (timestamp() < column.timestamp()) // live < tombstone
+            {
+                return column;
+            }
+            // live last delete >= tombstone
+            if (timestampOfLastDelete() >= column.timestamp())
+            {
+                return this;
+            }
+            // live last delete < tombstone
+            return new CounterColumn(name(), value(), timestamp(), column.timestamp());
+        }
+        // live < live last delete
+        if (timestamp() < ((CounterColumn)column).timestampOfLastDelete())
+            return column;
+        // live last delete > live
+        if (timestampOfLastDelete() > column.timestamp())
+            return this;
+        // live + live: merge clocks; update value
+        return new CounterColumn(
+            name(),
+            contextManager.merge(value(), column.value(), allocator),
+            Math.max(timestamp(), column.timestamp()),
+            Math.max(timestampOfLastDelete(), ((CounterColumn)column).timestampOfLastDelete()));
+    }

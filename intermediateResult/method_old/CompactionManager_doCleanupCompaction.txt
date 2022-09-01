@@ -1,0 +1,140 @@
+private void doCleanupCompaction(ColumnFamilyStore cfs, Collection<SSTableReader> sstables, NodeId.OneShotRenewer renewer) throws IOException
+    {
+        assert !cfs.isIndex();
+        Table table = cfs.table;
+        Collection<Range<Token>> ranges = StorageService.instance.getLocalRanges(table.name);
+        if (ranges.isEmpty())
+        {
+            logger.info("Cleanup cannot run before a node has joined the ring");
+            return;
+        }
+
+        boolean isCommutative = cfs.metadata.getDefaultValidator().isCommutative();
+        Collection<ByteBuffer> indexedColumns = cfs.indexManager.getIndexedColumns();
+
+        for (SSTableReader sstable : sstables)
+        {
+            if (indexedColumns.isEmpty()
+                && !new Bounds<Token>(sstable.first.token, sstable.last.token).intersects(ranges))
+            {
+                cfs.replaceCompactedSSTables(Arrays.asList(sstable), Collections.<SSTableReader>emptyList(), OperationType.CLEANUP);
+                continue;
+            }
+
+            CompactionController controller = new CompactionController(cfs, Collections.singletonList(sstable), getDefaultGcBefore(cfs), false);
+            long startTime = System.currentTimeMillis();
+
+            long totalkeysWritten = 0;
+
+            int expectedBloomFilterSize = Math.max(DatabaseDescriptor.getIndexInterval(),
+                                                   (int)(SSTableReader.getApproximateKeyCount(Arrays.asList(sstable))));
+            if (logger.isDebugEnabled())
+              logger.debug("Expected bloom filter size : " + expectedBloomFilterSize);
+
+            SSTableWriter writer = null;
+            SSTableReader newSstable = null;
+
+            logger.info("Cleaning up " + sstable);
+            // Calculate the expected compacted filesize
+            long expectedRangeFileSize = cfs.getExpectedCompactedFileSize(Arrays.asList(sstable), OperationType.CLEANUP);
+            File compactionFileLocation = cfs.directories.getDirectoryForNewSSTables(expectedRangeFileSize);
+            if (compactionFileLocation == null)
+                throw new IOException("disk full");
+
+            SSTableScanner scanner = sstable.getDirectScanner();
+            long rowsRead = 0;
+            List<IColumn> indexedColumnsInRow = null;
+
+            CleanupInfo ci = new CleanupInfo(sstable, scanner);
+            executor.beginCompaction(ci);
+            try
+            {
+                while (scanner.hasNext())
+                {
+                    if (ci.isStopRequested())
+                        throw new CompactionInterruptedException(ci.getCompactionInfo());
+                    SSTableIdentityIterator row = (SSTableIdentityIterator) scanner.next();
+                    if (Range.isInRanges(row.getKey().token, ranges))
+                    {
+                        AbstractCompactedRow compactedRow = controller.getCompactedRow(row);
+                        if (compactedRow.isEmpty())
+                            continue;
+                        writer = maybeCreateWriter(cfs, compactionFileLocation, expectedBloomFilterSize, writer, Collections.singletonList(sstable));
+                        writer.append(compactedRow);
+                        totalkeysWritten++;
+                    }
+                    else
+                    {
+                        cfs.invalidateCachedRow(row.getKey());
+
+                        if (!indexedColumns.isEmpty() || isCommutative)
+                        {
+                            if (indexedColumnsInRow != null)
+                                indexedColumnsInRow.clear();
+
+                            while (row.hasNext())
+                            {
+                                IColumn column = row.next();
+                                if (column instanceof CounterColumn)
+                                    renewer.maybeRenew((CounterColumn) column);
+                                if (indexedColumns.contains(column.name()))
+                                {
+                                    if (indexedColumnsInRow == null)
+                                        indexedColumnsInRow = new ArrayList<IColumn>();
+
+                                    indexedColumnsInRow.add(column);
+                                }
+                            }
+
+                            if (indexedColumnsInRow != null && !indexedColumnsInRow.isEmpty())
+                            {
+                                // acquire memtable lock here because secondary index deletion may cause a race. See CASSANDRA-3712
+                                Table.switchLock.readLock().lock();
+                                try
+                                {
+                                    cfs.indexManager.deleteFromIndexes(row.getKey(), indexedColumnsInRow);
+                                }
+                                finally
+                                {
+                                    Table.switchLock.readLock().unlock();
+                                }
+                            }
+                        }
+                    }
+                    if ((rowsRead++ % 1000) == 0)
+                        controller.mayThrottle(scanner.getCurrentPosition());
+                }
+                if (writer != null)
+                    newSstable = writer.closeAndOpenReader(sstable.maxDataAge);
+            }
+            catch (Exception e)
+            {
+                if (writer != null)
+                    writer.abort();
+                throw FBUtilities.unchecked(e);
+            }
+            finally
+            {
+                scanner.close();
+                executor.finishCompaction(ci);
+            }
+
+            List<SSTableReader> results = new ArrayList<SSTableReader>(1);
+            if (newSstable != null)
+            {
+                results.add(newSstable);
+
+                String format = "Cleaned up to %s.  %,d to %,d (~%d%% of original) bytes for %,d keys.  Time: %,dms.";
+                long dTime = System.currentTimeMillis() - startTime;
+                long startsize = sstable.onDiskLength();
+                long endsize = newSstable.onDiskLength();
+                double ratio = (double)endsize / (double)startsize;
+                logger.info(String.format(format, writer.getFilename(), startsize, endsize, (int)(ratio*100), totalkeysWritten, dTime));
+            }
+
+            // flush to ensure we don't lose the tombstones on a restart, since they are not commitlog'd
+            cfs.indexManager.flushIndexesBlocking();
+
+            cfs.replaceCompactedSSTables(Arrays.asList(sstable), results, OperationType.CLEANUP);
+        }
+    }

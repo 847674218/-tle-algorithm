@@ -1,0 +1,91 @@
+public int get_count(ByteBuffer key, ColumnParent column_parent, SlicePredicate predicate, ConsistencyLevel consistency_level)
+    throws InvalidRequestException, UnavailableException, TimedOutException
+    {
+        if (startSessionIfRequested())
+        {
+            Map<String, String> traceParameters = ImmutableMap.of("key", ByteBufferUtil.bytesToHex(key),
+                                                                  "column_parent", column_parent.toString(),
+                                                                  "predicate", predicate.toString(),
+                                                                  "consistency_level", consistency_level.name());
+            Tracing.instance().begin("get_count", traceParameters);
+        }
+        else
+        {
+            logger.debug("get_count");
+        }
+
+        try
+        {
+            ThriftClientState cState = state();
+            String keyspace = cState.getKeyspace();
+            cState.hasColumnFamilyAccess(keyspace, column_parent.column_family, Permission.SELECT);
+            Table table = Table.open(keyspace);
+            ColumnFamilyStore cfs = table.getColumnFamilyStore(column_parent.column_family);
+
+            if (predicate.column_names != null)
+                return get_slice(key, column_parent, predicate, consistency_level).size();
+
+            int pageSize;
+            // request by page if this is a large row
+            if (cfs.getMeanColumns() > 0)
+            {
+                int averageColumnSize = (int) (cfs.getMeanRowSize() / cfs.getMeanColumns());
+                pageSize = Math.min(COUNT_PAGE_SIZE, DatabaseDescriptor.getInMemoryCompactionLimit() / averageColumnSize);
+                pageSize = Math.max(2, pageSize);
+                logger.debug("average row column size is {}; using pageSize of {}", averageColumnSize, pageSize);
+            }
+            else
+            {
+                pageSize = COUNT_PAGE_SIZE;
+            }
+
+            int totalCount = 0;
+            List<ColumnOrSuperColumn> columns;
+
+            if (predicate.slice_range == null)
+            {
+                predicate.slice_range = new SliceRange(ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                       false,
+                                                       Integer.MAX_VALUE);
+            }
+
+            final int requestedCount = predicate.slice_range.count;
+            int remaining = requestedCount;
+            int pages = 0;
+            while (true)
+            {
+                predicate.slice_range.count = Math.min(pageSize, Math.max(2, remaining)); // fetch at least two columns
+                columns = get_slice(key, column_parent, predicate, consistency_level);
+                if (columns.isEmpty())
+                    break;
+
+                ByteBuffer firstName = getName(columns.get(0));
+                int newColumns = pages == 0 || !firstName.equals(predicate.slice_range.start) ? columns.size() : columns.size() - 1;
+
+                totalCount += newColumns;
+                // if we over-counted, just return original limit
+                if (totalCount > requestedCount)
+                    return requestedCount;
+                remaining -= newColumns;
+                pages++;
+                // We're done if either:
+                // - We've querying the number of columns requested by the user
+                // - last fetched page only contains the column we already fetched
+                if (remaining == 0 || ((columns.size() == 1) && (firstName.equals(predicate.slice_range.start))))
+                    break;
+                else
+                    predicate.slice_range.start = getName(columns.get(columns.size() - 1));
+            }
+
+            return totalCount;
+        }
+        catch (RequestValidationException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
+    }

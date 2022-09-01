@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\utils\SlabAllocator.java"><comment type="block" format="javadoc">/**
+ * Copyright 2011 The Apache Software Foundation
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicInteger</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicLong</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicReference</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Preconditions</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * The SlabAllocator is a bump-the-pointer allocator that allocates
+ * large (2MB by default) regions and then doles them out to threads that request
+ * slices into the array.
+ * &lt;p/&gt;
+ * The purpose of this class is to combat heap fragmentation in long lived
+ * objects: by ensuring that all allocations with similar lifetimes
+ * only to large regions of contiguous memory, we ensure that large blocks
+ * get freed up at the same time.
+ * &lt;p/&gt;
+ * Otherwise, variable length byte arrays allocated end up
+ * interleaved throughout the heap, and the old generation gets progressively
+ * more fragmented until a stop-the-world compacting collection occurs.
+ */</comment>
+<class><specifier>public</specifier> class <name>SlabAllocator</name> <super><extends>extends <name>Allocator</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SlabAllocator</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>int</name></type> <name>REGION_SIZE</name> <init>= <expr>1024 * 1024</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>int</name></type> <name>MAX_CLONED_SIZE</name> <init>= <expr>128 * 1024</expr></init></decl>;</decl_stmt> <comment type="line">// bigger than this don't go in the region</comment>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>AtomicReference</name><argument_list>&lt;<argument><name>Region</name></argument>&gt;</argument_list></name></type> <name>currentRegion</name> <init>= <expr>new <call><name><name>AtomicReference</name><argument_list>&lt;<argument><name>Region</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>int</name></type> <name>regionCount</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>AtomicLong</name></type> <name>unslabbed</name> <init>= <expr>new <call><name>AtomicLong</name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>allocate</name><parameter_list>(<param><decl><type><name>int</name></type> <name>size</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>size</name> &gt;= 0</expr>;</assert>
+        <if>if <condition>(<expr><name>size</name> == 0</expr>)</condition><then>
+            <return>return <expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr>;</return></then></if>
+
+        <comment type="line">// satisfy large allocations directly from JVM since they don't cause fragmentation</comment>
+        <comment type="line">// as badly, and fill up our regions quickly</comment>
+        <if>if <condition>(<expr><name>size</name> &gt; <name>MAX_CLONED_SIZE</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>unslabbed</name>.<name>addAndGet</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><call><name><name>ByteBuffer</name>.<name>allocate</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then></if>
+
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>Region</name></type> <name>region</name> <init>= <expr><call><name>getRegion</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// Try to allocate from this region</comment>
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>cloned</name> <init>= <expr><call><name><name>region</name>.<name>allocate</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>cloned</name> != null</expr>)</condition><then>
+                <return>return <expr><name>cloned</name></expr>;</return></then></if>
+
+            <comment type="line">// not enough space!</comment>
+            <expr_stmt><expr><call><name><name>currentRegion</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>region</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></while>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Get the current region, or, if there is no current region, allocate a new one
+     */</comment>
+    <function><type><specifier>private</specifier> <name>Region</name></type> <name>getRegion</name><parameter_list>()</parameter_list>
+    <block>{
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <comment type="line">// Try to get the region</comment>
+            <decl_stmt><decl><type><name>Region</name></type> <name>region</name> <init>= <expr><call><name><name>currentRegion</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>region</name> != null</expr>)</condition><then>
+                <return>return <expr><name>region</name></expr>;</return></then></if>
+
+            <comment type="line">// No current region, so we want to allocate one. We race</comment>
+            <comment type="line">// against other allocators to CAS in an uninitialized region</comment>
+            <comment type="line">// (which is cheap to allocate)</comment>
+            <expr_stmt><expr><name>region</name> = new <call><name>Region</name><argument_list>(<argument><expr><name>REGION_SIZE</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>currentRegion</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>region</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <comment type="line">// we won race - now we need to actually do the expensive allocation step</comment>
+                <expr_stmt><expr><call><name><name>region</name>.<name>init</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>regionCount</name>++</expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"{} regions now allocated in {}"</expr></argument>, <argument><expr><name>regionCount</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><name>region</name></expr>;</return>
+            }</block></then></if>
+            <comment type="line">// someone else won race - that's fine, we'll try to grab theirs</comment>
+            <comment type="line">// in the next iteration of the loop.</comment>
+        }</block></while>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return a lower bound on how much space has been allocated
+     */</comment>
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getMinimumSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>unslabbed</name>.<name>get</name></name><argument_list>()</argument_list></call> + (<name>regionCount</name> - 1) * (<name>long</name>)<name>REGION_SIZE</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return an upper bound on how much space has been allocated
+     */</comment>
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getMaximumSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>unslabbed</name>.<name>get</name></name><argument_list>()</argument_list></call> + <name>regionCount</name> * (<name>long</name>)<name>REGION_SIZE</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * A region of memory out of which allocations are sliced.
+     *
+     * This serves two purposes:
+     *  - to provide a step between initialization and allocation, so that racing to CAS a
+     *    new region in is harmless
+     *  - encapsulates the allocation offset
+     */</comment>
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>Region</name>
+    <block>{
+        <comment type="block" format="javadoc">/**
+         * Actual underlying data
+         */</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>data</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>UNINITIALIZED</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+        <comment type="block" format="javadoc">/**
+         * Offset for the next allocation, or the sentinel value -1
+         * which implies that the region is still uninitialized.
+         */</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>AtomicInteger</name></type> <name>nextFreeOffset</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>(<argument><expr><name>UNINITIALIZED</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="block" format="javadoc">/**
+         * Total number of allocations satisfied from this buffer
+         */</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>AtomicInteger</name></type> <name>allocCount</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="block" format="javadoc">/**
+         * Size of region in bytes
+         */</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>size</name></decl>;</decl_stmt>
+
+        <comment type="block" format="javadoc">/**
+         * Create an uninitialized region. Note that memory is not allocated yet, so
+         * this is cheap.
+         *
+         * @param size in bytes
+         */</comment>
+        <constructor><specifier>private</specifier> <name>Region</name><parameter_list>(<param><decl><type><name>int</name></type> <name>size</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>size</name></name> = <name>size</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/**
+         * Actually claim the memory for this region. This should only be called from
+         * the thread that constructed the region. It is thread-safe against other
+         * threads calling alloc(), who will block until the allocation is complete.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>init</name><parameter_list>()</parameter_list>
+        <block>{
+            <assert>assert <expr><call><name><name>nextFreeOffset</name>.<name>get</name></name><argument_list>()</argument_list></call> == <name>UNINITIALIZED</name></expr>;</assert>
+            <expr_stmt><expr><name>data</name> = <call><name><name>ByteBuffer</name>.<name>allocate</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <assert>assert <expr><call><name><name>data</name>.<name>remaining</name></name><argument_list>()</argument_list></call> == <call><name><name>data</name>.<name>capacity</name></name><argument_list>()</argument_list></call></expr>;</assert>
+            <comment type="line">// Mark that it's ready for use</comment>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>initted</name> <init>= <expr><call><name><name>nextFreeOffset</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>UNINITIALIZED</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// We should always succeed the above CAS since only one thread calls init()!</comment>
+            <expr_stmt><expr><call><name><name>Preconditions</name>.<name>checkState</name></name><argument_list>(<argument><expr><name>initted</name></expr></argument>, <argument><expr>"Multiple threads tried to init same region"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Try to allocate &lt;code&gt;size&lt;/code&gt; bytes from the region.
+         *
+         * @return the successful allocation, or null to indicate not-enough-space
+         */</comment>
+        <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>allocate</name><parameter_list>(<param><decl><type><name>int</name></type> <name>size</name></decl></param>)</parameter_list>
+        <block>{
+            <while>while <condition>(<expr>true</expr>)</condition>
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>oldOffset</name> <init>= <expr><call><name><name>nextFreeOffset</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>oldOffset</name> == <name>UNINITIALIZED</name></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// The region doesn't have its data allocated yet.</comment>
+                    <comment type="line">// Since we found this in currentRegion, we know that whoever</comment>
+                    <comment type="line">// CAS-ed it there is allocating it right now. So spin-loop</comment>
+                    <comment type="line">// shouldn't spin long!</comment>
+                    <expr_stmt><expr><call><name><name>Thread</name>.<name>yield</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <continue>continue;</continue>
+                }</block></then></if>
+
+                <if>if <condition>(<expr><name>oldOffset</name> + <name>size</name> &gt; <call><name><name>data</name>.<name>capacity</name></name><argument_list>()</argument_list></call></expr>)</condition><then> <comment type="line">// capacity == remaining</comment>
+                    <return>return <expr>null</expr>;</return></then></if>
+
+                <comment type="line">// Try to atomically claim this region</comment>
+                <if>if <condition>(<expr><call><name><name>nextFreeOffset</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>oldOffset</name></expr></argument>, <argument><expr><name>oldOffset</name> + <name>size</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// we got the alloc</comment>
+                    <expr_stmt><expr><call><name><name>allocCount</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <return>return <expr>(<name>ByteBuffer</name>) <call><name><name>data</name>.<name>duplicate</name></name><argument_list>()</argument_list></call>.<call><name>position</name><argument_list>(<argument><expr><name>oldOffset</name></expr></argument>)</argument_list></call>.<call><name>limit</name><argument_list>(<argument><expr><name>oldOffset</name> + <name>size</name></expr></argument>)</argument_list></call></expr>;</return>
+                }</block></then></if>
+                <comment type="line">// we raced and lost alloc, try again</comment>
+            }</block></while>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>"Region@" + <call><name><name>System</name>.<name>identityHashCode</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call> +
+                   " allocs=" + <call><name><name>allocCount</name>.<name>get</name></name><argument_list>()</argument_list></call> + "waste=" +
+                   (<call><name><name>data</name>.<name>capacity</name></name><argument_list>()</argument_list></call> - <call><name><name>nextFreeOffset</name>.<name>get</name></name><argument_list>()</argument_list></call>)</expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

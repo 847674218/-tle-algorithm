@@ -1,0 +1,54 @@
+private SSTableReader writeSortedContents(Future<ReplayPosition> context, File dataDirectory) throws ExecutionException, InterruptedException
+        {
+            logger.info("Writing " + Memtable.this.toString());
+
+            SSTableReader ssTable;
+            // errors when creating the writer that may leave empty temp files.
+            SSTableWriter writer = createFlushWriter(cfs.getTempSSTablePath(cfs.directories.getLocationForDisk(dataDirectory)));
+            try
+            {
+                // (we can't clear out the map as-we-go to free up memory,
+                //  since the memtable is being used for queries in the "pending flush" category)
+                for (Map.Entry<RowPosition, ColumnFamily> entry : columnFamilies.entrySet())
+                {
+                    ColumnFamily cf = entry.getValue();
+                    if (cf.isMarkedForDelete())
+                    {
+                        // When every node is up, there's no reason to write batchlog data out to sstables
+                        // (which in turn incurs cost like compaction) since the BL write + delete cancel each other out,
+                        // and BL data is strictly local, so we don't need to preserve tombstones for repair.
+                        // If we have a data row + row level tombstone, then writing it is effectively an expensive no-op so we skip it.
+                        // See CASSANDRA-4667.
+                        if (cfs.columnFamily.equals(SystemTable.BATCHLOG_CF) && cfs.table.name.equals(Table.SYSTEM_KS) && !cf.isEmpty())
+                            continue;
+
+                        // Pedantically, you could purge column level tombstones that are past GcGRace when writing to the SSTable.
+                        // But it can result in unexpected behaviour where deletes never make it to disk,
+                        // as they are lost and so cannot override existing column values. So we only remove deleted columns if there
+                        // is a CF level tombstone to ensure the delete makes it into an SSTable.
+                        ColumnFamilyStore.removeDeletedColumnsOnly(cf, Integer.MIN_VALUE);
+                    }
+                    writer.append((DecoratedKey)entry.getKey(), cf);
+                }
+
+                if (writer.getFilePointer() > 0)
+                {
+                    ssTable = writer.closeAndOpenReader();
+                    logger.info(String.format("Completed flushing %s (%d bytes) for commitlog position %s",
+                                              ssTable.getFilename(), new File(ssTable.getFilename()).length(), context.get()));
+                }
+                else
+                {
+                    writer.abort();
+                    ssTable = null;
+                    logger.info("Completed flushing; nothing needed to be retained.  Commitlog position was {}",
+                                context.get());
+                }
+                return ssTable;
+            }
+            catch (Throwable e)
+            {
+                writer.abort();
+                throw Throwables.propagate(e);
+            }
+        }

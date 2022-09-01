@@ -1,0 +1,93 @@
+private boolean getNextBlock() throws IOException
+        {
+            if (lastDeserializedBlock == nextIndexIdx)
+            {
+                if (reversed)
+                    nextIndexIdx--;
+                else
+                    nextIndexIdx++;
+            }
+            lastDeserializedBlock = nextIndexIdx;
+
+            // Are we done?
+            if (lastDeserializedBlock < 0 || lastDeserializedBlock >= indexes.size())
+                return false;
+
+            IndexInfo currentIndex = indexes.get(lastDeserializedBlock);
+
+            /* seek to the correct offset to the data, and calculate the data size */
+            long positionToSeek = basePosition + currentIndex.offset;
+
+            // With new promoted indexes, our first seek in the data file will happen at that point.
+            if (file == null)
+                file = originalInput == null ? sstable.getFileDataInput(positionToSeek) : originalInput;
+
+            OnDiskAtom.Serializer atomSerializer = emptyColumnFamily.getOnDiskSerializer();
+            file.seek(positionToSeek);
+            FileMark mark = file.mark();
+
+            // We remenber when we are whithin a slice to avoid some comparison
+            boolean inSlice = false;
+
+            // scan from index start
+            OnDiskAtom column = null;
+            while (file.bytesPastMark(mark) < currentIndex.width)
+            {
+                // Only fetch a new column if we haven't dealt with the previous one.
+                if (column == null)
+                    column = atomSerializer.deserializeFromSSTable(file, sstable.descriptor.version);
+
+                // col is before slice
+                // (If in slice, don't bother checking that until we change slice)
+                if (!inSlice && isColumnBeforeSliceStart(column))
+                {
+                    if (reversed)
+                    {
+                        // the next slice select columns that are before the current one, so it may
+                        // match this column, so keep it around.
+                        prefetched.addFirst(column);
+                    }
+                    column = null;
+                }
+                // col is within slice
+                else if (isColumnBeforeSliceFinish(column))
+                {
+                    inSlice = true;
+                    addColumn(column);
+                    column = null;
+                }
+                // col is after slice.
+                else
+                {
+                    // When reading forward, if we hit a column that sorts after the current slice, it means we're done with this slice.
+                    // For reversed, this may either mean that we're done with the current slice, or that we need to read the previous
+                    // index block. However, we can be sure that we are in the first case though (the current slice is done) if the first
+                    // columns of the block were not part of the current slice, i.e. if we have columns in prefetched.
+                    if (reversed && prefetched.isEmpty())
+                        break;
+
+                    if (!setNextSlice())
+                        break;
+
+                    inSlice = false;
+
+                    // The next index block now corresponds to the first block that may have columns for the newly set slice.
+                    // So if it's different from the current block, we're done with this block. And in that case, we know
+                    // that our prefetched columns won't match.
+                    if (nextIndexIdx != lastDeserializedBlock)
+                    {
+                        if (reversed)
+                            prefetched.clear();
+                        break;
+                    }
+
+                    // Even if the next slice may have column in this blocks, if we're reversed, those columns have been
+                    // prefetched and we're done with that block
+                    if (reversed)
+                        break;
+
+                    // otherwise, we will deal with that column at the next iteration
+                }
+            }
+            return true;
+        }

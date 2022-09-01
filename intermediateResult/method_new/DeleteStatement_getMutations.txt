@@ -1,0 +1,41 @@
+public Collection<RowMutation> getMutations(List<ByteBuffer> variables, boolean local, ConsistencyLevel cl, long now)
+    throws RequestExecutionException, RequestValidationException
+    {
+        // keys
+        List<ByteBuffer> keys = UpdateStatement.buildKeyNames(cfDef, processedKeys, variables);
+
+        // columns
+        ColumnNameBuilder builder = cfDef.getColumnNameBuilder();
+        CFDefinition.Name firstEmpty = UpdateStatement.buildColumnNames(cfDef, processedKeys, builder, variables, false);
+
+        boolean fullKey = builder.componentCount() == cfDef.columns.size();
+        boolean isRange = cfDef.isCompact ? !fullKey : (!fullKey || toRemove.isEmpty());
+
+        if (!toRemove.isEmpty() && isRange)
+            throw new InvalidRequestException(String.format("Missing mandatory PRIMARY KEY part %s since %s specified", firstEmpty, toRemove.iterator().next().left));
+
+        // Lists DISCARD operation incurs a read. Do that now.
+        Set<ByteBuffer> toRead = null;
+        for (Pair<CFDefinition.Name, Term> p : toRemove)
+        {
+            CFDefinition.Name name = p.left;
+            Term value = p.right;
+
+            if ((name.type instanceof ListType) && value != null)
+            {
+                if (toRead == null)
+                    toRead = new TreeSet<ByteBuffer>(UTF8Type.instance);
+                toRead.add(name.name.key);
+            }
+        }
+
+        Map<ByteBuffer, ColumnGroupMap> rows = toRead != null ? readRows(keys, builder, toRead, (CompositeType)cfDef.cfm.comparator, local, cl) : null;
+
+        Collection<RowMutation> rowMutations = new ArrayList<RowMutation>(keys.size());
+        UpdateParameters params = new UpdateParameters(variables, getTimestamp(now), -1);
+
+        for (ByteBuffer key : keys)
+            rowMutations.add(mutationForKey(cfDef, key, builder, isRange, params, rows == null ? null : rows.get(key)));
+
+        return rowMutations;
+    }

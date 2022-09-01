@@ -1,0 +1,67 @@
+protected void stream() throws IOException
+    {
+        assert header.file.compressionInfo != null;
+
+        SocketChannel sc = socket.getChannel();
+        byte[] transferBuffer = null;
+
+        // write header
+        ByteBuffer headerBuffer = MessagingService.instance().constructStreamHeader(header, false, MessagingService.instance().getVersion(to));
+        socket.getOutputStream().write(ByteBufferUtil.getArray(headerBuffer));
+
+        RandomAccessReader file = RandomAccessReader.open(new File(header.file.getFilename()), true);
+        FileChannel fc = file.getChannel();
+
+        StreamingMetrics.activeStreamsOutbound.inc();
+        // calculate chunks to transfer. we want to send continuous chunks altogether.
+        List<Pair<Long, Long>> sections = getTransferSections(header.file.compressionInfo.chunks);
+        try
+        {
+            long totalBytesTransferred = 0;
+            // stream each of the required sections of the file
+            for (Pair<Long, Long> section : sections)
+            {
+                // length of the section to stream
+                long length = section.right - section.left;
+                // tracks write progress
+                long bytesTransferred = 0;
+                while (bytesTransferred < length)
+                {
+                    int toTransfer = (int) Math.min(CHUNK_SIZE, length - bytesTransferred);
+                    long lastWrite;
+                    if (sc != null)
+                    {
+                        lastWrite = fc.transferTo(section.left + bytesTransferred, toTransfer, sc);
+                        throttle.throttleDelta(lastWrite);
+                    }
+                    else
+                    {
+                        // NIO is not available. Fall back to normal streaming.
+                        // This happens when inter-node encryption is turned on.
+                        if (transferBuffer == null)
+                            transferBuffer = new byte[CHUNK_SIZE];
+                        file.readFully(transferBuffer, 0, toTransfer);
+                        socket.getOutputStream().write(transferBuffer, 0, toTransfer);
+                        throttle.throttleDelta(toTransfer);
+                        lastWrite = toTransfer;
+                    }
+                    totalBytesTransferred += lastWrite;
+                    bytesTransferred += lastWrite;
+                    header.file.progress += lastWrite;
+                }
+
+                logger.debug("Bytes transferred " + bytesTransferred + "/" + header.file.size);
+            }
+            StreamingMetrics.totalOutgoingBytes.inc(totalBytesTransferred);
+            metrics.outgoingBytes.inc(totalBytesTransferred);
+            // receive reply confirmation
+            receiveReply();
+        }
+        finally
+        {
+            StreamingMetrics.activeStreamsOutbound.dec();
+
+            // no matter what happens close file
+            FileUtils.closeQuietly(file);
+        }
+    }

@@ -1,0 +1,182 @@
+protected void setup()
+    {
+        logger.info("JVM vendor/version: {}/{}", System.getProperty("java.vm.name"), System.getProperty("java.version") );
+        logger.info("Heap size: {}/{}", Runtime.getRuntime().totalMemory(), Runtime.getRuntime().maxMemory());
+        logger.info("Classpath: {}", System.getProperty("java.class.path"));
+        CLibrary.tryMlockall();
+
+        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler()
+        {
+            public void uncaughtException(Thread t, Throwable e)
+            {
+                exceptions.incrementAndGet();
+                logger.error("Exception in thread " + t, e);
+                for (Throwable e2 = e; e2 != null; e2 = e2.getCause())
+                {
+                    // some code, like FileChannel.map, will wrap an OutOfMemoryError in another exception
+                    if (e2 instanceof OutOfMemoryError)
+                        System.exit(100);
+
+                    if (e2 instanceof FSError)
+                    {
+                        if (e2 != e) // make sure FSError gets logged exactly once.
+                            logger.error("Exception in thread " + t, e2);
+                        FileUtils.handleFSError((FSError) e2);
+                    }
+                }
+            }
+        });
+
+        // check all directories(data, commitlog, saved cache) for existence and permission
+        Iterable<String> dirs = Iterables.concat(Arrays.asList(DatabaseDescriptor.getAllDataFileLocations()),
+                                                 Arrays.asList(DatabaseDescriptor.getCommitLogLocation(),
+                                                               DatabaseDescriptor.getSavedCachesLocation()));
+        for (String dataDir : dirs)
+        {
+            logger.debug("Checking directory {}", dataDir);
+            File dir = new File(dataDir);
+            if (dir.exists())
+                assert dir.isDirectory() && dir.canRead() && dir.canWrite() && dir.canExecute()
+                    : String.format("Directory %s is not accessible.", dataDir);
+        }
+
+        // Migrate sstables from pre-#2749 to the correct location
+        if (Directories.sstablesNeedsMigration())
+            Directories.migrateSSTables();
+
+        if (CacheService.instance == null) // should never happen
+            throw new RuntimeException("Failed to initialize Cache Service.");
+
+        // check the system table to keep user from shooting self in foot by changing partitioner, cluster name, etc.
+        // we do a one-off scrub of the system table first; we can't load the list of the rest of the tables,
+        // until system table is opened.
+        for (CFMetaData cfm : Schema.instance.getTableMetaData(Table.SYSTEM_KS).values())
+            ColumnFamilyStore.scrubDataDirectories(Table.SYSTEM_KS, cfm.cfName);
+        try
+        {
+            SystemTable.checkHealth();
+        }
+        catch (ConfigurationException e)
+        {
+            logger.error("Fatal exception during initialization", e);
+            System.exit(100);
+        }
+
+        // load keyspace descriptions.
+        try
+        {
+            DatabaseDescriptor.loadSchemas();
+        }
+        catch (IOException e)
+        {
+            logger.error("Fatal exception during initialization", e);
+            System.exit(100);
+        }
+
+        // setup Authenticator and Authorizer.
+        Auth.setup();
+
+        // clean up debris in the rest of the tables
+        for (String table : Schema.instance.getTables())
+        {
+            for (CFMetaData cfm : Schema.instance.getTableMetaData(table).values())
+            {
+                ColumnFamilyStore.scrubDataDirectories(table, cfm.cfName);
+            }
+        }
+
+        // initialize keyspaces
+        for (String table : Schema.instance.getTables())
+        {
+            if (logger.isDebugEnabled())
+                logger.debug("opening keyspace " + table);
+            // disable auto compaction until commit log replay ends
+            for (ColumnFamilyStore cfs : Table.open(table).getColumnFamilyStores())
+            {
+                for (ColumnFamilyStore store : cfs.concatWithIndexes())
+                {
+                    store.disableAutoCompaction();
+                }
+            }
+        }
+
+        if (CacheService.instance.keyCache.size() > 0)
+            logger.info("completed pre-loading ({} keys) key cache.", CacheService.instance.keyCache.size());
+
+        if (CacheService.instance.rowCache.size() > 0)
+            logger.info("completed pre-loading ({} keys) row cache.", CacheService.instance.rowCache.size());
+
+        try
+        {
+            GCInspector.instance.start();
+        }
+        catch (Throwable t)
+        {
+            logger.warn("Unable to start GCInspector (currently only supported on the Sun JVM)");
+        }
+
+        // replay the log if necessary
+        try
+        {
+            CommitLog.instance.recover();
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+
+        // enable auto compaction
+        for (Table table : Table.all())
+        {
+            for (ColumnFamilyStore cfs : table.getColumnFamilyStores())
+            {
+                for (final ColumnFamilyStore store : cfs.concatWithIndexes())
+                {
+                    store.enableAutoCompaction();
+                }
+            }
+        }
+        // start compactions in five minutes (if no flushes have occurred by then to do so)
+        Runnable runnable = new Runnable()
+        {
+            public void run()
+            {
+                for (Table table : Table.all())
+                {
+                    for (ColumnFamilyStore cf : table.getColumnFamilyStores())
+                    {
+                        for (ColumnFamilyStore store : cf.concatWithIndexes())
+                            CompactionManager.instance.submitBackground(store);
+                    }
+                }
+            }
+        };
+        StorageService.optionalTasks.schedule(runnable, 5 * 60, TimeUnit.SECONDS);
+
+        SystemTable.finishStartup();
+
+        // start server internals
+        StorageService.instance.registerDaemon(this);
+        try
+        {
+            StorageService.instance.initServer();
+        }
+        catch (ConfigurationException e)
+        {
+            logger.error("Fatal configuration error", e);
+            System.err.println(e.getMessage() + "\nFatal configuration error; unable to start server.  See log for stacktrace.");
+            System.exit(1);
+        }
+
+        Mx4jTool.maybeLoad();
+
+        // Thift
+        InetAddress rpcAddr = DatabaseDescriptor.getRpcAddress();
+        int rpcPort = DatabaseDescriptor.getRpcPort();
+        thriftServer = new ThriftServer(rpcAddr, rpcPort);
+
+        // Native transport
+        InetAddress nativeAddr = DatabaseDescriptor.getNativeTransportAddress();
+        int nativePort = DatabaseDescriptor.getNativeTransportPort();
+        nativeServer = new org.apache.cassandra.transport.Server(nativeAddr, nativePort);
+    }

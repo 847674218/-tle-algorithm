@@ -1,0 +1,46 @@
+protected OnDiskAtom getReduced()
+        {
+            if (tombstone != null)
+            {
+                RangeTombstone t = tombstone;
+                tombstone = null;
+
+                if (t.data.isGcAble(controller.gcBefore))
+                {
+                    return null;
+                }
+                else
+                {
+                    serializedSize += t.serializedSizeForSSTable();
+                    return t;
+                }
+            }
+            else
+            {
+                ColumnFamily purged = PrecompactedRow.removeDeletedAndOldShards(key, shouldPurge, controller, container);
+                if (purged == null || !purged.iterator().hasNext())
+                {
+                    container.clear();
+                    return null;
+                }
+                IColumn reduced = purged.iterator().next();
+                container.clear();
+
+                // PrecompactedRow.removeDeletedAndOldShards have only checked the top-level CF deletion times,
+                // not the range tombstone. For that we use the columnIndexer tombstone tracker.
+                // Note that this doesn't work for super columns.
+                if (indexBuilder.tombstoneTracker().isDeleted(reduced))
+                    return null;
+
+                serializedSize += reduced.serializedSizeForSSTable();
+                columns++;
+                minTimestampSeen = Math.min(minTimestampSeen, reduced.minTimestamp());
+                maxTimestampSeen = Math.max(maxTimestampSeen, reduced.maxTimestamp());
+                int deletionTime = reduced.getLocalDeletionTime();
+                if (deletionTime < Integer.MAX_VALUE)
+                {
+                    tombstones.update(deletionTime);
+                }
+                return reduced;
+            }
+        }

@@ -1,0 +1,62 @@
+public void shuffle(boolean enable, String onlyDc) throws ShuffleError
+    {
+        CassandraClient seedClient = null;
+        Map<String, String> tokenMap = null;
+        IPartitioner<?> partitioner = null;
+        Multimap<String, String> endpointMap = HashMultimap.create();
+        EndpointSnitchInfoMBean epSnitchProxy = getEpSnitchProxy(jmxConn.getMbeanServerConn());
+
+        try
+        {
+            seedClient = getThriftClient(thriftHost, thriftPort, thriftFramed);
+            tokenMap = seedClient.describe_token_map();
+
+            for (Map.Entry<String, String> entry : tokenMap.entrySet())
+            {
+                String endpoint = entry.getValue(), token = entry.getKey();
+                try
+                {
+                    if (onlyDc != null)
+                    {
+                        if (onlyDc.equals(epSnitchProxy.getDatacenter(endpoint)))
+                            endpointMap.put(endpoint, token);
+                    }
+                    else
+                        endpointMap.put(endpoint, token);
+                }
+                catch (UnknownHostException e)
+                {
+                    writeln("Warning: %s unknown to EndpointSnitch!", endpoint);
+                }
+            }
+        }
+        catch (InvalidRequestException ire)
+        {
+            throw new RuntimeException("What that...?", ire);
+        }
+        catch (TException e)
+        {
+            throw new ShuffleError(
+                    String.format("Thrift request to %s:%d failed: %s", thriftHost, thriftPort, e.getMessage()));
+        }
+
+        partitioner = getPartitioner(thriftHost, thriftPort, thriftFramed);
+
+        Multimap<String, String> relocations = calculateRelocations(endpointMap);
+
+        writeln("%-42s %-15s %-15s", "Token", "From", "To");
+        writeln("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+~~~~~~~~~~~~~~~+~~~~~~~~~~~~~~~");
+
+        // Store relocations on remote nodes.
+        for (String endpoint : relocations.keySet())
+        {
+            for (String tok : relocations.get(endpoint))
+                writeln("%-42s %-15s %-15s", tok, tokenMap.get(tok), endpoint);
+
+            String cqlQuery = createShuffleBatchInsert(relocations.get(endpoint), partitioner);
+            executeCqlQuery(endpoint, thriftPort, thriftFramed, cqlQuery);
+        }
+
+        if (enable)
+            enableRelocations(relocations.keySet());
+    }

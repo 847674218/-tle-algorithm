@@ -1,0 +1,81 @@
+private void executeDelete(Tree statement)
+            throws TException, InvalidRequestException, UnavailableException, TimedOutException
+    {
+        if (!CliMain.isConnected() || !hasKeySpace())
+            return;
+
+        Tree columnFamilySpec = statement.getChild(0);
+
+        String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec, currentCfDefs());
+        CfDef cfDef = getCfDef(columnFamily);
+
+        ByteBuffer key = getKeyAsBytes(columnFamily, columnFamilySpec.getChild(1));
+        int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
+
+        byte[] superColumnName = null;
+        byte[] columnName = null;
+        boolean isSuper = cfDef.column_type.equals("Super");
+
+        if ((columnSpecCnt < 0) || (columnSpecCnt > 2))
+        {
+            sessionState.out.println("Invalid row, super column, or column specification.");
+            return;
+        }
+
+        long startTime = System.nanoTime();
+
+        Tree columnTree = (columnSpecCnt >= 1)
+                           ? columnFamilySpec.getChild(2)
+                           : null;
+
+        Tree subColumnTree = (columnSpecCnt == 2)
+                              ? columnFamilySpec.getChild(3)
+                              : null;
+
+        if (columnSpecCnt == 1)
+        {
+            assert columnTree != null;
+
+            byte[] columnNameBytes = (columnTree.getType() == CliParser.FUNCTION_CALL)
+                                      ? convertValueByFunction(columnTree, null, null).array()
+                                      : columnNameAsByteArray(CliCompiler.getColumn(columnFamilySpec, 0), cfDef);
+
+
+            if (isSuper)
+                superColumnName = columnNameBytes;
+            else
+                columnName = columnNameBytes;
+        }
+        else if (columnSpecCnt == 2)
+        {
+            assert columnTree != null;
+            assert subColumnTree != null;
+
+            // table.cf['key']['column']['column']
+            superColumnName = (columnTree.getType() == CliParser.FUNCTION_CALL)
+                                      ? convertValueByFunction(columnTree, null, null).array()
+                                      : columnNameAsByteArray(CliCompiler.getColumn(columnFamilySpec, 0), cfDef);
+
+            columnName = (subColumnTree.getType() == CliParser.FUNCTION_CALL)
+                                         ? convertValueByFunction(subColumnTree, null, null).array()
+                                         : subColumnNameAsByteArray(CliCompiler.getColumn(columnFamilySpec, 1), cfDef);
+        }
+
+        ColumnPath path = new ColumnPath(columnFamily);
+        if (superColumnName != null)
+            path.setSuper_column(superColumnName);
+
+        if (columnName != null)
+            path.setColumn(columnName);
+
+        if (isCounterCF(cfDef))
+        {
+            thriftClient.remove_counter(key, path, consistencyLevel);
+        }
+        else
+        {
+            thriftClient.remove(key, path, FBUtilities.timestampMicros(), consistencyLevel);
+        }
+        sessionState.out.println(String.format("%s removed.", (columnSpecCnt == 0) ? "row" : "column"));
+        elapsedTime(startTime);
+    }

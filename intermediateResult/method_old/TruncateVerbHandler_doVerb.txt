@@ -1,0 +1,32 @@
+public void doVerb(Message message, String id)
+    {
+        byte[] bytes = message.getMessageBody();
+        FastByteArrayInputStream buffer = new FastByteArrayInputStream(bytes);
+
+        try
+        {
+            Truncation t = Truncation.serializer().deserialize(new DataInputStream(buffer), message.getVersion());
+            logger.debug("Applying {}", t);
+
+            try
+            {
+                ColumnFamilyStore cfs = Table.open(t.keyspace).getColumnFamilyStore(t.columnFamily);
+                cfs.truncate().get();
+            }
+            catch (Exception e)
+            {
+                logger.error("Error in truncation", e);
+                respondError(t, message);
+            }
+            logger.debug("Truncate operation succeeded at this host");
+
+            TruncateResponse response = new TruncateResponse(t.keyspace, t.columnFamily, true);
+            Message responseMessage = TruncateResponse.makeTruncateResponseMessage(message, response);
+            logger.debug("{} applied.  Sending response to {}@{} ", new Object[]{ t, id, message.getFrom()});
+            MessagingService.instance().sendReply(responseMessage, id, message.getFrom());
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+    }

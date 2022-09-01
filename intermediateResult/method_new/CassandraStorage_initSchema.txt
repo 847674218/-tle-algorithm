@@ -1,0 +1,69 @@
+private void initSchema(String signature)
+    {
+        Properties properties = UDFContext.getUDFContext().getUDFProperties(CassandraStorage.class);
+
+        // Only get the schema if we haven't already gotten it
+        if (!properties.containsKey(signature))
+        {
+            try
+            {
+                Cassandra.Client client = ConfigHelper.getClientFromInputAddressList(conf);
+                client.set_keyspace(keyspace);
+
+                if (username != null && password != null)
+                {
+                    Map<String, String> credentials = new HashMap<String, String>(2);
+                    credentials.put(IAuthenticator.USERNAME_KEY, username);
+                    credentials.put(IAuthenticator.PASSWORD_KEY, password);
+
+                    try
+                    {
+                        client.login(new AuthenticationRequest(credentials));
+                    }
+                    catch (AuthenticationException e)
+                    {
+                        logger.error("Authentication exception: invalid username and/or password");
+                        throw new RuntimeException(e);
+                    }
+                    catch (AuthorizationException e)
+                    {
+                        throw new AssertionError(e); // never actually throws AuthorizationException.
+                    }
+                }
+
+                CfDef cfDef = null;
+                KsDef ksDef = client.describe_keyspace(keyspace);
+                List<CfDef> defs = ksDef.getCf_defs();
+                for (CfDef def : defs)
+                {
+                    if (column_family.equalsIgnoreCase(def.getName()))
+                    {
+                        cfDef = def;
+                        break;
+                    }
+                }
+                if (cfDef != null)
+                    properties.setProperty(signature, cfdefToString(cfDef));
+                else
+                    throw new RuntimeException(String.format("Column family '%s' not found in keyspace '%s'",
+                                                             column_family,
+                                                             keyspace));
+            }
+            catch (TException e)
+            {
+                throw new RuntimeException(e);
+            }
+            catch (InvalidRequestException e)
+            {
+                throw new RuntimeException(e);
+            }
+            catch (NotFoundException e)
+            {
+                throw new RuntimeException(e);
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+    }

@@ -1,0 +1,43 @@
+public long writeOpenedMarker(OnDiskAtom firstColumn, DataOutput out, OnDiskAtom.Serializer atomSerializer) throws IOException
+        {
+            long size = 0;
+            if (ranges.isEmpty())
+                return size;
+
+            /*
+             * Compute the marker that needs to be written at the beginning of
+             * this block. We need to write one if it the more recent
+             * (opened) tombstone for at least some part of its range.
+             */
+            List<RangeTombstone> toWrite = new LinkedList<RangeTombstone>();
+            outer:
+            for (RangeTombstone tombstone : ranges)
+            {
+                // If ever the first column is outside the range, skip it (in
+                // case update() hasn't been called yet)
+                if (comparator.compare(firstColumn.name(), tombstone.max) > 0)
+                    continue;
+
+                RangeTombstone updated = new RangeTombstone(firstColumn.name(), tombstone.max, tombstone.data);
+
+                Iterator<RangeTombstone> iter = toWrite.iterator();
+                while (iter.hasNext())
+                {
+                    RangeTombstone other = iter.next();
+                    if (other.supersedes(updated, comparator))
+                        break outer;
+                    if (updated.supersedes(other, comparator))
+                        iter.remove();
+                }
+                toWrite.add(tombstone);
+            }
+
+            for (RangeTombstone tombstone : toWrite)
+            {
+                size += tombstone.serializedSizeForSSTable();
+                atomCount++;
+                if (out != null)
+                    atomSerializer.serializeForSSTable(tombstone, out);
+            }
+            return size;
+        }

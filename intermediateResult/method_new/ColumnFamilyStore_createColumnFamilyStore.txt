@@ -1,0 +1,22 @@
+private static synchronized ColumnFamilyStore createColumnFamilyStore(Table table,
+                                                                         String columnFamily,
+                                                                         IPartitioner partitioner,
+                                                                         CFMetaData metadata,
+                                                                         boolean loadSSTables)
+    {
+        // get the max generation number, to prevent generation conflicts
+        Directories directories = Directories.create(table.name, columnFamily);
+        Directories.SSTableLister lister = directories.sstableLister().includeBackups(true);
+        List<Integer> generations = new ArrayList<Integer>();
+        for (Map.Entry<Descriptor, Set<Component>> entry : lister.list().entrySet())
+        {
+            Descriptor desc = entry.getKey();
+            generations.add(desc.generation);
+            if (!desc.isCompatible())
+                throw new RuntimeException(String.format("Can't open incompatible SSTable! Current version %s, found file: %s", Descriptor.Version.CURRENT, desc));
+        }
+        Collections.sort(generations);
+        int value = (generations.size() > 0) ? (generations.get(generations.size() - 1)) : 0;
+
+        return new ColumnFamilyStore(table, columnFamily, partitioner, value, metadata, directories, loadSSTables);
+    }

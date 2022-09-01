@@ -1,0 +1,402 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\index\SecondaryIndex.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ColumnDefinition</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DecoratedKey</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>SystemTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>keys</name>.<name>KeysIndex</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>composites</name>.<name>CompositesIndex</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>BytesType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>CompositeType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>LocalByPartionerType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>ReducingKeyIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>Column</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Abstract base class for different types of secondary indexes.
+ *
+ * Do not extend this directly, please pick from PerColumnSecondaryIndex or PerRowSecondaryIndex
+ */</comment>
+<class><specifier>public</specifier> <specifier>abstract</specifier> class <name>SecondaryIndex</name>
+<block>{
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SecondaryIndex</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>CUSTOM_INDEX_OPTION_NAME</name> <init>= <expr>"class_name"</expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Base CF that has many indexes
+     */</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>ColumnFamilyStore</name></type> <name>baseCfs</name></decl>;</decl_stmt>
+
+
+    <comment type="block" format="javadoc">/**
+     * The column definitions which this index is responsible for
+     */</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>ColumnDefinition</name></argument>&gt;</argument_list></name></type> <name>columnDefs</name> <init>= <expr><call><name><name>Collections</name>.<name>newSetFromMap</name></name><argument_list>(<argument><expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>ColumnDefinition</name></argument>,<argument><name>Boolean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Perform any initialization work
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>init</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Reload an existing index following a change to its configuration,
+     * or that of the indexed column(s). Differs from init() in that we expect
+     * expect new resources (such as CFS for a KEYS index) to be created by
+     * init() but not here
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>reload</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Validates the index_options passed in the ColumnDef
+     * @throws ConfigurationException
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>validateOptions</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * @return The name of the index
+     */</comment>
+    <function_decl><type><specifier>abstract</specifier> <specifier>public</specifier> <name>String</name></type> <name>getIndexName</name><parameter_list>()</parameter_list>;</function_decl>
+
+
+    <comment type="block" format="javadoc">/**
+     * Return the unique name for this index and column
+     * to be stored in the SystemTable that tracks if each column is built
+     *
+     * @param columnName the name of the column
+     * @return the unique name
+     */</comment>
+    <function_decl><type><specifier>abstract</specifier> <specifier>public</specifier> <name>String</name></type> <name>getNameForSystemTable</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>columnName</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Checks if the index for specified column is fully built
+     *
+     * @param columnName the column
+     * @return true if the index is fully built
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isIndexBuilt</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>columnName</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>SystemTable</name>.<name>isIndexBuilt</name></name><argument_list>(<argument><expr><name><name>baseCfs</name>.<name>table</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name>getNameForSystemTable</name><argument_list>(<argument><expr><name>columnName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setIndexBuilt</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ColumnDefinition</name></type> <name>columnDef</name> <range>: <expr><name>columnDefs</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>SystemTable</name>.<name>setIndexBuilt</name></name><argument_list>(<argument><expr><name><name>baseCfs</name>.<name>table</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name>getNameForSystemTable</name><argument_list>(<argument><expr><name><name>columnDef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setIndexRemoved</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ColumnDefinition</name></type> <name>columnDef</name> <range>: <expr><name>columnDefs</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>SystemTable</name>.<name>setIndexRemoved</name></name><argument_list>(<argument><expr><name><name>baseCfs</name>.<name>table</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name>getNameForSystemTable</name><argument_list>(<argument><expr><name><name>columnDef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Called at query time
+     * Creates a implementation specific searcher instance for this index type
+     * @param columns the list of columns which belong to this index type
+     * @return the secondary index search impl
+     */</comment>
+    <function_decl><type><specifier>protected</specifier> <specifier>abstract</specifier> <name>SecondaryIndexSearcher</name></type> <name>createSecondaryIndexSearcher</name><parameter_list>(<param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>columns</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Forces this indexes in memory data to disk
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>forceBlockingFlush</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Get current amount of memory this index is consuming (in bytes)
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>long</name></type> <name>getLiveSize</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Allow access to the underlying column family store if there is one
+     * @return the underlying column family store or null
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>ColumnFamilyStore</name></type> <name>getIndexCfs</name><parameter_list>()</parameter_list>;</function_decl>
+
+
+    <comment type="block" format="javadoc">/**
+     * Delete all files and references to this index
+     * @param columnName the indexed column to remove
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>removeIndex</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>columnName</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Remove the index and unregisters this index's mbean if one exists
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>invalidate</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Truncate all the data from the current index
+     *
+     * @param truncatedAt The truncation timestamp, all data before that timestamp should be rejected.
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>truncate</name><parameter_list>(<param><decl><type><name>long</name></type> <name>truncatedAt</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Builds the index using the data in the underlying CFS
+     * Blocks till it's complete
+     */</comment>
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>buildIndexBlocking</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Submitting index build of %s for data in %s"</expr></argument>,
+                <argument><expr><call><name>getIndexName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><call><name><name>baseCfs</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name> <init>= <expr><call><name><name>baseCfs</name>.<name>markCurrentSSTablesReferenced</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SecondaryIndexBuilder</name></type> <name>builder</name> <init>= <expr>new <call><name>SecondaryIndexBuilder</name><argument_list>(<argument><expr><name>baseCfs</name></expr></argument>,
+                                                                  <argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><call><name>getIndexName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+                                                                  <argument><expr>new <call><name>ReducingKeyIterator</name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>future</name> <init>= <expr><call><name><name>CompactionManager</name>.<name>instance</name>.<name>submitIndexBuild</name></name><argument_list>(<argument><expr><name>builder</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>future</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>forceBlockingFlush</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name>setIndexBuilt</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>SSTableReader</name>.<name>releaseReferences</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Index build of " + <call><name>getIndexName</name><argument_list>()</argument_list></call> + " complete"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+
+    <comment type="block" format="javadoc">/**
+     * Builds the index using the data in the underlying CF, non blocking
+     *
+     *
+     * @return A future object which the caller can block on (optional)
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>buildIndexAsync</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// if we're just linking in the index to indexedColumns on an already-built index post-restart, we're done</comment>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>allAreBuilt</name> <init>= <expr>true</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ColumnDefinition</name></type> <name>cdef</name> <range>: <expr><name>columnDefs</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>SystemTable</name>.<name>isIndexBuilt</name></name><argument_list>(<argument><expr><name><name>baseCfs</name>.<name>table</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name>getNameForSystemTable</name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>allAreBuilt</name> = false</expr>;</expr_stmt>
+                <break>break;</break>
+            }</block></then></if>
+        }</block></for>
+
+        <if>if <condition>(<expr><name>allAreBuilt</name></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+
+        <comment type="line">// build it asynchronously; addIndex gets called by CFS open and schema update, neither of which</comment>
+        <comment type="line">// we want to block for a long period.  (actual build is serialized on CompactionManager.)</comment>
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name><name>baseCfs</name>.<name>forceBlockingFlush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>buildIndexBlocking</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch>
+                <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>FutureTask</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>f</name> <init>= <expr>new <call><name><name>FutureTask</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr>new <call><name>Thread</name><argument_list>(<argument><expr><name>f</name></expr></argument>, <argument><expr>"Creating index: " + <call><name>getIndexName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>start</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>f</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamilyStore</name></type> <name>getBaseCfs</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>baseCfs</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>setBaseCfs</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>baseCfs</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>baseCfs</name></name> = <name>baseCfs</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>ColumnDefinition</name></argument>&gt;</argument_list></name></type> <name>getColumnDefs</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>columnDefs</name></expr>;</return>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>addColumnDef</name><parameter_list>(<param><decl><type><name>ColumnDefinition</name></type> <name>columnDef</name></decl></param>)</parameter_list>
+    <block>{
+       <expr_stmt><expr><call><name><name>columnDefs</name>.<name>add</name></name><argument_list>(<argument><expr><name>columnDef</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>removeColumnDef</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>ColumnDefinition</name></argument>&gt;</argument_list></name></type> <name>it</name> <init>= <expr><call><name><name>columnDefs</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><call><name><name>it</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>it</name>.<name>next</name></name><argument_list>()</argument_list></call>.<call><name><name>name</name>.<name>equals</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>it</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></while>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns the decoratedKey for a column value
+     * @param value column value
+     * @return decorated key
+     */</comment>
+    <function><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>getIndexKeyFor</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// FIXME: this imply one column definition per index</comment>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>name</name> <init>= <expr><call><name><name>columnDefs</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call>.<name>name</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name>DecoratedKey</name><argument_list>(<argument><expr>new <call><name>LocalToken</name><argument_list>(<argument><expr><call><name><name>baseCfs</name>.<name>metadata</name>.<name>getColumnDefinition</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call>.<call><name>getValidator</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns true if the provided column name is indexed by this secondary index.
+     *
+     * The default implement checks whether the name is one the columnDef name,
+     * but this should be overriden but subclass if needed.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>indexes</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ColumnDefinition</name></type> <name>columnDef</name> <range>: <expr><name>columnDefs</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>baseCfs</name>.<name>getComparator</name></name><argument_list>()</argument_list></call>.<call><name>compare</name><argument_list>(<argument><expr><name><name>columnDef</name>.<name>name</name></name></expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call> == 0</expr>)</condition><then>
+                <return>return <expr>true</expr>;</return></then></if>
+        }</block></for>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * This is the primary way to create a secondary index instance for a CF column.
+     * It will validate the index_options before initializing.
+     *
+     * @param baseCfs the source of data for the Index
+     * @param cdef the meta information about this column (index_type, index_options, name, etc...)
+     *
+     * @return The secondary index instance for this column
+     * @throws ConfigurationException
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>SecondaryIndex</name></type> <name>createInstance</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>baseCfs</name></decl></param>, <param><decl><type><name>ColumnDefinition</name></type> <name>cdef</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name></decl>;</decl_stmt>
+
+        <switch>switch <condition>(<expr><call><name><name>cdef</name>.<name>getIndexType</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+        <case>case <expr><name>KEYS</name></expr>:
+            <expr_stmt><expr><name>index</name> = new <call><name>KeysIndex</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <break>break;</break>
+        </case><case>case <expr><name>COMPOSITES</name></expr>:
+            <expr_stmt><expr><name>index</name> = new <call><name>CompositesIndex</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <break>break;</break>
+        </case><case>case <expr><name>CUSTOM</name></expr>:
+            <assert>assert <expr><call><name><name>cdef</name>.<name>getIndexOptions</name></name><argument_list>()</argument_list></call> != null</expr>;</assert>
+            <decl_stmt><decl><type><name>String</name></type> <name>class_name</name> <init>= <expr><call><name><name>cdef</name>.<name>getIndexOptions</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>CUSTOM_INDEX_OPTION_NAME</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><name>class_name</name> != null</expr>;</assert>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>index</name> = (<name>SecondaryIndex</name>) <call><name><name>Class</name>.<name>forName</name></name><argument_list>(<argument><expr><name>class_name</name></expr></argument>)</argument_list></call>.<call><name>newInstance</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+            <break>break;</break>
+            </case><default>default:
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Unknown index type: " + <call><name><name>cdef</name>.<name>getIndexName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        </default>}</block></switch>
+
+        <expr_stmt><expr><call><name><name>index</name>.<name>addColumnDef</name></name><argument_list>(<argument><expr><name>cdef</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>index</name>.<name>validateOptions</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>index</name>.<name>setBaseCfs</name></name><argument_list>(<argument><expr><name>baseCfs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <return>return <expr><name>index</name></expr>;</return>
+    }</block></function>
+
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>boolean</name></type> <name>validate</name><parameter_list>(<param><decl><type><name>Column</name></type> <name>column</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Returns the index comparator for index backed by CFS, or null.
+     *
+     * Note: it would be cleaner to have this be a member method. However we need this when opening indexes
+     * sstables, but by then the CFS won't be fully initiated, so the SecondaryIndex object won't be accessible.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getIndexComparator</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>baseMetadata</name></decl></param>, <param><decl><type><name>ColumnDefinition</name></type> <name>cdef</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>IPartitioner</name></type> <name>rowPartitioner</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>keyComparator</name> <init>= <expr>(<name>rowPartitioner</name> instanceof <name>OrderPreservingPartitioner</name> || <name>rowPartitioner</name> instanceof <name>ByteOrderedPartitioner</name>)
+                                      ? <name><name>BytesType</name>.<name>instance</name></name>
+                                      : new <call><name>LocalByPartionerType</name><argument_list>(<argument><expr><name>rowPartitioner</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <switch>switch <condition>(<expr><call><name><name>cdef</name>.<name>getIndexType</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <case>case <expr><name>KEYS</name></expr>:
+                <return>return <expr><name>keyComparator</name></expr>;</return>
+            </case><case>case <expr><name>COMPOSITES</name></expr>:
+                <assert>assert <expr><name><name>baseMetadata</name>.<name>comparator</name></name> instanceof <name>CompositeType</name></expr>;</assert>
+                <decl_stmt><decl><type><name>int</name></type> <name>prefixSize</name></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>prefixSize</name> = <call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><call><name><name>cdef</name>.<name>getIndexOptions</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name><name>CompositesIndex</name>.<name>PREFIX_SIZE_OPTION</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>NumberFormatException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <comment type="line">// This shouldn't happen if validation has been done correctly</comment>
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>types</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>prefixSize</name> + 1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>types</name>.<name>add</name></name><argument_list>(<argument><expr><name>keyComparator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>prefixSize</name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+                    <expr_stmt><expr><call><name><name>types</name>.<name>add</name></name><argument_list>(<argument><expr>((<name>CompositeType</name>)<name><name>baseMetadata</name>.<name>comparator</name></name>).<call><name><name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                <return>return <expr><call><name><name>CompositeType</name>.<name>getInstance</name></name><argument_list>(<argument><expr><name>types</name></expr></argument>)</argument_list></call></expr>;</return>
+            </case><case>case <expr><name>CUSTOM</name></expr>:
+                <return>return <expr>null</expr>;</return>
+        </case>}</block></switch>
+        <throw>throw <expr>new <call><name>AssertionError</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+}</block></class>
+</unit>

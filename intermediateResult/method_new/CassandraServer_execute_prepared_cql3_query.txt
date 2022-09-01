@@ -1,0 +1,43 @@
+public CqlResult execute_prepared_cql3_query(int itemId, List<ByteBuffer> bindVariables, ConsistencyLevel cLevel)
+    throws InvalidRequestException, UnavailableException, TimedOutException, SchemaDisagreementException, TException
+    {
+        validateCQLVersion(3);
+
+        if (startSessionIfRequested())
+        {
+            // TODO we don't have [typed] access to CQL bind variables here.  CASSANDRA-4560 is open to add support.
+            Tracing.instance().begin("execute_prepared_cql3_query", Collections.<String, String>emptyMap());
+        }
+        else
+        {
+            logger.debug("execute_prepared_cql3_query");
+        }
+
+        try
+        {
+            ThriftClientState cState = state();
+            org.apache.cassandra.cql3.CQLStatement statement = org.apache.cassandra.cql3.QueryProcessor.getPrepared(itemId);
+
+            if (statement == null)
+                throw new InvalidRequestException(String.format("Prepared query with ID %d not found" +
+                                                                " (either the query was not prepared on this host (maybe the host has been restarted?)" +
+                                                                " or you have prepared more than %d queries and queries %d has been evicted from the internal cache)",
+                                                                itemId, org.apache.cassandra.cql3.QueryProcessor.MAX_CACHE_PREPARED, itemId));
+            logger.trace("Retrieved prepared statement #{} with {} bind markers", itemId, statement.getBoundsTerms());
+
+            return org.apache.cassandra.cql3.QueryProcessor.processPrepared(statement, ThriftConversion.fromThrift(cLevel), cState.getQueryState(), bindVariables).toThriftResult();
+        }
+        catch (RequestExecutionException e)
+        {
+            ThriftConversion.rethrow(e);
+            return null;
+        }
+        catch (RequestValidationException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
+    }

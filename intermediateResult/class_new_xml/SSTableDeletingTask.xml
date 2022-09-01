@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\io\sstable\SSTableDeletingTask.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Set</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>CopyOnWriteArraySet</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutionException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Sets</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DataTracker</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>SSTableDeletingTask</name> <super><implements>implements <name>Runnable</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SSTableDeletingTask</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// Deleting sstables is tricky because the mmapping might not have been finalized yet,</comment>
+    <comment type="line">// and delete will fail (on Windows) until it is (we only force the unmapping on SUN VMs).</comment>
+    <comment type="line">// Additionally, we need to make sure to delete the data file first, so on restart the others</comment>
+    <comment type="line">// will be recognized as GCable.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableDeletingTask</name></argument>&gt;</argument_list></name></type> <name>failedTasks</name> <init>= <expr>new <call><name><name>CopyOnWriteArraySet</name><argument_list>&lt;<argument><name>SSTableDeletingTask</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Descriptor</name></type> <name>desc</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>DataTracker</name></type> <name>tracker</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>size</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>SSTableDeletingTask</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>referent</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>desc</name></name> = <name><name>referent</name>.<name>descriptor</name></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>components</name></name> = <name><name>referent</name>.<name>components</name></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>size</name></name> = <call><name><name>referent</name>.<name>bytesOnDisk</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setTracker</name><parameter_list>(<param><decl><type><name>DataTracker</name></type> <name>tracker</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>tracker</name></name> = <name>tracker</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>schedule</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>tasks</name>.<name>submit</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// If we can't successfully delete the DATA component, set the task to be retried later: see above</comment>
+        <decl_stmt><decl><type><name>File</name></type> <name>datafile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>!<call><name><name>datafile</name>.<name>delete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Unable to delete " + <name>datafile</name> + " (it will be removed on server restart; we'll also retry after GC)"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>failedTasks</name>.<name>add</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+        <comment type="line">// let the remainder be cleaned up by delete</comment>
+        <expr_stmt><expr><call><name><name>SSTable</name>.<name>delete</name></name><argument_list>(<argument><expr><name>desc</name></expr></argument>, <argument><expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><name>components</name></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>tracker</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>tracker</name>.<name>spaceReclaimed</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Retry all deletions that failed the first time around (presumably b/c the sstable was still mmap'd.)
+     * Useful because there are times when we know GC has been invoked; also exposed as an mbean.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>rescheduleFailedTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>SSTableDeletingTask</name></type> <name>task</name> <range>: <expr><name>failedTasks</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>failedTasks</name>.<name>remove</name></name><argument_list>(<argument><expr><name>task</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>task</name>.<name>schedule</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** for tests */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>waitForDeletions</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>StorageService</name>.<name>tasks</name>.<name>schedule</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+}</block></class>
+
+</unit>

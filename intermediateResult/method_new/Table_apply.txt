@@ -1,0 +1,34 @@
+public void apply(RowMutation mutation, boolean writeCommitLog, boolean updateIndexes)
+    {
+        if (!mutation.getTable().equals(Tracing.TRACE_KS))
+            Tracing.trace("Acquiring switchLock read lock");
+
+        // write the mutation to the commitlog and memtables
+        switchLock.readLock().lock();
+        try
+        {
+            if (writeCommitLog)
+            {
+                Tracing.trace("Appending to commitlog");
+                CommitLog.instance.add(mutation);
+            }
+
+            DecoratedKey key = StorageService.getPartitioner().decorateKey(mutation.key());
+            for (ColumnFamily cf : mutation.getColumnFamilies())
+            {
+                ColumnFamilyStore cfs = columnFamilyStores.get(cf.id());
+                if (cfs == null)
+                {
+                    logger.error("Attempting to mutate non-existant column family " + cf.id());
+                    continue;
+                }
+
+                Tracing.trace("Adding to {} memtable", cf.metadata().cfName);
+                cfs.apply(key, cf, updateIndexes ? cfs.indexManager.updaterFor(key, true) : SecondaryIndexManager.nullUpdater);
+            }
+        }
+        finally
+        {
+            switchLock.readLock().unlock();
+        }
+    }

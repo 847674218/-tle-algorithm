@@ -1,0 +1,54 @@
+private KsDef updateKsDefAttributes(Tree statement, KsDef ksDefToUpdate)
+    {
+        KsDef ksDef = new KsDef(ksDefToUpdate);
+
+        // removing all column definitions - thrift system_update_keyspace method requires that
+        ksDef.setCf_defs(new LinkedList<CfDef>());
+
+        for(int i = 1; i < statement.getChildCount(); i += 2)
+        {
+            String currentStatement = statement.getChild(i).getText().toUpperCase();
+            AddKeyspaceArgument mArgument = AddKeyspaceArgument.valueOf(currentStatement);
+            String mValue = statement.getChild(i + 1).getText();
+
+            switch(mArgument)
+            {
+            case PLACEMENT_STRATEGY:
+                ksDef.setStrategy_class(CliUtils.unescapeSQLString(mValue));
+                break;
+            case STRATEGY_OPTIONS:
+                ksDef.setStrategy_options(getStrategyOptionsFromTree(statement.getChild(i + 1)));
+                break;
+            case DURABLE_WRITES:
+                ksDef.setDurable_writes(Boolean.parseBoolean(mValue));
+                break;
+            default:
+                //must match one of the above or we'd throw an exception at the valueOf statement above.
+                assert(false);
+            }
+        }
+
+        // using default snitch options if strategy is NetworkTopologyStrategy and no options were set.
+        if (ksDef.getStrategy_class().contains(".NetworkTopologyStrategy"))
+        {
+            Map<String, String> currentStrategyOptions = ksDef.getStrategy_options();
+
+            // adding default data center from SimpleSnitch
+            if (currentStrategyOptions == null || currentStrategyOptions.isEmpty())
+            {
+                SimpleSnitch snitch = new SimpleSnitch();
+                Map<String, String> options = new HashMap<String, String>();
+                try
+                {
+                    options.put(snitch.getDatacenter(InetAddress.getLocalHost()), "1");
+                }
+                catch (UnknownHostException e)
+                {
+                    throw new RuntimeException(e);
+                }
+                ksDef.setStrategy_options(options);
+            }
+        }
+
+        return ksDef;
+    }

@@ -1,0 +1,817 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\utils\obs\BitUtil.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>obs</name></name>;</package>
+
+<comment type="block" format="javadoc">/**  A variety of high efficiency bit twiddling routines.
+ * @lucene.internal
+ */</comment>
+<class><specifier>final</specifier> class <name>BitUtil</name> <block>{
+
+  <comment type="block" format="javadoc">/** Returns the number of bits set in the long */</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>pop</name><parameter_list>(<param><decl><type><name>long</name></type> <name>x</name></decl></param>)</parameter_list> <block>{
+  <comment type="block">/* Hacker's Delight 32 bit pop function:
+   * http://www.hackersdelight.org/HDcode/newCode/pop_arrayHS.cc
+   *
+  int pop(unsigned x) {
+     x = x - ((x &gt;&gt; 1) &amp; 0x55555555);
+     x = (x &amp; 0x33333333) + ((x &gt;&gt; 2) &amp; 0x33333333);
+     x = (x + (x &gt;&gt; 4)) &amp; 0x0F0F0F0F;
+     x = x + (x &gt;&gt; 8);
+     x = x + (x &gt;&gt; 16);
+     return x &amp; 0x0000003F;
+    }
+  ***/</comment>
+
+    <comment type="line">// 64 bit java version of the C function from above</comment>
+    <expr_stmt><expr><name>x</name> = <name>x</name> - ((<name>x</name> &gt;&gt;&gt; 1) &amp; 0x5555555555555555L)</expr>;</expr_stmt>
+    <expr_stmt><expr><name>x</name> = (<name>x</name> &amp; 0x3333333333333333L) + ((<name>x</name> &gt;&gt;&gt;2 ) &amp; 0x3333333333333333L)</expr>;</expr_stmt>
+    <expr_stmt><expr><name>x</name> = (<name>x</name> + (<name>x</name> &gt;&gt;&gt; 4)) &amp; 0x0F0F0F0F0F0F0F0FL</expr>;</expr_stmt>
+    <expr_stmt><expr><name>x</name> = <name>x</name> + (<name>x</name> &gt;&gt;&gt; 8)</expr>;</expr_stmt>
+    <expr_stmt><expr><name>x</name> = <name>x</name> + (<name>x</name> &gt;&gt;&gt; 16)</expr>;</expr_stmt>
+    <expr_stmt><expr><name>x</name> = <name>x</name> + (<name>x</name> &gt;&gt;&gt; 32)</expr>;</expr_stmt>
+    <return>return <expr>((<name>int</name>)<name>x</name>) &amp; 0x7F</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/*** Returns the number of set bits in an array of longs. */</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>pop_array</name><parameter_list>(<param><decl><type><name>long</name></type> <name><name>A</name><index>[]</index></name></decl></param>, <param><decl><type><name>int</name></type> <name>wordOffset</name></decl></param>, <param><decl><type><name>int</name></type> <name>numWords</name></decl></param>)</parameter_list> <block>{
+    <comment type="block">/*
+    * Robert Harley and David Seal's bit counting algorithm, as documented
+    * in the revisions of Hacker's Delight
+    * http://www.hackersdelight.org/revisions.pdf
+    * http://www.hackersdelight.org/HDcode/newCode/pop_arrayHS.cc
+    *
+    * This function was adapted to Java, and extended to use 64 bit words.
+    * if only we had access to wider registers like SSE from java...
+    *
+    * This function can be transformed to compute the popcount of other functions
+    * on bitsets via something like this:
+    * sed 's/A\[\([^]]*\)\]/\(A[\1] \&amp; B[\1]\)/g'
+    *
+    */</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr><name>wordOffset</name>+<name>numWords</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>tot</name><init>=<expr>0</expr></init>, <name>tot8</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>ones</name><init>=<expr>0</expr></init>, <name>twos</name><init>=<expr>0</expr></init>, <name>fours</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>i</name></decl>;</decl_stmt>
+    <for>for (<init><expr><name>i</name> = <name>wordOffset</name></expr>;</init> <condition><expr><name>i</name> &lt;= <name>n</name> - 8</expr>;</condition> <incr><expr><name>i</name>+=8</expr></incr>) <block>{
+      <comment type="block" format="javadoc">/***  C macro from Hacker's Delight
+       #define CSA(h,l, a,b,c) \
+       {unsigned u = a ^ b; unsigned v = c; \
+       h = (a &amp; b) | (u &amp; v); l = u ^ v;}
+       ***/</comment>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>,<decl><type ref="prev"/><name>twosB</name></decl>,<decl><type ref="prev"/><name>foursA</name></decl>,<decl><type ref="prev"/><name>foursB</name></decl>,<decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+
+      <comment type="line">// CSA(twosA, ones, ones, A[i], A[i+1])</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name></expr>]</index></name></expr></init>, <name>c</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">// CSA(twosB, ones, ones, A[i+2], A[i+3])</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name></expr></init>, <name>c</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(foursA, twos, twos, twosA, twosB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(twosA, ones, ones, A[i+4], A[i+5])</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+4</expr>]</index></name></expr></init>, <name>c</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+5</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">// CSA(twosB, ones, ones, A[i+6], A[i+7])</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+6</expr>]</index></name></expr></init>, <name>c</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+7</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(foursB, twos, twos, twosA, twosB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursB</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+
+      <comment type="line">//CSA(eights, fours, fours, foursA, foursB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>fours</name>^<name>foursA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>eights</name>=(<name>fours</name>&amp;<name>foursA</name>)|(<name>u</name>&amp;<name>foursB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>fours</name>=<name>u</name>^<name>foursB</name></expr>;</expr_stmt>
+      }</block>
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></for>
+
+    <comment type="line">// handle trailing words in a binary-search manner...</comment>
+    <comment type="line">// derived from the loop above by setting specific elements to 0.</comment>
+    <comment type="line">// the original method in Hackers Delight used a simple for loop:</comment>
+    <comment type="line">//   for (i = i; i &lt; n; i++)      // Add in the last elements</comment>
+    <comment type="line">//  tot = tot + pop(A[i]);</comment>
+
+    <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-4</expr>)</condition><then> <block>{
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>, <decl><type ref="prev"/><name>twosB</name></decl>, <decl><type ref="prev"/><name>foursA</name></decl>, <decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name></expr>]</index></name></expr></init>, <name>c</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name></expr></init>, <name>c</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+      <expr_stmt><expr><name>eights</name>=<name>fours</name>&amp;<name>foursA</name></expr>;</expr_stmt>
+      <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+      <expr_stmt><expr><name>i</name>+=4</expr>;</expr_stmt>
+    }</block></then></if>
+
+    <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-2</expr>)</condition><then> <block>{
+      <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name></expr>]</index></name></expr></init>, <name>c</name><init>=<expr><name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name></expr></init></decl>;</decl_stmt>
+      <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name><init>=<expr>(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>foursA</name><init>=<expr><name>twos</name>&amp;<name>twosA</name></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>twos</name>=<name>twos</name>^<name>twosA</name></expr>;</expr_stmt>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>eights</name><init>=<expr><name>fours</name>&amp;<name>foursA</name></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+      <expr_stmt><expr><name>i</name>+=2</expr>;</expr_stmt>
+    }</block></then></if>
+
+    <if>if <condition>(<expr><name>i</name>&lt;<name>n</name></expr>)</condition><then> <block>{
+      <expr_stmt><expr><name>tot</name> += <call><name>pop</name><argument_list>(<argument><expr><name><name>A</name><index>[<expr><name>i</name></expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></then></if>
+
+    <expr_stmt><expr><name>tot</name> += (<call><name>pop</name><argument_list>(<argument><expr><name>fours</name></expr></argument>)</argument_list></call>&lt;&lt;2)
+            + (<call><name>pop</name><argument_list>(<argument><expr><name>twos</name></expr></argument>)</argument_list></call>&lt;&lt;1)
+            + <call><name>pop</name><argument_list>(<argument><expr><name>ones</name></expr></argument>)</argument_list></call>
+            + (<name>tot8</name>&lt;&lt;3)</expr>;</expr_stmt>
+
+    <return>return <expr><name>tot</name></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** Returns the popcount or cardinality of the two sets after an intersection.
+   * Neither array is modified.
+   */</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>pop_intersect</name><parameter_list>(<param><decl><type><name>long</name></type> <name><name>A</name><index>[]</index></name></decl></param>, <param><decl><type><name>long</name></type> <name><name>B</name><index>[]</index></name></decl></param>, <param><decl><type><name>int</name></type> <name>wordOffset</name></decl></param>, <param><decl><type><name>int</name></type> <name>numWords</name></decl></param>)</parameter_list> <block>{
+    <comment type="line">// generated from pop_array via sed 's/A\[\([^]]*\)\]/\(A[\1] \&amp; B[\1]\)/g'</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr><name>wordOffset</name>+<name>numWords</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>tot</name><init>=<expr>0</expr></init>, <name>tot8</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>ones</name><init>=<expr>0</expr></init>, <name>twos</name><init>=<expr>0</expr></init>, <name>fours</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>i</name></decl>;</decl_stmt>
+    <for>for (<init><expr><name>i</name> = <name>wordOffset</name></expr>;</init> <condition><expr><name>i</name> &lt;= <name>n</name> - 8</expr>;</condition> <incr><expr><name>i</name>+=8</expr></incr>) <block>{
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>,<decl><type ref="prev"/><name>twosB</name></decl>,<decl><type ref="prev"/><name>foursA</name></decl>,<decl><type ref="prev"/><name>foursB</name></decl>,<decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+
+      <comment type="line">// CSA(twosA, ones, ones, (A[i] &amp; B[i]), (A[i+1] &amp; B[i+1]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">// CSA(twosB, ones, ones, (A[i+2] &amp; B[i+2]), (A[i+3] &amp; B[i+3]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+2</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+3</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(foursA, twos, twos, twosA, twosB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(twosA, ones, ones, (A[i+4] &amp; B[i+4]), (A[i+5] &amp; B[i+5]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+4</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+4</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+5</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+5</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">// CSA(twosB, ones, ones, (A[i+6] &amp; B[i+6]), (A[i+7] &amp; B[i+7]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+6</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+6</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+7</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+7</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(foursB, twos, twos, twosA, twosB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursB</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+
+      <comment type="line">//CSA(eights, fours, fours, foursA, foursB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>fours</name>^<name>foursA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>eights</name>=(<name>fours</name>&amp;<name>foursA</name>)|(<name>u</name>&amp;<name>foursB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>fours</name>=<name>u</name>^<name>foursB</name></expr>;</expr_stmt>
+      }</block>
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></for>
+
+
+    <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-4</expr>)</condition><then> <block>{
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>, <decl><type ref="prev"/><name>twosB</name></decl>, <decl><type ref="prev"/><name>foursA</name></decl>, <decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+2</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+3</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+      <expr_stmt><expr><name>eights</name>=<name>fours</name>&amp;<name>foursA</name></expr>;</expr_stmt>
+      <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+      <expr_stmt><expr><name>i</name>+=4</expr>;</expr_stmt>
+    }</block></then></if>
+
+    <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-2</expr>)</condition><then> <block>{
+      <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+      <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name><init>=<expr>(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>foursA</name><init>=<expr><name>twos</name>&amp;<name>twosA</name></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>twos</name>=<name>twos</name>^<name>twosA</name></expr>;</expr_stmt>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>eights</name><init>=<expr><name>fours</name>&amp;<name>foursA</name></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+      <expr_stmt><expr><name>i</name>+=2</expr>;</expr_stmt>
+    }</block></then></if>
+
+    <if>if <condition>(<expr><name>i</name>&lt;<name>n</name></expr>)</condition><then> <block>{
+      <expr_stmt><expr><name>tot</name> += <call><name>pop</name><argument_list>(<argument><expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> &amp; <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></then></if>
+
+    <expr_stmt><expr><name>tot</name> += (<call><name>pop</name><argument_list>(<argument><expr><name>fours</name></expr></argument>)</argument_list></call>&lt;&lt;2)
+            + (<call><name>pop</name><argument_list>(<argument><expr><name>twos</name></expr></argument>)</argument_list></call>&lt;&lt;1)
+            + <call><name>pop</name><argument_list>(<argument><expr><name>ones</name></expr></argument>)</argument_list></call>
+            + (<name>tot8</name>&lt;&lt;3)</expr>;</expr_stmt>
+
+    <return>return <expr><name>tot</name></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** Returns the popcount or cardinality of the union of two sets.
+    * Neither array is modified.
+    */</comment>
+   <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>pop_union</name><parameter_list>(<param><decl><type><name>long</name></type> <name><name>A</name><index>[]</index></name></decl></param>, <param><decl><type><name>long</name></type> <name><name>B</name><index>[]</index></name></decl></param>, <param><decl><type><name>int</name></type> <name>wordOffset</name></decl></param>, <param><decl><type><name>int</name></type> <name>numWords</name></decl></param>)</parameter_list> <block>{
+     <comment type="line">// generated from pop_array via sed 's/A\[\([^]]*\)\]/\(A[\1] \| B[\1]\)/g'</comment>
+     <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr><name>wordOffset</name>+<name>numWords</name></expr></init></decl>;</decl_stmt>
+     <decl_stmt><decl><type><name>long</name></type> <name>tot</name><init>=<expr>0</expr></init>, <name>tot8</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+     <decl_stmt><decl><type><name>long</name></type> <name>ones</name><init>=<expr>0</expr></init>, <name>twos</name><init>=<expr>0</expr></init>, <name>fours</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+
+     <decl_stmt><decl><type><name>int</name></type> <name>i</name></decl>;</decl_stmt>
+     <for>for (<init><expr><name>i</name> = <name>wordOffset</name></expr>;</init> <condition><expr><name>i</name> &lt;= <name>n</name> - 8</expr>;</condition> <incr><expr><name>i</name>+=8</expr></incr>) <block>{
+       <comment type="block" format="javadoc">/***  C macro from Hacker's Delight
+        #define CSA(h,l, a,b,c) \
+        {unsigned u = a ^ b; unsigned v = c; \
+        h = (a &amp; b) | (u &amp; v); l = u ^ v;}
+        ***/</comment>
+
+       <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>,<decl><type ref="prev"/><name>twosB</name></decl>,<decl><type ref="prev"/><name>foursA</name></decl>,<decl><type ref="prev"/><name>foursB</name></decl>,<decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+
+       <comment type="line">// CSA(twosA, ones, ones, (A[i] | B[i]), (A[i+1] | B[i+1]))</comment>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+       }</block>
+       <comment type="line">// CSA(twosB, ones, ones, (A[i+2] | B[i+2]), (A[i+3] | B[i+3]))</comment>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+2</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+3</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+       }</block>
+       <comment type="line">//CSA(foursA, twos, twos, twosA, twosB)</comment>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+       }</block>
+       <comment type="line">//CSA(twosA, ones, ones, (A[i+4] | B[i+4]), (A[i+5] | B[i+5]))</comment>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+4</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+4</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+5</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+5</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>twosA</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+       }</block>
+       <comment type="line">// CSA(twosB, ones, ones, (A[i+6] | B[i+6]), (A[i+7] | B[i+7]))</comment>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+6</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+6</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+7</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+7</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>twosB</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+       }</block>
+       <comment type="line">//CSA(foursB, twos, twos, twosA, twosB)</comment>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>foursB</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+       }</block>
+
+       <comment type="line">//CSA(eights, fours, fours, foursA, foursB)</comment>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>fours</name>^<name>foursA</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>eights</name>=(<name>fours</name>&amp;<name>foursA</name>)|(<name>u</name>&amp;<name>foursB</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>fours</name>=<name>u</name>^<name>foursB</name></expr>;</expr_stmt>
+       }</block>
+       <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+     }</block></for>
+
+
+     <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-4</expr>)</condition><then> <block>{
+       <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>, <decl><type ref="prev"/><name>twosB</name></decl>, <decl><type ref="prev"/><name>foursA</name></decl>, <decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+       }</block>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+2</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+3</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+       }</block>
+       <block>{
+         <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+         <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+         <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+       }</block>
+       <expr_stmt><expr><name>eights</name>=<name>fours</name>&amp;<name>foursA</name></expr>;</expr_stmt>
+       <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+       <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+       <expr_stmt><expr><name>i</name>+=4</expr>;</expr_stmt>
+     }</block></then></if>
+
+     <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-2</expr>)</condition><then> <block>{
+       <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+       <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+       <decl_stmt><decl><type><name>long</name></type> <name>twosA</name><init>=<expr>(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr></init></decl>;</decl_stmt>
+       <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+
+       <decl_stmt><decl><type><name>long</name></type> <name>foursA</name><init>=<expr><name>twos</name>&amp;<name>twosA</name></expr></init></decl>;</decl_stmt>
+       <expr_stmt><expr><name>twos</name>=<name>twos</name>^<name>twosA</name></expr>;</expr_stmt>
+
+       <decl_stmt><decl><type><name>long</name></type> <name>eights</name><init>=<expr><name>fours</name>&amp;<name>foursA</name></expr></init></decl>;</decl_stmt>
+       <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+       <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+       <expr_stmt><expr><name>i</name>+=2</expr>;</expr_stmt>
+     }</block></then></if>
+
+     <if>if <condition>(<expr><name>i</name>&lt;<name>n</name></expr>)</condition><then> <block>{
+       <expr_stmt><expr><name>tot</name> += <call><name>pop</name><argument_list>(<argument><expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> | <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+     }</block></then></if>
+
+     <expr_stmt><expr><name>tot</name> += (<call><name>pop</name><argument_list>(<argument><expr><name>fours</name></expr></argument>)</argument_list></call>&lt;&lt;2)
+             + (<call><name>pop</name><argument_list>(<argument><expr><name>twos</name></expr></argument>)</argument_list></call>&lt;&lt;1)
+             + <call><name>pop</name><argument_list>(<argument><expr><name>ones</name></expr></argument>)</argument_list></call>
+             + (<name>tot8</name>&lt;&lt;3)</expr>;</expr_stmt>
+
+     <return>return <expr><name>tot</name></expr>;</return>
+   }</block></function>
+
+  <comment type="block" format="javadoc">/** Returns the popcount or cardinality of A &amp; ~B
+   * Neither array is modified.
+   */</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>pop_andnot</name><parameter_list>(<param><decl><type><name>long</name></type> <name><name>A</name><index>[]</index></name></decl></param>, <param><decl><type><name>long</name></type> <name><name>B</name><index>[]</index></name></decl></param>, <param><decl><type><name>int</name></type> <name>wordOffset</name></decl></param>, <param><decl><type><name>int</name></type> <name>numWords</name></decl></param>)</parameter_list> <block>{
+    <comment type="line">// generated from pop_array via sed 's/A\[\([^]]*\)\]/\(A[\1] \&amp; ~B[\1]\)/g'</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr><name>wordOffset</name>+<name>numWords</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>tot</name><init>=<expr>0</expr></init>, <name>tot8</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>ones</name><init>=<expr>0</expr></init>, <name>twos</name><init>=<expr>0</expr></init>, <name>fours</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>i</name></decl>;</decl_stmt>
+    <for>for (<init><expr><name>i</name> = <name>wordOffset</name></expr>;</init> <condition><expr><name>i</name> &lt;= <name>n</name> - 8</expr>;</condition> <incr><expr><name>i</name>+=8</expr></incr>) <block>{
+      <comment type="block" format="javadoc">/***  C macro from Hacker's Delight
+       #define CSA(h,l, a,b,c) \
+       {unsigned u = a ^ b; unsigned v = c; \
+       h = (a &amp; b) | (u &amp; v); l = u ^ v;}
+       ***/</comment>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>,<decl><type ref="prev"/><name>twosB</name></decl>,<decl><type ref="prev"/><name>foursA</name></decl>,<decl><type ref="prev"/><name>foursB</name></decl>,<decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+
+      <comment type="line">// CSA(twosA, ones, ones, (A[i] &amp; ~B[i]), (A[i+1] &amp; ~B[i+1]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">// CSA(twosB, ones, ones, (A[i+2] &amp; ~B[i+2]), (A[i+3] &amp; ~B[i+3]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+2</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+3</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(foursA, twos, twos, twosA, twosB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(twosA, ones, ones, (A[i+4] &amp; ~B[i+4]), (A[i+5] &amp; ~B[i+5]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+4</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+4</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+5</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+5</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">// CSA(twosB, ones, ones, (A[i+6] &amp; ~B[i+6]), (A[i+7] &amp; ~B[i+7]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+6</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+6</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+7</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+7</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(foursB, twos, twos, twosA, twosB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursB</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+
+      <comment type="line">//CSA(eights, fours, fours, foursA, foursB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>fours</name>^<name>foursA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>eights</name>=(<name>fours</name>&amp;<name>foursA</name>)|(<name>u</name>&amp;<name>foursB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>fours</name>=<name>u</name>^<name>foursB</name></expr>;</expr_stmt>
+      }</block>
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></for>
+
+
+    <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-4</expr>)</condition><then> <block>{
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>, <decl><type ref="prev"/><name>twosB</name></decl>, <decl><type ref="prev"/><name>foursA</name></decl>, <decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+2</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+3</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+      <expr_stmt><expr><name>eights</name>=<name>fours</name>&amp;<name>foursA</name></expr>;</expr_stmt>
+      <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+      <expr_stmt><expr><name>i</name>+=4</expr>;</expr_stmt>
+    }</block></then></if>
+
+    <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-2</expr>)</condition><then> <block>{
+      <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+      <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name><init>=<expr>(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>foursA</name><init>=<expr><name>twos</name>&amp;<name>twosA</name></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>twos</name>=<name>twos</name>^<name>twosA</name></expr>;</expr_stmt>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>eights</name><init>=<expr><name>fours</name>&amp;<name>foursA</name></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+      <expr_stmt><expr><name>i</name>+=2</expr>;</expr_stmt>
+    }</block></then></if>
+
+    <if>if <condition>(<expr><name>i</name>&lt;<name>n</name></expr>)</condition><then> <block>{
+      <expr_stmt><expr><name>tot</name> += <call><name>pop</name><argument_list>(<argument><expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> &amp; ~<name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></then></if>
+
+    <expr_stmt><expr><name>tot</name> += (<call><name>pop</name><argument_list>(<argument><expr><name>fours</name></expr></argument>)</argument_list></call>&lt;&lt;2)
+            + (<call><name>pop</name><argument_list>(<argument><expr><name>twos</name></expr></argument>)</argument_list></call>&lt;&lt;1)
+            + <call><name>pop</name><argument_list>(<argument><expr><name>ones</name></expr></argument>)</argument_list></call>
+            + (<name>tot8</name>&lt;&lt;3)</expr>;</expr_stmt>
+
+    <return>return <expr><name>tot</name></expr>;</return>
+  }</block></function>
+
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>pop_xor</name><parameter_list>(<param><decl><type><name>long</name></type> <name><name>A</name><index>[]</index></name></decl></param>, <param><decl><type><name>long</name></type> <name><name>B</name><index>[]</index></name></decl></param>, <param><decl><type><name>int</name></type> <name>wordOffset</name></decl></param>, <param><decl><type><name>int</name></type> <name>numWords</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr><name>wordOffset</name>+<name>numWords</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>tot</name><init>=<expr>0</expr></init>, <name>tot8</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>ones</name><init>=<expr>0</expr></init>, <name>twos</name><init>=<expr>0</expr></init>, <name>fours</name><init>=<expr>0</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>i</name></decl>;</decl_stmt>
+    <for>for (<init><expr><name>i</name> = <name>wordOffset</name></expr>;</init> <condition><expr><name>i</name> &lt;= <name>n</name> - 8</expr>;</condition> <incr><expr><name>i</name>+=8</expr></incr>) <block>{
+      <comment type="block" format="javadoc">/***  C macro from Hacker's Delight
+       #define CSA(h,l, a,b,c) \
+       {unsigned u = a ^ b; unsigned v = c; \
+       h = (a &amp; b) | (u &amp; v); l = u ^ v;}
+       ***/</comment>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>,<decl><type ref="prev"/><name>twosB</name></decl>,<decl><type ref="prev"/><name>foursA</name></decl>,<decl><type ref="prev"/><name>foursB</name></decl>,<decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+
+      <comment type="line">// CSA(twosA, ones, ones, (A[i] ^ B[i]), (A[i+1] ^ B[i+1]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">// CSA(twosB, ones, ones, (A[i+2] ^ B[i+2]), (A[i+3] ^ B[i+3]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+2</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+3</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(foursA, twos, twos, twosA, twosB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(twosA, ones, ones, (A[i+4] ^ B[i+4]), (A[i+5] ^ B[i+5]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+4</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+4</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+5</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+5</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">// CSA(twosB, ones, ones, (A[i+6] ^ B[i+6]), (A[i+7] ^ B[i+7]))</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+6</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+6</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+7</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+7</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name>=(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <comment type="line">//CSA(foursB, twos, twos, twosA, twosB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursB</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+
+      <comment type="line">//CSA(eights, fours, fours, foursA, foursB)</comment>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>fours</name>^<name>foursA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>eights</name>=(<name>fours</name>&amp;<name>foursA</name>)|(<name>u</name>&amp;<name>foursB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>fours</name>=<name>u</name>^<name>foursB</name></expr>;</expr_stmt>
+      }</block>
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></for>
+
+
+    <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-4</expr>)</condition><then> <block>{
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name></decl>, <decl><type ref="prev"/><name>twosB</name></decl>, <decl><type ref="prev"/><name>foursA</name></decl>, <decl><type ref="prev"/><name>eights</name></decl>;</decl_stmt>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosA</name>=(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+2</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+2</expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+3</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+3</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name>^<name>b</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>twosB</name> =(<name>ones</name>&amp;<name>b</name>)|(<name>u</name>&amp;<name>c</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+      }</block>
+      <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>twos</name>^<name>twosA</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>foursA</name>=(<name>twos</name>&amp;<name>twosA</name>)|(<name>u</name>&amp;<name>twosB</name>)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>twos</name>=<name>u</name>^<name>twosB</name></expr>;</expr_stmt>
+      }</block>
+      <expr_stmt><expr><name>eights</name>=<name>fours</name>&amp;<name>foursA</name></expr>;</expr_stmt>
+      <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+      <expr_stmt><expr><name>i</name>+=4</expr>;</expr_stmt>
+    }</block></then></if>
+
+    <if>if <condition>(<expr><name>i</name>&lt;=<name>n</name>-2</expr>)</condition><then> <block>{
+      <decl_stmt><decl><type><name>long</name></type> <name>b</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></init>, <name>c</name><init>=<expr>(<name><name>A</name><index>[<expr><name>i</name>+1</expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name>+1</expr>]</index></name>)</expr></init></decl>;</decl_stmt>
+      <decl_stmt><decl><type><name>long</name></type> <name>u</name><init>=<expr><name>ones</name> ^ <name>b</name></expr></init></decl>;</decl_stmt>
+      <decl_stmt><decl><type><name>long</name></type> <name>twosA</name><init>=<expr>(<name>ones</name> &amp; <name>b</name>)|( <name>u</name> &amp; <name>c</name>)</expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>ones</name>=<name>u</name>^<name>c</name></expr>;</expr_stmt>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>foursA</name><init>=<expr><name>twos</name>&amp;<name>twosA</name></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>twos</name>=<name>twos</name>^<name>twosA</name></expr>;</expr_stmt>
+
+      <decl_stmt><decl><type><name>long</name></type> <name>eights</name><init>=<expr><name>fours</name>&amp;<name>foursA</name></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>fours</name>=<name>fours</name>^<name>foursA</name></expr>;</expr_stmt>
+
+      <expr_stmt><expr><name>tot8</name> += <call><name>pop</name><argument_list>(<argument><expr><name>eights</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+      <expr_stmt><expr><name>i</name>+=2</expr>;</expr_stmt>
+    }</block></then></if>
+
+    <if>if <condition>(<expr><name>i</name>&lt;<name>n</name></expr>)</condition><then> <block>{
+      <expr_stmt><expr><name>tot</name> += <call><name>pop</name><argument_list>(<argument><expr>(<name><name>A</name><index>[<expr><name>i</name></expr>]</index></name> ^ <name><name>B</name><index>[<expr><name>i</name></expr>]</index></name>)</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></then></if>
+
+    <expr_stmt><expr><name>tot</name> += (<call><name>pop</name><argument_list>(<argument><expr><name>fours</name></expr></argument>)</argument_list></call>&lt;&lt;2)
+            + (<call><name>pop</name><argument_list>(<argument><expr><name>twos</name></expr></argument>)</argument_list></call>&lt;&lt;1)
+            + <call><name>pop</name><argument_list>(<argument><expr><name>ones</name></expr></argument>)</argument_list></call>
+            + (<name>tot8</name>&lt;&lt;3)</expr>;</expr_stmt>
+
+    <return>return <expr><name>tot</name></expr>;</return>
+  }</block></function>
+
+  <comment type="block">/* python code to generate ntzTable
+  def ntz(val):
+    if val==0: return 8
+    i=0
+    while (val&amp;0x01)==0:
+      i = i+1
+      val &gt;&gt;= 1
+    return i
+  print ','.join([ str(ntz(i)) for i in range(256) ])
+  ***/</comment>
+  <comment type="block" format="javadoc">/** table of number of trailing zeros in a byte */</comment>
+  <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>byte</name><index>[]</index></type> <name>ntzTable</name> <init>= <expr><block>{<expr>8</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>4</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>5</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>4</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>6</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>4</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>5</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>4</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>7</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>4</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>5</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>4</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>6</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>4</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>5</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>4</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>3</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>,<expr>2</expr>,<expr>0</expr>,<expr>1</expr>,<expr>0</expr>}</block></expr></init></decl>;</decl_stmt>
+
+
+  <comment type="block" format="javadoc">/** Returns number of trailing zeros in a 64 bit long value. */</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>ntz</name><parameter_list>(<param><decl><type><name>long</name></type> <name>val</name></decl></param>)</parameter_list> <block>{
+    <comment type="line">// A full binary search to determine the low byte was slower than</comment>
+    <comment type="line">// a linear search for nextSetBit().  This is most likely because</comment>
+    <comment type="line">// the implementation of nextSetBit() shifts bits to the right, increasing</comment>
+    <comment type="line">// the probability that the first non-zero byte is in the rhs.</comment>
+    <comment type="line">//</comment>
+    <comment type="line">// This implementation does a single binary search at the top level only</comment>
+    <comment type="line">// so that all other bit shifting can be done on ints instead of longs to</comment>
+    <comment type="line">// remain friendly to 32 bit architectures.  In addition, the case of a</comment>
+    <comment type="line">// non-zero first byte is checked for first because it is the most common</comment>
+    <comment type="line">// in dense bit arrays.</comment>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>lower</name> <init>= <expr>(<name>int</name>)<name>val</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>int</name></type> <name>lowByte</name> <init>= <expr><name>lower</name> &amp; 0xff</expr></init></decl>;</decl_stmt>
+    <if>if <condition>(<expr><name>lowByte</name> != 0</expr>)</condition><then> <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lowByte</name></expr>]</index></name></expr>;</return></then></if>
+
+    <if>if <condition>(<expr><name>lower</name>!=0</expr>)</condition><then> <block>{
+      <expr_stmt><expr><name>lowByte</name> = (<name>lower</name>&gt;&gt;&gt;8) &amp; 0xff</expr>;</expr_stmt>
+      <if>if <condition>(<expr><name>lowByte</name> != 0</expr>)</condition><then> <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lowByte</name></expr>]</index></name> + 8</expr>;</return></then></if>
+      <expr_stmt><expr><name>lowByte</name> = (<name>lower</name>&gt;&gt;&gt;16) &amp; 0xff</expr>;</expr_stmt>
+      <if>if <condition>(<expr><name>lowByte</name> != 0</expr>)</condition><then> <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lowByte</name></expr>]</index></name> + 16</expr>;</return></then></if>
+      <comment type="line">// no need to mask off low byte for the last byte in the 32 bit word</comment>
+      <comment type="line">// no need to check for zero on the last byte either.</comment>
+      <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lower</name>&gt;&gt;&gt;24</expr>]</index></name> + 24</expr>;</return>
+    }</block></then> <else>else <block>{
+      <comment type="line">// grab upper 32 bits</comment>
+      <decl_stmt><decl><type><name>int</name></type> <name>upper</name><init>=<expr><call>(<name>int</name>)<argument_list>(<argument><expr><name>val</name>&gt;&gt;32</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>lowByte</name> = <name>upper</name> &amp; 0xff</expr>;</expr_stmt>
+      <if>if <condition>(<expr><name>lowByte</name> != 0</expr>)</condition><then> <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lowByte</name></expr>]</index></name> + 32</expr>;</return></then></if>
+      <expr_stmt><expr><name>lowByte</name> = (<name>upper</name>&gt;&gt;&gt;8) &amp; 0xff</expr>;</expr_stmt>
+      <if>if <condition>(<expr><name>lowByte</name> != 0</expr>)</condition><then> <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lowByte</name></expr>]</index></name> + 40</expr>;</return></then></if>
+      <expr_stmt><expr><name>lowByte</name> = (<name>upper</name>&gt;&gt;&gt;16) &amp; 0xff</expr>;</expr_stmt>
+      <if>if <condition>(<expr><name>lowByte</name> != 0</expr>)</condition><then> <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lowByte</name></expr>]</index></name> + 48</expr>;</return></then></if>
+      <comment type="line">// no need to mask off low byte for the last byte in the 32 bit word</comment>
+      <comment type="line">// no need to check for zero on the last byte either.</comment>
+      <return>return <expr><name><name>ntzTable</name><index>[<expr><name>upper</name>&gt;&gt;&gt;24</expr>]</index></name> + 56</expr>;</return>
+    }</block></else></if>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** Returns number of trailing zeros in a 32 bit int value. */</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>ntz</name><parameter_list>(<param><decl><type><name>int</name></type> <name>val</name></decl></param>)</parameter_list> <block>{
+    <comment type="line">// This implementation does a single binary search at the top level only.</comment>
+    <comment type="line">// In addition, the case of a non-zero first byte is checked for first</comment>
+    <comment type="line">// because it is the most common in dense bit arrays.</comment>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>lowByte</name> <init>= <expr><name>val</name> &amp; 0xff</expr></init></decl>;</decl_stmt>
+    <if>if <condition>(<expr><name>lowByte</name> != 0</expr>)</condition><then> <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lowByte</name></expr>]</index></name></expr>;</return></then></if>
+    <expr_stmt><expr><name>lowByte</name> = (<name>val</name>&gt;&gt;&gt;8) &amp; 0xff</expr>;</expr_stmt>
+    <if>if <condition>(<expr><name>lowByte</name> != 0</expr>)</condition><then> <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lowByte</name></expr>]</index></name> + 8</expr>;</return></then></if>
+    <expr_stmt><expr><name>lowByte</name> = (<name>val</name>&gt;&gt;&gt;16) &amp; 0xff</expr>;</expr_stmt>
+    <if>if <condition>(<expr><name>lowByte</name> != 0</expr>)</condition><then> <return>return <expr><name><name>ntzTable</name><index>[<expr><name>lowByte</name></expr>]</index></name> + 16</expr>;</return></then></if>
+    <comment type="line">// no need to mask off low byte for the last byte.</comment>
+    <comment type="line">// no need to check for zero on the last byte either.</comment>
+    <return>return <expr><name><name>ntzTable</name><index>[<expr><name>val</name>&gt;&gt;&gt;24</expr>]</index></name> + 24</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** returns 0 based index of first set bit
+   * (only works for x!=0)
+   * &lt;br/&gt; This is an alternate implementation of ntz()
+   */</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>ntz2</name><parameter_list>(<param><decl><type><name>long</name></type> <name>x</name></decl></param>)</parameter_list> <block>{
+   <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+   <decl_stmt><decl><type><name>int</name></type> <name>y</name> <init>= <expr>(<name>int</name>)<name>x</name></expr></init></decl>;</decl_stmt>
+   <if>if <condition>(<expr><name>y</name>==0</expr>)</condition><then> <block>{<expr_stmt><expr><name>n</name>+=32</expr>;</expr_stmt> <expr_stmt><expr><name>y</name> = <call>(<name>int</name>)<argument_list>(<argument><expr><name>x</name>&gt;&gt;&gt;32</expr></argument>)</argument_list></call></expr>;</expr_stmt> }</block></then></if>   <comment type="line">// the only 64 bit shift necessary</comment>
+   <if>if <condition>(<expr>(<name>y</name> &amp; 0x0000FFFF) == 0</expr>)</condition><then> <block>{ <expr_stmt><expr><name>n</name>+=16</expr>;</expr_stmt> <expr_stmt><expr><name>y</name>&gt;&gt;&gt;=16</expr>;</expr_stmt> }</block></then></if>
+   <if>if <condition>(<expr>(<name>y</name> &amp; 0x000000FF) == 0</expr>)</condition><then> <block>{ <expr_stmt><expr><name>n</name>+=8</expr>;</expr_stmt> <expr_stmt><expr><name>y</name>&gt;&gt;&gt;=8</expr>;</expr_stmt> }</block></then></if>
+   <return>return <expr>(<name><name>ntzTable</name><index>[ <expr><name>y</name> &amp; 0xff</expr> ]</index></name>) + <name>n</name></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** returns 0 based index of first set bit
+   * &lt;br/&gt; This is an alternate implementation of ntz()
+   */</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>ntz3</name><parameter_list>(<param><decl><type><name>long</name></type> <name>x</name></decl></param>)</parameter_list> <block>{
+   <comment type="line">// another implementation taken from Hackers Delight, extended to 64 bits</comment>
+   <comment type="line">// and converted to Java.</comment>
+   <comment type="line">// Many 32 bit ntz algorithms are at http://www.hackersdelight.org/HDcode/ntz.cc</comment>
+   <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>1</expr></init></decl>;</decl_stmt>
+
+   <comment type="line">// do the first step as a long, all others as ints.</comment>
+   <decl_stmt><decl><type><name>int</name></type> <name>y</name> <init>= <expr>(<name>int</name>)<name>x</name></expr></init></decl>;</decl_stmt>
+   <if>if <condition>(<expr><name>y</name>==0</expr>)</condition><then> <block>{<expr_stmt><expr><name>n</name>+=32</expr>;</expr_stmt> <expr_stmt><expr><name>y</name> = <call>(<name>int</name>)<argument_list>(<argument><expr><name>x</name>&gt;&gt;&gt;32</expr></argument>)</argument_list></call></expr>;</expr_stmt> }</block></then></if>
+   <if>if <condition>(<expr>(<name>y</name> &amp; 0x0000FFFF) == 0</expr>)</condition><then> <block>{ <expr_stmt><expr><name>n</name>+=16</expr>;</expr_stmt> <expr_stmt><expr><name>y</name>&gt;&gt;&gt;=16</expr>;</expr_stmt> }</block></then></if>
+   <if>if <condition>(<expr>(<name>y</name> &amp; 0x000000FF) == 0</expr>)</condition><then> <block>{ <expr_stmt><expr><name>n</name>+=8</expr>;</expr_stmt> <expr_stmt><expr><name>y</name>&gt;&gt;&gt;=8</expr>;</expr_stmt> }</block></then></if>
+   <if>if <condition>(<expr>(<name>y</name> &amp; 0x0000000F) == 0</expr>)</condition><then> <block>{ <expr_stmt><expr><name>n</name>+=4</expr>;</expr_stmt> <expr_stmt><expr><name>y</name>&gt;&gt;&gt;=4</expr>;</expr_stmt> }</block></then></if>
+   <if>if <condition>(<expr>(<name>y</name> &amp; 0x00000003) == 0</expr>)</condition><then> <block>{ <expr_stmt><expr><name>n</name>+=2</expr>;</expr_stmt> <expr_stmt><expr><name>y</name>&gt;&gt;&gt;=2</expr>;</expr_stmt> }</block></then></if>
+   <return>return <expr><name>n</name> - (<name>y</name> &amp; 1)</expr>;</return>
+  }</block></function>
+
+
+  <comment type="block" format="javadoc">/** returns true if v is a power of two or zero*/</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>isPowerOfTwo</name><parameter_list>(<param><decl><type><name>int</name></type> <name>v</name></decl></param>)</parameter_list> <block>{
+    <return>return <expr>((<name>v</name> &amp; (<name>v</name>-1)) == 0)</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** returns true if v is a power of two or zero*/</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>isPowerOfTwo</name><parameter_list>(<param><decl><type><name>long</name></type> <name>v</name></decl></param>)</parameter_list> <block>{
+    <return>return <expr>((<name>v</name> &amp; (<name>v</name>-1)) == 0)</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** returns the next highest power of two, or the current value if it's already a power of two or zero*/</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>nextHighestPowerOfTwo</name><parameter_list>(<param><decl><type><name>int</name></type> <name>v</name></decl></param>)</parameter_list> <block>{
+    <expr_stmt><expr><name>v</name>--</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 1</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 2</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 4</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 8</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 16</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name>++</expr>;</expr_stmt>
+    <return>return <expr><name>v</name></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** returns the next highest power of two, or the current value if it's already a power of two or zero*/</comment>
+   <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>nextHighestPowerOfTwo</name><parameter_list>(<param><decl><type><name>long</name></type> <name>v</name></decl></param>)</parameter_list> <block>{
+    <expr_stmt><expr><name>v</name>--</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 1</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 2</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 4</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 8</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 16</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name> |= <name>v</name> &gt;&gt; 32</expr>;</expr_stmt>
+    <expr_stmt><expr><name>v</name>++</expr>;</expr_stmt>
+    <return>return <expr><name>v</name></expr>;</return>
+  }</block></function>
+
+}</block></class>
+</unit>

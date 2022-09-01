@@ -1,0 +1,39 @@
+private void updateScores() // this is expensive
+    {
+        if (!StorageService.instance.isInitialized()) 
+            return;
+        if (!registered)
+        {
+            if (MessagingService.instance() != null)
+            {
+                MessagingService.instance().register(this);
+                registered = true;
+            }
+
+        }
+        double maxLatency = 1;
+        long maxPenalty = 1;
+        HashMap<InetAddress, Long> penalties = new HashMap<InetAddress, Long>();
+        for (Map.Entry<InetAddress, ExponentiallyDecayingSample> entry : samples.entrySet())
+        {
+            double mean = entry.getValue().getSnapshot().getMedian();
+            if (mean > maxLatency)
+                maxLatency = mean;
+            long timePenalty = lastReceived.containsKey(entry.getKey()) ? lastReceived.get(entry.getKey()) : System.currentTimeMillis();
+            timePenalty = System.currentTimeMillis() - timePenalty;
+            timePenalty = timePenalty > UPDATE_INTERVAL_IN_MS ? UPDATE_INTERVAL_IN_MS : timePenalty;
+            penalties.put(entry.getKey(), timePenalty);
+            if (timePenalty > maxPenalty)
+                maxPenalty = timePenalty;
+        }
+        for (Map.Entry<InetAddress, ExponentiallyDecayingSample> entry: samples.entrySet())
+        {
+            double score = entry.getValue().getSnapshot().getMedian() / maxLatency;
+            if (penalties.containsKey(entry.getKey()))
+                score += penalties.get(entry.getKey()) / ((double) maxPenalty);
+            else
+                score += 1; // maxPenalty / maxPenalty
+            score += StorageService.instance.getSeverity(entry.getKey());
+            scores.put(entry.getKey(), score);            
+        }
+    }

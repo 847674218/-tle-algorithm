@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\filter\SliceQueryFilter.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Comparator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Iterator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterators</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Lists</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>IColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>ISSTableColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>SSTableSliceIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileDataInput</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>SliceQueryFilter</name> <super><implements>implements <name>IFilter</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SliceQueryFilter</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>volatile</specifier> <name>ByteBuffer</name></type> <name>start</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>volatile</specifier> <name>ByteBuffer</name></type> <name>finish</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>reversed</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>volatile</specifier> <name>int</name></type> <name>count</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>SliceQueryFilter</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>start</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>finish</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>reversed</name></decl></param>, <param><decl><type><name>int</name></type> <name>count</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>start</name></name> = <name>start</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>finish</name></name> = <name>finish</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>reversed</name></name> = <name>reversed</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>count</name></name> = <name>count</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>IColumnIterator</name></type> <name>getMemtableColumnIterator</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>Memtable</name>.<name>getSliceIterator</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ISSTableColumnIterator</name></type> <name>getSSTableColumnIterator</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>SSTableSliceIterator</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>start</name></expr></argument>, <argument><expr><name>finish</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ISSTableColumnIterator</name></type> <name>getSSTableColumnIterator</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>FileDataInput</name></type> <name>file</name></decl></param>, <param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>SSTableSliceIterator</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>file</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>start</name></expr></argument>, <argument><expr><name>finish</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>SuperColumn</name></type> <name>filterSuperColumn</name><parameter_list>(<param><decl><type><name>SuperColumn</name></type> <name>superColumn</name></decl></param>, <param><decl><type><name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// we clone shallow, then add, under the theory that generally we're interested in a relatively small number of subcolumns.</comment>
+        <comment type="line">// this may be a poor assumption.</comment>
+        <decl_stmt><decl><type><name>SuperColumn</name></type> <name>scFiltered</name> <init>= <expr><call><name><name>superColumn</name>.<name>cloneMeShallow</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>subcolumns</name></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>reversed</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>columnsAsList</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>superColumn</name>.<name>getSubColumns</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>subcolumns</name> = <call><name><name>Lists</name>.<name>reverse</name></name><argument_list>(<argument><expr><name>columnsAsList</name></expr></argument>)</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name>subcolumns</name> = <call><name><name>superColumn</name>.<name>getSubColumns</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <comment type="line">// iterate until we get to the "real" start column</comment>
+        <decl_stmt><decl><type><name><name>Comparator</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr><name>reversed</name> ? <call><name><name>superColumn</name>.<name>getComparator</name></name><argument_list>()</argument_list></call>.<name>reverseComparator</name> : <call><name><name>superColumn</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><call><name><name>subcolumns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>subcolumns</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>comparator</name>.<name>compare</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>start</name></expr></argument>)</argument_list></call> &gt;= 0</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>subcolumns</name> = <call><name><name>Iterators</name>.<name>concat</name></name><argument_list>(<argument><expr><call><name><name>Iterators</name>.<name>singletonIterator</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>subcolumns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            }</block></then></if>
+        }</block></while>
+        <comment type="line">// subcolumns is either empty now, or has been redefined in the loop above.  either is ok.</comment>
+        <expr_stmt><expr><call><name>collectReducedColumns</name><argument_list>(<argument><expr><name>scFiltered</name></expr></argument>, <argument><expr><name>subcolumns</name></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>scFiltered</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>getColumnComparator</name><parameter_list>(<param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name>reversed</name> ? <name><name>comparator</name>.<name>columnReverseComparator</name></name> : <name><name>comparator</name>.<name>columnComparator</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>collectReducedColumns</name><parameter_list>(<param><decl><type><name>IColumnContainer</name></type> <name>container</name></decl></param>, <param><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>reducedColumns</name></decl></param>, <param><decl><type><name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>liveColumns</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr><call><name><name>container</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <while>while <condition>(<expr><call><name><name>reducedColumns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <if>if <condition>(<expr><name>liveColumns</name> &gt;= <name>count</name></expr>)</condition><then>
+                <break>break;</break></then></if>
+
+            <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>reducedColumns</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"collecting %s of %s: %s"</expr></argument>,
+                                           <argument><expr><name>liveColumns</name></expr></argument>, <argument><expr><name>count</name></expr></argument>, <argument><expr><call><name><name>column</name>.<name>getString</name></name><argument_list>(<argument><expr><name>comparator</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <if>if <condition>(<expr><call><name><name>finish</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; 0
+                &amp;&amp; ((!<name>reversed</name> &amp;&amp; <call><name><name>comparator</name>.<name>compare</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>finish</name></expr></argument>)</argument_list></call> &gt; 0))
+                    || (<name>reversed</name> &amp;&amp; <call><name><name>comparator</name>.<name>compare</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>finish</name></expr></argument>)</argument_list></call> &lt; 0)</expr>)</condition><then>
+                <break>break;</break></then></if>
+
+            <comment type="line">// only count live columns towards the `count` criteria</comment>
+            <if>if <condition>(<expr><call><name><name>column</name>.<name>isLive</name></name><argument_list>()</argument_list></call>
+                &amp;&amp; (!<call><name><name>container</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call>
+                    || <call><name><name>column</name>.<name>mostRecentLiveChangeAt</name></name><argument_list>()</argument_list></call> &gt; <call><name><name>container</name>.<name>getMarkedForDeleteAt</name></name><argument_list>()</argument_list></call>)</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>liveColumns</name>++</expr>;</expr_stmt>
+            }</block></then></if>
+
+            <comment type="line">// but we need to add all non-gc-able columns to the result for read repair:</comment>
+            <if>if <condition>(<expr><call><name><name>QueryFilter</name>.<name>isRelevant</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name>container</name></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>container</name>.<name>addColumn</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></while>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list> <block>{
+        <return>return <expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call> + "(" +
+               "start=" + <name>start</name> +
+               ", finish=" + <name>finish</name> +
+               ", reversed=" + <name>reversed</name> +
+               ", count=" + <name>count</name> + "]"</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isReversed</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>reversed</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateColumnsLimit</name><parameter_list>(<param><decl><type><name>int</name></type> <name>newLimit</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>count</name> = <name>newLimit</name></expr>;</expr_stmt>
+    }</block></function>
+}</block></class>
+</unit>

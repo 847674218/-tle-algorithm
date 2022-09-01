@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\ColumnFamilySerializer.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataInput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>UUID</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IColumnSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>ISSTableSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IVersionedSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>Descriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>UUIDSerializer</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>ColumnFamilySerializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name>, <name><name>ISSTableSerializer</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></implements></super>
+<block>{
+    <comment type="block">/*
+     * Serialized ColumnFamily format:
+     *
+     * [serialized for intra-node writes only, e.g. returning a query result]
+     * &lt;cf nullability boolean: false if the cf is null&gt;
+     * &lt;cf id&gt;
+     *
+     * [in sstable only]
+     * &lt;column bloom filter&gt;
+     * &lt;sparse column index, start/finish columns every ColumnIndexSizeInKB of data&gt;
+     *
+     * [always present]
+     * &lt;local deletion time&gt;
+     * &lt;client-provided deletion time&gt;
+     * &lt;column count&gt;
+     * &lt;columns, serialized individually&gt;
+    */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><name>cf</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeBoolean</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeBoolean</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>serializeCfId</name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>id</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>DeletionInfo</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>deletionInfo</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>IColumnSerializer</name></type> <name>columnSerializer</name> <init>= <expr><call><name><name>cf</name>.<name>getColumnSerializer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>count</name> <init>= <expr><call><name><name>cf</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name>count</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>written</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>IColumn</name></type> <name>column</name> <range>: <expr><name>cf</name></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>columnSerializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>written</name>++</expr>;</expr_stmt>
+            }</block></for>
+            <assert>assert <expr><name>count</name> == <name>written</name>: "Column family had " + <name>count</name> + " columns, but " + <name>written</name> + " written"</expr>;</assert>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>deserialize</name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name><name>IColumnSerializer</name>.<name>Flag</name>.<name>LOCAL</name></name></expr></argument>, <argument><expr><call><name><name>TreeMapBackedSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name><name>IColumnSerializer</name>.<name>Flag</name></name></type> <name>flag</name></decl></param>, <param><decl><type><name><name>ISortedColumns</name>.<name>Factory</name></name></type> <name>factory</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>dis</name>.<name>readBoolean</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><call><name>deserializeCfId</name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>factory</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>IColumnSerializer</name></type> <name>columnSerializer</name> <init>= <expr><call><name><name>cf</name>.<name>getColumnSerializer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>cf</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>DeletionInfo</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>, <argument><expr><call><name><name>cf</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>expireBefore</name> <init>= <expr><call>(<name>int</name>) <argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> / 1000</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>size</name> <init>= <expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>size</name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+        <block>{
+            <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>columnSerializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>flag</name></expr></argument>, <argument><expr><name>expireBefore</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>cf</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>contentSerializedSize</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>TypeSizes</name></type> <name>typeSizes</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><call><name><name>DeletionInfo</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serializedSize</name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>deletionInfo</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>typeSizes</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>size</name> += <call><name><name>typeSizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>IColumn</name></type> <name>column</name> <range>: <expr><name>cf</name></expr></range></decl></init>)
+            <expr_stmt><expr><name>size</name> += <call><name><name>column</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name>typeSizes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>size</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>TypeSizes</name></type> <name>typeSizes</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>cf</name> == null</expr>)</condition><then>
+        <block>{
+            <return>return <expr><call><name><name>typeSizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then>
+        <else>else
+        <block>{
+            <return>return <expr><call><name><name>typeSizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call>  <comment type="block">/* nullness bool */</comment>
+                 + <call><name>cfIdSerializedSize</name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>id</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>typeSizes</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call>  <comment type="block">/* id */</comment>
+                 + <call><name>contentSerializedSize</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>typeSizes</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>serializedSize</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name><name>TypeSizes</name>.<name>NATIVE</name></name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>serializeForSSTable</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// Column families shouldn't be written directly to disk, use ColumnIndex.Builder instead</comment>
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>deserializeFromSSTable</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name><name>Descriptor</name>.<name>Version</name></name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>deserializeColumnsFromSSTable</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>int</name></type> <name>size</name></decl></param>, <param><decl><type><name><name>IColumnSerializer</name>.<name>Flag</name></name></type> <name>flag</name></decl></param>, <param><decl><type><name>int</name></type> <name>expireBefore</name></decl></param>, <param><decl><type><name><name>Descriptor</name>.<name>Version</name></name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>OnDiskAtom</name>.<name>Serializer</name></name></type> <name>atomSerializer</name> <init>= <expr><call><name><name>cf</name>.<name>getOnDiskSerializer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>size</name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+            <expr_stmt><expr><call><name><name>cf</name>.<name>addAtom</name></name><argument_list>(<argument><expr><call><name><name>atomSerializer</name>.<name>deserializeFromSSTable</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>flag</name></expr></argument>, <argument><expr><name>expireBefore</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>deserializeFromSSTable</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name><name>IColumnSerializer</name>.<name>Flag</name></name></type> <name>flag</name></decl></param>, <param><decl><type><name><name>Descriptor</name>.<name>Version</name></name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>cf</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>DeletionInfo</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserializeFromSSTable</name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>size</name> <init>= <expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>expireBefore</name> <init>= <expr><call>(<name>int</name>) <argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> / 1000</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>deserializeColumnsFromSSTable</name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>size</name></expr></argument>, <argument><expr><name>flag</name></expr></argument>, <argument><expr><name>expireBefore</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>serializeCfId</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>cfId</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then> <comment type="line">// try to use CF's old id where possible (CASSANDRA-3794)</comment>
+        <block>{
+            <decl_stmt><decl><type><name>Integer</name></type> <name>oldId</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>convertNewCfId</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>oldId</name> == null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Can't serialize ColumnFamily ID " + <name>cfId</name> + " to be used by version " + <name>version</name> +
+                                      ", because int &lt;-&gt; uuid mapping could not be established (CF was created in mixed version cluster)."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name>oldId</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+            <expr_stmt><expr><call><name><name>UUIDSerializer</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>UUID</name></type> <name>deserializeCfId</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// create a ColumnFamily based on the cf id</comment>
+        <decl_stmt><decl><type><name>UUID</name></type> <name>cfId</name> <init>= <expr>(<name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name>)
+                     ? <call><name><name>Schema</name>.<name>instance</name>.<name>convertOldCfId</name></name><argument_list>(<argument><expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+                     : <call><name><name>UUIDSerializer</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCF</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnknownColumnFamilyException</name><argument_list>(<argument><expr>"Couldn't find cfId=" + <name>cfId</name></expr></argument>, <argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <return>return <expr><name>cfId</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>cfIdSerializedSize</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>cfId</name></decl></param>, <param><decl><type><name>TypeSizes</name></type> <name>typeSizes</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then> <comment type="line">// try to use CF's old id where possible (CASSANDRA-3794)</comment>
+        <block>{
+            <decl_stmt><decl><type><name>Integer</name></type> <name>oldId</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>convertNewCfId</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>oldId</name> == null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Can't serialize ColumnFamily ID " + <name>cfId</name> + " to be used by version " + <name>version</name> +
+                        ", because int &lt;-&gt; uuid mapping could not be established (CF was created in mixed version cluster)."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <return>return <expr><call><name><name>typeSizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name>oldId</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then></if>
+
+        <return>return <expr><call><name><name>typeSizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

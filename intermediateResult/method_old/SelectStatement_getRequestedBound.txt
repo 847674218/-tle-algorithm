@@ -1,0 +1,43 @@
+private ByteBuffer getRequestedBound(Bound bound, List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        assert isColumnRange();
+
+        // The end-of-component of composite doesn't depend on whether the
+        // component type is reversed or not (i.e. the ReversedType is applied
+        // to the component comparator but not to the end-of-component itself),
+        // it only depends on whether the slice is reversed
+        Bound eocBound = isReversed ? Bound.reverse(bound) : bound;
+        ColumnNameBuilder builder = cfDef.getColumnNameBuilder();
+        for (CFDefinition.Name name : cfDef.columns.values())
+        {
+            // In a restriction, we always have Bound.START < Bound.END for the "base" comparator.
+            // So if we're doing a reverse slice, we must inverse the bounds when giving them as start and end of the slice filter.
+            // But if the actual comparator itself is reversed, we must inversed the bounds too.
+            Bound b = isReversed == isReversedType(name) ? bound : Bound.reverse(bound);
+            Restriction r = columnRestrictions[name.position];
+            if (r == null || (!r.isEquality() && r.bound(b) == null))
+            {
+                // There wasn't any non EQ relation on that key, we select all records having the preceding component as prefix.
+                // For composites, if there was preceding component and we're computing the end, we must change the last component
+                // End-Of-Component, otherwise we would be selecting only one record.
+                if (builder.componentCount() > 0 && eocBound == Bound.END)
+                    return builder.buildAsEndOfRange();
+                else
+                    return builder.build();
+            }
+
+            if (r.isEquality())
+            {
+                assert r.eqValues.size() == 1;
+                builder.add(r.eqValues.get(0), Relation.Type.EQ, variables);
+            }
+            else
+            {
+                Term t = r.bound(b);
+                assert t != null;
+                return builder.add(t, r.getRelation(eocBound, b), variables).build();
+            }
+        }
+        // Means no relation at all or everything was an equal
+        return builder.build();
+    }

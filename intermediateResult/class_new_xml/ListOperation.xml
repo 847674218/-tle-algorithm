@@ -1,0 +1,405 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\cql3\operations\ListOperation.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>operations</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashSet</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Set</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicReference</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>ColumnIdentifier</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>ColumnNameBuilder</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>ColumnSpecification</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>Term</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>UpdateParameters</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamily</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>IColumn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>CollectionType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>Int32Type</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>ListType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>MapType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>MarshalException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>UUIDGen</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>ListOperation</name> <super><implements>implements <name>Operation</name></implements></super>
+<block>{
+    <comment type="line">// Our reference time (1 jan 2010, 00:00:00) in milliseconds.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>REFERENCE_TIME</name> <init>= <expr>1262304000000L</expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/*
+     * For prepend, we need to be able to generate unique but decreasing time
+     * UUID, which is a bit challenging. To do that, given a time in milliseconds,
+     * we adds a number representing the 100-nanoseconds precision and make sure
+     * that within the same millisecond, that number is always decreasing. We
+     * do rely on the fact that the user will only provide decreasing
+     * milliseconds timestamp for that purpose.
+     */</comment>
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>PrecisionTime</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>long</name></type> <name>millis</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>int</name></type> <name>nanos</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>PrecisionTime</name><parameter_list>(<param><decl><type><name>long</name></type> <name>millis</name></decl></param>, <param><decl><type><name>int</name></type> <name>nanos</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>millis</name></name> = <name>millis</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>nanos</name></name> = <name>nanos</name></expr>;</expr_stmt>
+        }</block></constructor>
+    }</block></class>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>AtomicReference</name><argument_list>&lt;<argument><name>PrecisionTime</name></argument>&gt;</argument_list></name></type> <name>last</name> <init>= <expr>new <call><name><name>AtomicReference</name><argument_list>&lt;<argument><name>PrecisionTime</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>new <call><name>PrecisionTime</name><argument_list>(<argument><expr><name><name>Long</name>.<name>MAX_VALUE</name></name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>PrecisionTime</name></type> <name>getNextTime</name><parameter_list>(<param><decl><type><name>long</name></type> <name>millis</name></decl></param>)</parameter_list>
+    <block>{
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>PrecisionTime</name></type> <name>current</name> <init>= <expr><call><name><name>last</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <assert>assert <expr><name>millis</name> &lt;= <name><name>current</name>.<name>millis</name></name></expr>;</assert>
+            <decl_stmt><decl><type><name>PrecisionTime</name></type> <name>next</name> <init>= <expr><name>millis</name> &lt; <name><name>current</name>.<name>millis</name></name>
+                    ? new <call><name>PrecisionTime</name><argument_list>(<argument><expr><name>millis</name></expr></argument>, <argument><expr>9999</expr></argument>)</argument_list></call>
+                    : new <call><name>PrecisionTime</name><argument_list>(<argument><expr><name>millis</name></expr></argument>, <argument><expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><name><name>current</name>.<name>nanos</name></name> - 1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><call><name><name>last</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>current</name></expr></argument>, <argument><expr><name>next</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr><name>next</name></expr>;</return></then></if>
+        }</block></while>
+    }</block></function>
+
+    <enum>enum <name>Kind</name> <block>{ <decl><name>SET</name></decl>, <decl><name>SET_IDX</name></decl>, <decl><name>APPEND</name></decl>, <decl><name>PREPEND</name></decl>, <decl><name>DISCARD</name></decl>, <decl><name>DISCARD_IDX</name></decl> }</block></enum>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Kind</name></type> <name>kind</name></decl>;</decl_stmt>
+
+    <constructor><specifier>private</specifier> <name>ListOperation</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name></decl></param>, <param><decl><type><name>Kind</name></type> <name>kind</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>values</name></name> = <call><name><name>Collections</name>.<name>unmodifiableList</name></name><argument_list>(<argument><expr><name>values</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>kind</name></name> = <name>kind</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>execute</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>,
+                        <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>,
+                        <param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>validator</name></decl></param>,
+                        <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>,
+                        <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>list</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!(<name>validator</name> instanceof <name>ListType</name> || (<name>kind</name> == <name><name>Kind</name>.<name>SET_IDX</name></name> &amp;&amp; <name>validator</name> instanceof <name>MapType</name>))</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"List operations are only supported on List typed columns, but " + <name>validator</name> + " given."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <switch>switch <condition>(<expr><name>kind</name></expr>)</condition>
+        <block>{
+            <case>case <expr><name>SET</name></expr>:
+                <expr_stmt><expr><call><name><name>cf</name>.<name>addAtom</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeTombstoneForOverwrite</name></name><argument_list>(<argument><expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>buildAsEndOfRange</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>doAppend</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>builder</name></expr></argument>, <argument><expr>(<name>CollectionType</name>)<name>validator</name></expr></argument>, <argument><expr><name>params</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>SET_IDX</name></expr>:
+                <comment type="line">// Since the parser couldn't disambiguate between a 'list set by idx'</comment>
+                <comment type="line">// and a 'map put by key', we have to do it now.</comment>
+                <if>if <condition>(<expr><name>validator</name> instanceof <name>MapType</name></expr>)</condition><then>
+                <block>{
+                    <assert>assert <expr><call><name><name>values</name>.<name>size</name></name><argument_list>()</argument_list></call> == 2</expr>;</assert>
+                    <expr_stmt><expr><call><name><name>MapOperation</name>.<name>Put</name></name><argument_list>(<argument><expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>execute</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>builder</name></expr></argument>, <argument><expr><name>validator</name></expr></argument>, <argument><expr><name>params</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><call><name>doSet</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>builder</name></expr></argument>, <argument><expr><name>params</name></expr></argument>, <argument><expr>(<name>CollectionType</name>)<name>validator</name></expr></argument>, <argument><expr><name>list</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+                <break>break;</break>
+            </case><case>case <expr><name>APPEND</name></expr>:
+                <expr_stmt><expr><call><name>doAppend</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>builder</name></expr></argument>, <argument><expr>(<name>CollectionType</name>)<name>validator</name></expr></argument>, <argument><expr><name>params</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>PREPEND</name></expr>:
+                <expr_stmt><expr><call><name>doPrepend</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>builder</name></expr></argument>, <argument><expr>(<name>CollectionType</name>)<name>validator</name></expr></argument>, <argument><expr><name>params</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>DISCARD</name></expr>:
+                <expr_stmt><expr><call><name>doDiscard</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr>(<name>CollectionType</name>)<name>validator</name></expr></argument>, <argument><expr><name>params</name></expr></argument>, <argument><expr><name>list</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>DISCARD_IDX</name></expr>:
+                <expr_stmt><expr><call><name>doDiscardIdx</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>params</name></expr></argument>, <argument><expr><name>list</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><default>default:
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr>"Unsupported List operation: " + <name>kind</name></expr></argument>)</argument_list></call></expr>;</throw>
+        </default>}</block></switch>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>doSetFromPrepared</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>, <param><decl><type><name>ListType</name></type> <name>validator</name></decl></param>, <param><decl><type><name>Term</name></type> <name>values</name></decl></param>, <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>values</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Can't apply operation on column with " + <name>validator</name> + " type."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><call><name><name>cf</name>.<name>addAtom</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeTombstoneForOverwrite</name></name><argument_list>(<argument><expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>buildAsEndOfRange</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>doAppendFromPrepared</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>builder</name></expr></argument>, <argument><expr><name>validator</name></expr></argument>, <argument><expr><name>values</name></expr></argument>, <argument><expr><name>params</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>doAppendFromPrepared</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>, <param><decl><type><name>ListType</name></type> <name>validator</name></decl></param>, <param><decl><type><name>Term</name></type> <name>values</name></decl></param>, <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>values</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Can't apply operation on column with " + <name>validator</name> + " type."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>l</name> <init>= <expr><call><name><name>validator</name>.<name>compose</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>variables</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>values</name>.<name>bindIndex</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>l</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <block>{
+                <decl_stmt><decl><type><name>ColumnNameBuilder</name></type> <name>b</name> <init>= <expr><name>i</name> == <call><name><name>l</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1 ? <name>builder</name> : <call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>uuid</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>UUIDGen</name>.<name>getTimeUUIDBytes</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>name</name> <init>= <expr><call><name><name>b</name>.<name>add</name></name><argument_list>(<argument><expr><name>uuid</name></expr></argument>)</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeColumn</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><call><name><name>validator</name>.<name>valueComparator</name></name><argument_list>()</argument_list></call>.<call><name>decompose</name><argument_list>(<argument><expr><call><name><name>l</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>doPrependFromPrepared</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>, <param><decl><type><name>ListType</name></type> <name>validator</name></decl></param>, <param><decl><type><name>Term</name></type> <name>values</name></decl></param>, <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>values</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Can't apply operation on column with " + <name>validator</name> + " type."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>time</name> <init>= <expr><name>REFERENCE_TIME</name> - (<call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>REFERENCE_TIME</name>)</expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>l</name> <init>= <expr><call><name><name>validator</name>.<name>compose</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>variables</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>values</name>.<name>bindIndex</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>l</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <block>{
+                <decl_stmt><decl><type><name>ColumnNameBuilder</name></type> <name>b</name> <init>= <expr><name>i</name> == <call><name><name>l</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1 ? <name>builder</name> : <call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>PrecisionTime</name></type> <name>pt</name> <init>= <expr><call><name>getNextTime</name><argument_list>(<argument><expr><name>time</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>uuid</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>UUIDGen</name>.<name>getTimeUUIDBytes</name></name><argument_list>(<argument><expr><name><name>pt</name>.<name>millis</name></name></expr></argument>, <argument><expr><name><name>pt</name>.<name>nanos</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>name</name> <init>= <expr><call><name><name>b</name>.<name>add</name></name><argument_list>(<argument><expr><name>uuid</name></expr></argument>)</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeColumn</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><call><name><name>validator</name>.<name>valueComparator</name></name><argument_list>()</argument_list></call>.<call><name>decompose</name><argument_list>(<argument><expr><call><name><name>l</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>doDiscardFromPrepared</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>, <param><decl><type><name>ListType</name></type> <name>validator</name></decl></param>, <param><decl><type><name>Term</name></type> <name>values</name></decl></param>, <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>list</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>values</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Can't apply operation on column with " + <name>validator</name> + " type."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr><name>list</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>l</name> <init>= <expr><call><name><name>validator</name>.<name>compose</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>variables</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>values</name>.<name>bindIndex</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>toDiscard</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>Object</name></type> <name>elt</name> <range>: <expr><name>l</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>toDiscard</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>validator</name>.<name>valueComparator</name></name><argument_list>()</argument_list></call>.<call><name>decompose</name><argument_list>(<argument><expr><name>elt</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+            <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>p</name> <range>: <expr><name>list</name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>c</name> <init>= <expr><name><name>p</name>.<name>right</name></name></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>toDiscard</name>.<name>contains</name></name><argument_list>(<argument><expr><call><name><name>c</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeTombstone</name></name><argument_list>(<argument><expr><call><name><name>c</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>doSet</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>, <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>, <param><decl><type><name>CollectionType</name></type> <name>validator</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>list</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>idx</name> <init>= <expr><call><name>validateListIdx</name><argument_list>(<argument><expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>list</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Term</name></type> <name>value</name> <init>= <expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>name</name> <init>= <expr><call><name><name>list</name>.<name>get</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call>.<call><name><name>right</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeColumn</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><call><name><name>value</name>.<name>getByteBuffer</name></name><argument_list>(<argument><expr><call><name><name>validator</name>.<name>valueComparator</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>params</name>.<name>variables</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>doAppend</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>, <param><decl><type><name>CollectionType</name></type> <name>validator</name></decl></param>, <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>values</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnNameBuilder</name></type> <name>b</name> <init>= <expr><name>i</name> == <call><name><name>values</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1 ? <name>builder</name> : <call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>uuid</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>UUIDGen</name>.<name>getTimeUUIDBytes</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>name</name> <init>= <expr><call><name><name>b</name>.<name>add</name></name><argument_list>(<argument><expr><name>uuid</name></expr></argument>)</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeColumn</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call>.<call><name>getByteBuffer</name><argument_list>(<argument><expr><call><name><name>validator</name>.<name>valueComparator</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>params</name>.<name>variables</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>doPrepend</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>, <param><decl><type><name>CollectionType</name></type> <name>validator</name></decl></param>, <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>time</name> <init>= <expr><name>REFERENCE_TIME</name> - (<call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>REFERENCE_TIME</name>)</expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>values</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnNameBuilder</name></type> <name>b</name> <init>= <expr><name>i</name> == <call><name><name>values</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1 ? <name>builder</name> : <call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>PrecisionTime</name></type> <name>pt</name> <init>= <expr><call><name>getNextTime</name><argument_list>(<argument><expr><name>time</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>uuid</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>UUIDGen</name>.<name>getTimeUUIDBytes</name></name><argument_list>(<argument><expr><name><name>pt</name>.<name>millis</name></name></expr></argument>, <argument><expr><name><name>pt</name>.<name>nanos</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>name</name> <init>= <expr><call><name><name>b</name>.<name>add</name></name><argument_list>(<argument><expr><name>uuid</name></expr></argument>)</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeColumn</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call>.<call><name>getByteBuffer</name><argument_list>(<argument><expr><call><name><name>validator</name>.<name>valueComparator</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>params</name>.<name>variables</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>doDiscard</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>CollectionType</name></type> <name>validator</name></decl></param>, <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>list</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>list</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>toDiscard</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>Term</name></type> <name>value</name> <range>: <expr><name>values</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>toDiscard</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>value</name>.<name>getByteBuffer</name></name><argument_list>(<argument><expr><call><name><name>validator</name>.<name>valueComparator</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>params</name>.<name>variables</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>p</name> <range>: <expr><name>list</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>IColumn</name></type> <name>c</name> <init>= <expr><name><name>p</name>.<name>right</name></name></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>toDiscard</name>.<name>contains</name></name><argument_list>(<argument><expr><call><name><name>c</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeTombstone</name></name><argument_list>(<argument><expr><call><name><name>c</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>doDiscardIdx</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>UpdateParameters</name></type> <name>params</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>list</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>idx</name> <init>= <expr><call><name>validateListIdx</name><argument_list>(<argument><expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>list</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>params</name>.<name>makeTombstone</name></name><argument_list>(<argument><expr><call><name><name>list</name>.<name>get</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call>.<call><name><name>right</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addBoundNames</name><parameter_list>(<param><decl><type><name>ColumnSpecification</name></type> <name>column</name></decl></param>, <param><decl><type><name><name>ColumnSpecification</name><index>[]</index></name></type> <name>boundNames</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// Since the parser couldn't disambiguate between a 'list set by idx'</comment>
+        <comment type="line">// and a 'map put by key', we have to do it now.</comment>
+        <if>if <condition>(<expr><name>kind</name> == <name><name>Kind</name>.<name>SET_IDX</name></name> &amp;&amp; (<name><name>column</name>.<name>type</name></name> instanceof <name>MapType</name>)</expr>)</condition><then>
+        <block>{
+            <assert>assert <expr><call><name><name>values</name>.<name>size</name></name><argument_list>()</argument_list></call> == 2</expr>;</assert>
+            <expr_stmt><expr><call><name><name>MapOperation</name>.<name>Put</name></name><argument_list>(<argument><expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>addBoundNames</name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name>boundNames</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <if>if <condition>(<expr>!(<name><name>column</name>.<name>type</name></name> instanceof <name>ListType</name>)</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Invalid operation, %s is not of list type"</expr></argument>, <argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>ListType</name></type> <name>lt</name> <init>= <expr>(<name>ListType</name>)<name><name>column</name>.<name>type</name></name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>kind</name> == <name><name>Kind</name>.<name>SET_IDX</name></name></expr>)</condition><then>
+        <block>{
+            <assert>assert <expr><call><name><name>values</name>.<name>size</name></name><argument_list>()</argument_list></call> == 2</expr>;</assert>
+            <decl_stmt><decl><type><name>Term</name></type> <name>idx</name> <init>= <expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>Term</name></type> <name>value</name> <init>= <expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>idx</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><name><name>boundNames</name><index>[<expr><name><name>idx</name>.<name>bindIndex</name></name></expr>]</index></name> = <call><name>indexSpecOf</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <if>if <condition>(<expr><call><name><name>value</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><name><name>boundNames</name><index>[<expr><name><name>value</name>.<name>bindIndex</name></name></expr>]</index></name> = <call><name>valueSpecOf</name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name>lt</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <for>for (<init><decl><type><name>Term</name></type> <name>t</name> <range>: <expr><name>values</name></expr></range></decl></init>)
+                <if>if <condition>(<expr><call><name><name>t</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name><name>boundNames</name><index>[<expr><name><name>t</name>.<name>bindIndex</name></name></expr>]</index></name> = <name>column</name></expr>;</expr_stmt></then></if></for>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>ColumnSpecification</name></type> <name>indexSpecOf</name><parameter_list>(<param><decl><type><name>ColumnSpecification</name></type> <name>column</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>ColumnSpecification</name><argument_list>(<argument><expr><name><name>column</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>cfName</name></name></expr></argument>, <argument><expr>new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr>"idx(" + <name><name>column</name>.<name>name</name></name> + ")"</expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Int32Type</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>ColumnSpecification</name></type> <name>valueSpecOf</name><parameter_list>(<param><decl><type><name>ColumnSpecification</name></type> <name>column</name></decl></param>, <param><decl><type><name>ListType</name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>ColumnSpecification</name><argument_list>(<argument><expr><name><name>column</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>cfName</name></name></expr></argument>, <argument><expr>new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr>"value(" + <name><name>column</name>.<name>name</name></name> + ")"</expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>type</name>.<name>elements</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>getValues</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>values</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>requiresRead</name><parameter_list>(<param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>validator</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name>kind</name> == <name><name>Kind</name>.<name>DISCARD</name></name> || <name>kind</name> == <name><name>Kind</name>.<name>DISCARD_IDX</name></name> || <name>kind</name> == <name><name>Kind</name>.<name>SET_IDX</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Type</name></type> <name>getType</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>Type</name>.<name>LIST</name></name></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/* Utility methods */</comment>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Operation</name></type> <name>Set</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>ListOperation</name><argument_list>(<argument><expr><name>values</name></expr></argument>, <argument><expr><name><name>Kind</name>.<name>SET</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Operation</name></type> <name>SetIndex</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>ListOperation</name><argument_list>(<argument><expr><name>values</name></expr></argument>, <argument><expr><name><name>Kind</name>.<name>SET_IDX</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Operation</name></type> <name>Append</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>ListOperation</name><argument_list>(<argument><expr><name>values</name></expr></argument>, <argument><expr><name><name>Kind</name>.<name>APPEND</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Operation</name></type> <name>Prepend</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>ListOperation</name><argument_list>(<argument><expr><name>values</name></expr></argument>, <argument><expr><name><name>Kind</name>.<name>PREPEND</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Operation</name></type> <name>Discard</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>ListOperation</name><argument_list>(<argument><expr><name>values</name></expr></argument>, <argument><expr><name><name>Kind</name>.<name>DISCARD</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Operation</name></type> <name>DiscardKey</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>ListOperation</name><argument_list>(<argument><expr><name>values</name></expr></argument>, <argument><expr><name><name>Kind</name>.<name>DISCARD_IDX</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>"ListOperation(" + <name>kind</name> + ", " + <name>values</name> + ")"</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>int</name></type> <name>validateListIdx</name><parameter_list>(<param><decl><type><name>Term</name></type> <name>value</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>list</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><call><name><name>value</name>.<name>getType</name></name><argument_list>()</argument_list></call> != <name><name>Term</name>.<name>Type</name>.<name>INTEGER</name></name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Invalid argument %s for %s, must be an integer."</expr></argument>, <argument><expr><call><name><name>value</name>.<name>getText</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>getType</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <decl_stmt><decl><type><name>int</name></type> <name>idx</name> <init>= <expr><call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><call><name><name>value</name>.<name>getText</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>list</name> == null || <call><name><name>list</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt;= <name>idx</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Invalid index %d, list has size %d"</expr></argument>, <argument><expr><name>idx</name></expr></argument>, <argument><expr><name>list</name> == null ? 0 : <call><name><name>list</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <return>return <expr><name>idx</name></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>NumberFormatException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// This should not happen, unless we screwed up the parser</comment>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+}</block></class>
+</unit>

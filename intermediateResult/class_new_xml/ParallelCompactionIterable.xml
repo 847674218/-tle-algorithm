@@ -1,0 +1,441 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\compaction\ParallelCompactionIterable.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Comparator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Iterator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>locks</name>.<name>Condition</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Functions</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>AbstractIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>DebuggableThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>NamedThreadFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>ICountableColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>SecondaryIndexManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableIdentityIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>.*;</import>
+
+<comment type="block" format="javadoc">/**
+ * A class to run compaction taking advantage of multiple-core processes:
+ *
+ * One Deserializer thread per input sstable performs read + deserialize (a row at a time).
+ * The resulting ColumnFamilies are added to a queue, which is fed to the merge Reducer.
+ *
+ * The merge Reducer creates MergeTasks on a thread-per-core Executor, and returns AsyncPrecompactedRow objects.
+ *
+ * The main complication is in handling larger-than-memory rows.  When one is encountered, no further deserialization
+ * is done until that row is merged and written -- creating a pipeline stall, as it were.  Thus, this is intended
+ * to be useful with mostly-in-memory row sizes, but preserves correctness in the face of occasional exceptions.
+ */</comment>
+<class><specifier>public</specifier> class <name>ParallelCompactionIterable</name> <super><extends>extends <name>AbstractCompactionIterable</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>ParallelCompactionIterable</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>maxInMemorySize</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>ParallelCompactionIterable</name><parameter_list>(<param><decl><type><name>OperationType</name></type> <name>type</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ICompactionScanner</name></argument>&gt;</argument_list></name></type> <name>scanners</name></decl></param>, <param><decl><type><name>CompactionController</name></type> <name>controller</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>type</name></expr></argument>, <argument><expr><name>scanners</name></expr></argument>, <argument><expr><name>controller</name></expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getInMemoryCompactionLimit</name></name><argument_list>()</argument_list></call> / <call><name><name>scanners</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>ParallelCompactionIterable</name><parameter_list>(<param><decl><type><name>OperationType</name></type> <name>type</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ICompactionScanner</name></argument>&gt;</argument_list></name></type> <name>scanners</name></decl></param>, <param><decl><type><name>CompactionController</name></type> <name>controller</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxInMemorySize</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>controller</name></expr></argument>, <argument><expr><name>type</name></expr></argument>, <argument><expr><name>scanners</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>maxInMemorySize</name></name> = <name>maxInMemorySize</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name><name>CloseableIterator</name><argument_list>&lt;<argument><name>AbstractCompactedRow</name></argument>&gt;</argument_list></name></type> <name>iterator</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>CloseableIterator</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>sources</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>CloseableIterator</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>scanners</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ICompactionScanner</name></type> <name>scanner</name> <range>: <expr><name>scanners</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>sources</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>Deserializer</name><argument_list>(<argument><expr><name>scanner</name></expr></argument>, <argument><expr><name>maxInMemorySize</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr>new <call><name>Unwrapper</name><argument_list>(<argument><expr><call><name><name>MergeIterator</name>.<name>get</name></name><argument_list>(<argument><expr><name>sources</name></expr></argument>, <argument><expr><name><name>RowContainer</name>.<name>comparator</name></name></expr></argument>, <argument><expr>new <call><name>Reducer</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>controller</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>Unwrapper</name> <super><extends>extends <name><name>AbstractIterator</name><argument_list>&lt;<argument><name>AbstractCompactedRow</name></argument>&gt;</argument_list></name></extends> <implements>implements <name><name>CloseableIterator</name><argument_list>&lt;<argument><name>AbstractCompactedRow</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>CloseableIterator</name><argument_list>&lt;<argument><name>CompactedRowContainer</name></argument>&gt;</argument_list></name></type> <name>reducer</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>CompactionController</name></type> <name>controller</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>Unwrapper</name><parameter_list>(<param><decl><type><name><name>CloseableIterator</name><argument_list>&lt;<argument><name>CompactedRowContainer</name></argument>&gt;</argument_list></name></type> <name>reducer</name></decl></param>, <param><decl><type><name>CompactionController</name></type> <name>controller</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>reducer</name></name> = <name>reducer</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>controller</name></name> = <name>controller</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>protected</specifier> <name>AbstractCompactedRow</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>reducer</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+            <decl_stmt><decl><type><name>CompactedRowContainer</name></type> <name>container</name> <init>= <expr><call><name><name>reducer</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>AbstractCompactedRow</name></type> <name>compactedRow</name></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>compactedRow</name> = <name><name>container</name>.<name>future</name></name> == null
+                             ? <name><name>container</name>.<name>row</name></name>
+                             : new <call><name>PrecompactedRow</name><argument_list>(<argument><expr><name><name>container</name>.<name>key</name></name></expr></argument>, <argument><expr><call><name><name>container</name>.<name>future</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+
+            <return>return <expr><name>compactedRow</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>reducer</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> class <name>Reducer</name> <super><extends>extends <name><name>MergeIterator</name>.<name><name>Reducer</name><argument_list>&lt;<argument><name>RowContainer</name></argument>, <argument><name>CompactedRowContainer</name></argument>&gt;</argument_list></name></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name></type> <name>rows</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>row</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ThreadPoolExecutor</name></type> <name>executor</name> <init>= <expr>new <call><name>DebuggableThreadPoolExecutor</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getAvailableProcessors</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                                     <argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>,
+                                                                                     <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>,
+                                                                                     <argument><expr>new <call><name><name>SynchronousQueue</name><argument_list>&lt;<argument><name>Runnable</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                                     <argument><expr>new <call><name>NamedThreadFactory</name><argument_list>(<argument><expr>"CompactionReducer"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>reduce</name><parameter_list>(<param><decl><type><name>RowContainer</name></type> <name>current</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>rows</name>.<name>add</name></name><argument_list>(<argument><expr><name>current</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>CompactedRowContainer</name></type> <name>getReduced</name><parameter_list>()</parameter_list>
+        <block>{
+            <assert>assert <expr><call><name><name>rows</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>;</assert>
+
+            <expr_stmt><expr><call><name><name>ParallelCompactionIterable</name>.<name>this</name>.<name>updateCounterFor</name></name><argument_list>(<argument><expr><call><name><name>rows</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>CompactedRowContainer</name></type> <name>compacted</name> <init>= <expr><call><name>getCompactedRow</name><argument_list>(<argument><expr><name>rows</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>rows</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr>(<name>row</name>++ % 1000) == 0</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>ICompactionScanner</name></type> <name>scanner</name> <range>: <expr><name>scanners</name></expr></range></decl></init>)
+                    <expr_stmt><expr><name>n</name> += <call><name><name>scanner</name>.<name>getCurrentPosition</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+                <expr_stmt><expr><name>bytesRead</name> = <name>n</name></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>controller</name>.<name>mayThrottle</name></name><argument_list>(<argument><expr><name>bytesRead</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+            <return>return <expr><name>compacted</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>CompactedRowContainer</name></type> <name>getCompactedRow</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name></type> <name>rows</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>boolean</name></type> <name>inMemory</name> <init>= <expr>true</expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>RowContainer</name></type> <name>container</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><name><name>container</name>.<name>row</name></name> == null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>inMemory</name> = false</expr>;</expr_stmt>
+                    <break>break;</break>
+                }</block></then></if>
+            }</block></for>
+
+            <if>if <condition>(<expr><name>inMemory</name></expr>)</condition><then>
+            <block>{
+                <comment type="line">// caller will re-use rows List, so make ourselves a copy</comment>
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>rawRows</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>rows</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>RowContainer</name></type> <name>rowContainer</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>rawRows</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>rowContainer</name>.<name>row</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                <return>return <expr>new <call><name>CompactedRowContainer</name><argument_list>(<argument><expr><call><name><name>rows</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>.<call><name>getKey</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>executor</name>.<name>submit</name></name><argument_list>(<argument><expr>new <call><name>MergeTask</name><argument_list>(<argument><expr><name>rawRows</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></then></if>
+
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ICountableColumnIterator</name></argument>&gt;</argument_list></name></type> <name>iterators</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ICountableColumnIterator</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>rows</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>RowContainer</name></type> <name>container</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>iterators</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>container</name>.<name>row</name></name> == null ? <name><name>container</name>.<name>wrapper</name></name> : new <call><name>DeserializedColumnIterator</name><argument_list>(<argument><expr><name><name>container</name>.<name>row</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <return>return <expr>new <call><name>CompactedRowContainer</name><argument_list>(<argument><expr>new <call><name>LazilyCompactedRow</name><argument_list>(<argument><expr><name>controller</name></expr></argument>, <argument><expr><name>iterators</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>executor</name>.<name>shutdown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <class><specifier>private</specifier> class <name>MergeTask</name> <super><implements>implements <name><name>Callable</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></implements></super>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>rows</name></decl>;</decl_stmt>
+
+            <constructor><specifier>public</specifier> <name>MergeTask</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>rows</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><name><name>this</name>.<name>rows</name></name> = <name>rows</name></expr>;</expr_stmt>
+            }</block></constructor>
+
+            <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>call</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+            <block>{
+                <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>Row</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>thisCF</name> <init>= <expr><name><name>row</name>.<name>cf</name></name></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>cf</name> == null</expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><name>cf</name> = <name>thisCF</name></expr>;</expr_stmt>
+                    }</block></then>
+                    <else>else
+                    <block>{
+                        <comment type="line">// addAll is ok even if cf is an ArrayBackedSortedColumns</comment>
+                        <decl_stmt><decl><type><name><name>SecondaryIndexManager</name>.<name>Updater</name></name></type> <name>indexer</name> <init>= <expr><call><name><name>controller</name>.<name>cfs</name>.<name>indexManager</name>.<name>updaterFor</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name></name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <expr_stmt><expr><call><name><name>cf</name>.<name>addAllWithSizeDelta</name></name><argument_list>(<argument><expr><name>thisCF</name></expr></argument>, <argument><expr><name><name>HeapAllocator</name>.<name>instance</name></name></expr></argument>, <argument><expr><name><name>Functions</name>.</name>&lt;<name>IColumn</name>&gt;<call><name>identity</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>indexer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></else></if>
+                }</block></for>
+
+                <return>return <expr><call><name><name>PrecompactedRow</name>.<name>removeDeletedAndOldShards</name></name><argument_list>(<argument><expr><call><name><name>rows</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>.<name>key</name></expr></argument>, <argument><expr><name>controller</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class>
+
+        <class><specifier>private</specifier> class <name>DeserializedColumnIterator</name> <super><implements>implements <name>ICountableColumnIterator</name></implements></super>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Row</name></type> <name>row</name></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>iter</name></decl>;</decl_stmt>
+
+            <constructor><specifier>public</specifier> <name>DeserializedColumnIterator</name><parameter_list>(<param><decl><type><name>Row</name></type> <name>row</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><name><name>this</name>.<name>row</name></name> = <name>row</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name>iter</name> = <call><name><name>row</name>.<name>cf</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></constructor>
+
+            <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getColumnFamily</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><name><name>row</name>.<name>cf</name></name></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>getKey</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><name><name>row</name>.<name>key</name></name></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>int</name></type> <name>getColumnCount</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>row</name>.<name>cf</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>reset</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><name>iter</name> = <call><name><name>row</name>.<name>cf</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws> <block>{}</block></function>
+
+            <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>OnDiskAtom</name></type> <name>next</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>()</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+            }</block></function>
+        }</block></class>
+    }</block></class>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>Deserializer</name> <super><extends>extends <name><name>AbstractIterator</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name></extends> <implements>implements <name><name>CloseableIterator</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name></type> <name>queue</name> <init>= <expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>RowContainer</name></type> <name>finished</name> <init>= <expr>new <call><name>RowContainer</name><argument_list>(<argument><expr>(<name>Row</name>) null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>Condition</name></type> <name>condition</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ICompactionScanner</name></type> <name>scanner</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>Deserializer</name><parameter_list>(<param><decl><type><name>ICompactionScanner</name></type> <name>ssts</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>int</name></type> <name>maxInMemorySize</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>scanner</name></name> = <name>ssts</name></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>WrappedRunnable</name></super><argument_list>()</argument_list>
+            <block>{
+                <function><type><specifier>protected</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+                <block>{
+                    <while>while <condition>(<expr>true</expr>)</condition>
+                    <block>{
+                        <if>if <condition>(<expr><name>condition</name> != null</expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>condition</name>.<name>await</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+                        <if>if <condition>(<expr>!<call><name><name>scanner</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>queue</name>.<name>put</name></name><argument_list>(<argument><expr><name>finished</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <break>break;</break>
+                        }</block></then></if>
+
+                        <decl_stmt><decl><type><name>SSTableIdentityIterator</name></type> <name>iter</name> <init>= <expr>(<name>SSTableIdentityIterator</name>) <call><name><name>scanner</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <if>if <condition>(<expr><name><name>iter</name>.<name>dataSize</name></name> &gt; <name>maxInMemorySize</name></expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"parallel lazy deserialize from " + <call><name><name>iter</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><name>condition</name> = new <call><name>SimpleCondition</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name><name>queue</name>.<name>put</name></name><argument_list>(<argument><expr>new <call><name>RowContainer</name><argument_list>(<argument><expr>new <call><name>NotifyingSSTableIdentityIterator</name><argument_list>(<argument><expr><name>iter</name></expr></argument>, <argument><expr><name>condition</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></then>
+                        <else>else
+                        <block>{
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"parallel eager deserialize from " + <call><name><name>iter</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name><name>queue</name>.<name>put</name></name><argument_list>(<argument><expr>new <call><name>RowContainer</name><argument_list>(<argument><expr>new <call><name>Row</name><argument_list>(<argument><expr><call><name><name>iter</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>iter</name>.<name>getColumnFamilyWithColumns</name></name><argument_list>(<argument><expr><call><name><name>TreeMapBackedSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></else></if>
+                    }</block></while>
+                }</block></function>
+            }</block></class></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr>new <call><name>Thread</name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr>"Deserialize " + <call><name><name>scanner</name>.<name>getBackingFiles</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>start</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>protected</specifier> <name>RowContainer</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>RowContainer</name></type> <name>container</name></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>container</name> = <call><name><name>queue</name>.<name>take</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+            <return>return <expr><name>container</name> == <name>finished</name> ? <call><name>endOfData</name><argument_list>()</argument_list></call> : <name>container</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>scanner</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * a wrapper around SSTII that notifies the given condition when it is closed
+     */</comment>
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>NotifyingSSTableIdentityIterator</name> <super><implements>implements <name>ICountableColumnIterator</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>SSTableIdentityIterator</name></type> <name>wrapped</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Condition</name></type> <name>condition</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>NotifyingSSTableIdentityIterator</name><parameter_list>(<param><decl><type><name>SSTableIdentityIterator</name></type> <name>wrapped</name></decl></param>, <param><decl><type><name>Condition</name></type> <name>condition</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>wrapped</name></name> = <name>wrapped</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>condition</name></name> = <name>condition</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getColumnFamily</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>wrapped</name>.<name>getColumnFamily</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>getKey</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>wrapped</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>getColumnCount</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>wrapped</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>reset</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>wrapped</name>.<name>reset</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>wrapped</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>condition</name>.<name>signal</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>wrapped</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>OnDiskAtom</name></type> <name>next</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>wrapped</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>()</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>RowContainer</name>
+    <block>{
+        <comment type="line">// either row is not null, or wrapper is not null.  But not both.</comment>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Row</name></type> <name>row</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>NotifyingSSTableIdentityIterator</name></type> <name>wrapper</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>RowContainer</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>RowContainer</name></type> <name>o1</name></decl></param>, <param><decl><type><name>RowContainer</name></type> <name>o2</name></decl></param>)</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>o1</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>compareTo</name><argument_list>(<argument><expr><call><name><name>o2</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+
+        <constructor><specifier>private</specifier> <name>RowContainer</name><parameter_list>(<param><decl><type><name>Row</name></type> <name>row</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>row</name></name> = <name>row</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>wrapper</name> = null</expr>;</expr_stmt>
+        }</block></constructor>
+
+        <constructor><specifier>public</specifier> <name>RowContainer</name><parameter_list>(<param><decl><type><name>NotifyingSSTableIdentityIterator</name></type> <name>wrapper</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>wrapper</name></name> = <name>wrapper</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>row</name> = null</expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>getKey</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>row</name> == null ? <call><name><name>wrapper</name>.<name>getKey</name></name><argument_list>()</argument_list></call> : <name><name>row</name>.<name>key</name></name></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>CompactedRowContainer</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>DecoratedKey</name></type> <name>key</name></decl>;</decl_stmt>
+        <comment type="block" format="javadoc">/** either "future" or "row" will be not-null, but not both at once. */</comment>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Future</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>future</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>LazilyCompactedRow</name></type> <name>row</name></decl>;</decl_stmt>
+
+        <constructor><specifier>private</specifier> <name>CompactedRowContainer</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>future</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>key</name></name> = <name>key</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>future</name></name> = <name>future</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>row</name> = null</expr>;</expr_stmt>
+        }</block></constructor>
+
+        <constructor><specifier>private</specifier> <name>CompactedRowContainer</name><parameter_list>(<param><decl><type><name>LazilyCompactedRow</name></type> <name>row</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>row</name></name> = <name>row</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>future</name> = null</expr>;</expr_stmt>
+            <expr_stmt><expr><name>key</name> = null</expr>;</expr_stmt>
+        }</block></constructor>
+    }</block></class>
+}</block></class>
+</unit>

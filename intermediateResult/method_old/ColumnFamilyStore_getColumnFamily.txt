@@ -1,0 +1,34 @@
+ColumnFamily getColumnFamily(QueryFilter filter, int gcBefore)
+    {
+        assert columnFamily.equals(filter.getColumnFamilyName()) : filter.getColumnFamilyName();
+
+        long start = System.nanoTime();
+        try
+        {
+            if (!isRowCacheEnabled())
+            {
+                ColumnFamily cf = getTopLevelColumns(filter, gcBefore, false);
+
+                if (cf == null)
+                    return null;
+
+                // TODO this is necessary because when we collate supercolumns together, we don't check
+                // their subcolumns for relevance, so we need to do a second prune post facto here.
+                return cf.isSuper() ? removeDeleted(cf, gcBefore) : removeDeletedCF(cf, gcBefore);
+            }
+
+            Integer cfId = Schema.instance.getId(table.name, this.columnFamily);
+            if (cfId == null)
+                return null; // secondary index
+
+            ColumnFamily cached = getThroughCache(cfId, filter);
+            if (cached == null)
+                return null;
+
+            return filterColumnFamily(cached, filter, gcBefore);
+        }
+        finally
+        {
+            readStats.addNano(System.nanoTime() - start);
+        }
+    }

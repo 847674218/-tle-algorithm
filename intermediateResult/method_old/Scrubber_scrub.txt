@@ -1,0 +1,185 @@
+public void scrub() throws IOException
+    {
+        outputHandler.output("Scrubbing " + sstable);
+        try
+        {
+            ByteBuffer nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
+            {
+                // throw away variable so we don't have a side effect in the assert
+                long firstRowPositionFromIndex = indexFile.readLong();
+                assert firstRowPositionFromIndex == 0 : firstRowPositionFromIndex;
+            }
+
+            // TODO errors when creating the writer may leave empty temp files.
+            writer = CompactionManager.maybeCreateWriter(cfs, destination, expectedBloomFilterSize, null, Collections.singletonList(sstable));
+
+            AbstractCompactedRow prevRow = null;
+
+            while (!dataFile.isEOF())
+            {
+                if (scrubInfo.isStopRequested())
+                    throw new CompactionInterruptedException(scrubInfo.getCompactionInfo());
+                long rowStart = dataFile.getFilePointer();
+                outputHandler.debug("Reading row at " + rowStart);
+
+                DecoratedKey key = null;
+                long dataSize = -1;
+                try
+                {
+                    key = SSTableReader.decodeKey(sstable.partitioner, sstable.descriptor, ByteBufferUtil.readWithShortLength(dataFile));
+                    dataSize = sstable.descriptor.hasIntRowSize ? dataFile.readInt() : dataFile.readLong();
+                    outputHandler.debug(String.format("row %s is %s bytes", ByteBufferUtil.bytesToHex(key.key), dataSize));
+                }
+                catch (Throwable th)
+                {
+                    throwIfFatal(th);
+                    // check for null key below
+                }
+
+                ByteBuffer currentIndexKey = nextIndexKey;
+                long nextRowPositionFromIndex;
+                try
+                {
+                    nextIndexKey = indexFile.isEOF() ? null : ByteBufferUtil.readWithShortLength(indexFile);
+                    nextRowPositionFromIndex = indexFile.isEOF() ? dataFile.length() : indexFile.readLong();
+                }
+                catch (Throwable th)
+                {
+                    outputHandler.warn("Error reading index file", th);
+                    nextIndexKey = null;
+                    nextRowPositionFromIndex = dataFile.length();
+                }
+
+                long dataStart = dataFile.getFilePointer();
+                long dataStartFromIndex = currentIndexKey == null
+                                        ? -1
+                                        : rowStart + 2 + currentIndexKey.remaining() + (sstable.descriptor.hasIntRowSize ? 4 : 8);
+                long dataSizeFromIndex = nextRowPositionFromIndex - dataStartFromIndex;
+                assert currentIndexKey != null || indexFile.isEOF();
+                if (currentIndexKey != null)
+                    outputHandler.debug(String.format("Index doublecheck: row %s is %s bytes", ByteBufferUtil.bytesToHex(currentIndexKey),  dataSizeFromIndex));
+
+                writer.mark();
+                try
+                {
+                    if (key == null)
+                        throw new IOError(new IOException("Unable to read row key from data file"));
+                    if (dataSize > dataFile.length())
+                        throw new IOError(new IOException("Impossible row size " + dataSize));
+                    SSTableIdentityIterator row = new SSTableIdentityIterator(sstable, dataFile, key, dataStart, dataSize, true);
+                    AbstractCompactedRow compactedRow = controller.getCompactedRow(row);
+                    if (compactedRow.isEmpty())
+                    {
+                        emptyRows++;
+                    }
+                    else
+                    {
+                        if (prevRow != null && acrComparator.compare(prevRow, compactedRow) >= 0)
+                        {
+                            outOfOrderRows.add(compactedRow);
+                            outputHandler.warn(String.format("Out of order row detected (%s found after %s)", compactedRow.key, prevRow.key));
+                            continue;
+                        }
+
+                        writer.append(compactedRow);
+                        prevRow = compactedRow;
+                        goodRows++;
+                    }
+                    if (!key.key.equals(currentIndexKey) || dataStart != dataStartFromIndex)
+                        outputHandler.warn("Index file contained a different key or row size; using key from data file");
+                }
+                catch (Throwable th)
+                {
+                    throwIfFatal(th);
+                    outputHandler.warn("Non-fatal error reading row (stacktrace follows)", th);
+                    writer.resetAndTruncate();
+
+                    if (currentIndexKey != null
+                        && (key == null || !key.key.equals(currentIndexKey) || dataStart != dataStartFromIndex || dataSize != dataSizeFromIndex))
+                    {
+                        outputHandler.output(String.format("Retrying from row index; data is %s bytes starting at %s",
+                                                  dataSizeFromIndex, dataStartFromIndex));
+                        key = SSTableReader.decodeKey(sstable.partitioner, sstable.descriptor, currentIndexKey);
+                        try
+                        {
+                            SSTableIdentityIterator row = new SSTableIdentityIterator(sstable, dataFile, key, dataStartFromIndex, dataSizeFromIndex, true);
+                            AbstractCompactedRow compactedRow = controller.getCompactedRow(row);
+                            if (compactedRow.isEmpty())
+                            {
+                                emptyRows++;
+                            }
+                            else
+                            {
+                                if (prevRow != null && acrComparator.compare(prevRow, compactedRow) >= 0)
+                                {
+                                    outOfOrderRows.add(compactedRow);
+                                    outputHandler.warn(String.format("Out of order row detected (%s found after %s)", compactedRow.key, prevRow.key));
+                                    continue;
+                                }
+                                writer.append(compactedRow);
+                                prevRow = compactedRow;
+                                goodRows++;
+                            }
+                        }
+                        catch (Throwable th2)
+                        {
+                            throwIfFatal(th2);
+                            // Skipping rows is dangerous for counters (see CASSANDRA-2759)
+                            if (isCommutative)
+                                throw new IOError(th2);
+
+                            outputHandler.warn("Retry failed too. Skipping to next row (retry's stacktrace follows)", th2);
+                            writer.resetAndTruncate();
+                            dataFile.seek(nextRowPositionFromIndex);
+                            badRows++;
+                        }
+                    }
+                    else
+                    {
+                        // Skipping rows is dangerous for counters (see CASSANDRA-2759)
+                        if (isCommutative)
+                            throw new IOError(th);
+
+                        outputHandler.warn("Row at " + dataStart + " is unreadable; skipping to next");
+                        if (currentIndexKey != null)
+                            dataFile.seek(nextRowPositionFromIndex);
+                        badRows++;
+                    }
+                }
+                if ((rowsRead++ % 1000) == 0)
+                    controller.mayThrottle(dataFile.getFilePointer());
+            }
+
+            if (writer.getFilePointer() > 0)
+                newSstable = writer.closeAndOpenReader(sstable.maxDataAge);
+        }
+        catch (Exception e)
+        {
+            if (writer != null)
+                writer.abort();
+            throw FBUtilities.unchecked(e);
+        }
+
+        if (!outOfOrderRows.isEmpty())
+        {
+            SSTableWriter inOrderWriter = CompactionManager.maybeCreateWriter(cfs, destination, expectedBloomFilterSize, null, Collections.singletonList(sstable));
+            for (AbstractCompactedRow row : outOfOrderRows)
+                inOrderWriter.append(row);
+            newInOrderSstable = inOrderWriter.closeAndOpenReader(sstable.maxDataAge);
+            outputHandler.warn(String.format("%d out of order rows found while scrubbing %s; Those have been written (in order) to a new sstable (%s)", outOfOrderRows.size(), sstable, newInOrderSstable));
+        }
+
+        if (newSstable == null)
+        {
+            if (badRows > 0)
+                outputHandler.warn("No valid rows found while scrubbing " + sstable + "; it is marked for deletion now. If you want to attempt manual recovery, you can find a copy in the pre-scrub snapshot");
+            else
+                outputHandler.output("Scrub of " + sstable + " complete; looks like all " + emptyRows + " rows were tombstoned");
+        }
+        else
+        {
+            outputHandler.output("Scrub of " + sstable + " complete: " + goodRows + " rows in new sstable and " + emptyRows + " empty (tombstoned) rows dropped");
+            if (badRows > 0)
+                outputHandler.warn("Unable to recover " + badRows + " rows that were skipped.  You can attempt manual recovery from the pre-scrub snapshot.  You can also run nodetool repair to transfer the data from a healthy replica, if any");
+        }
+    }

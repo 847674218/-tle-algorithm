@@ -1,0 +1,44 @@
+private boolean addToMutation(ClientState clientState,
+                                  ColumnFamily cf,
+                                  ByteBuffer colName,
+                                  CFDefinition.Name valueDef,
+                                  Operation value,
+                                  List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        if (value.isUnary())
+        {
+            validateColumnName(colName);
+            ByteBuffer valueBytes = value.value.getByteBuffer(valueDef.type, variables);
+            Column c = timeToLive > 0
+                       ? new ExpiringColumn(colName, valueBytes, getTimestamp(clientState), timeToLive)
+                       : new Column(colName, valueBytes, getTimestamp(clientState));
+            cf.addColumn(c);
+            return false;
+        }
+        else
+        {
+            if (!valueDef.name.equals(value.ident))
+                throw new InvalidRequestException("Only expressions like X = X + <long> are supported.");
+
+            long val;
+            try
+            {
+                val = ByteBufferUtil.toLong(value.value.getByteBuffer(LongType.instance, variables));
+            }
+            catch (NumberFormatException e)
+            {
+                throw new InvalidRequestException(String.format("'%s' is an invalid value, should be a long.",
+                            value.value.getText()));
+            }
+
+            if (value.type == Operation.Type.MINUS)
+            {
+                if (val == Long.MIN_VALUE)
+                    throw new InvalidRequestException("The negation of " + val + " overflows supported integer precision (signed 8 bytes integer)");
+                else
+                    val = -val;
+            }
+            cf.addCounter(new QueryPath(columnFamily(), null, colName), val);
+            return true;
+        }
+    }

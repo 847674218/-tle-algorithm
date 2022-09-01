@@ -1,0 +1,414 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\commitlog\CommitLogSegment.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>commitlog</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOError</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>RandomAccessFile</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>FileChannel</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>MappedByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collection</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicInteger</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>regex</name>.<name>Matcher</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>regex</name>.<name>Pattern</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>zip</name>.<name>Checksum</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashMap</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamily</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowMutation</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>PureJavaCrc32</name></name>;</import>
+
+<comment type="block">/*
+ * A single commit log file on disk. Manages creation of the file and writing row mutations to disk,
+ * as well as tracking the last mutation position of any "dirty" CFs covered by the segment file. Segment
+ * files are initially allocated to a fixed size and can grow to accomidate a larger value if necessary.
+ */</comment>
+<class><specifier>public</specifier> class <name>CommitLogSegment</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CommitLogSegment</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>FILENAME_PREFIX</name> <init>= <expr>"CommitLog-"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>FILENAME_EXTENSION</name> <init>= <expr>".log"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Pattern</name></type> <name>COMMIT_LOG_FILE_PATTERN</name> <init>= <expr><call><name><name>Pattern</name>.<name>compile</name></name><argument_list>(<argument><expr><name>FILENAME_PREFIX</name> + "(\\d+)" + <name>FILENAME_EXTENSION</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>long</name></type> <name>idBase</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>AtomicInteger</name></type> <name>nextId</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// The commit log entry overhead in bytes (int: length + long: head checksum + long: tail checksum)</comment>
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>ENTRY_OVERHEAD_SIZE</name> <init>= <expr>4 + 8 + 8</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// cache which cf is dirty in this segment to avoid having to lookup all ReplayPositions to decide if we can delete this segment</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>HashMap</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>cfLastWrite</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>long</name></type> <name>id</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>File</name></type> <name>logFile</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>RandomAccessFile</name></type> <name>logFileAccessor</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>needsSync</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>MappedByteBuffer</name></type> <name>buffer</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>closed</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * @return a newly minted segment file
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>CommitLogSegment</name></type> <name>freshSegment</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>CommitLogSegment</name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>getNextId</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>idBase</name> + <call><name><name>nextId</name>.<name>getAndIncrement</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+    <comment type="block" format="javadoc">/**
+     * Constructs a new segment file.
+     *
+     * @param filePath  if not null, recycles the existing file by renaming it and truncating it to CommitLog.SEGMENT_SIZE.
+     */</comment>
+    <constructor><name>CommitLogSegment</name><parameter_list>(<param><decl><type><name>String</name></type> <name>filePath</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>id</name> = <call><name>getNextId</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>logFile</name> = new <call><name>File</name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getCommitLogLocation</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>FILENAME_PREFIX</name> + <name>id</name> + <name>FILENAME_EXTENSION</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>isCreating</name> <init>= <expr>true</expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><name>filePath</name> != null</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>File</name></type> <name>oldFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>filePath</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><call><name><name>oldFile</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Re-using discarded CommitLog segment for {} from {}"</expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name>filePath</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr>!<call><name><name>oldFile</name>.<name>renameTo</name></name><argument_list>(<argument><expr><name>logFile</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Rename from " + <name>filePath</name> + " to " + <name>id</name> + " failed"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                    <expr_stmt><expr><name>isCreating</name> = false</expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></then></if>
+
+            <comment type="line">// Open the initial the segment file</comment>
+            <expr_stmt><expr><name>logFileAccessor</name> = new <call><name>RandomAccessFile</name><argument_list>(<argument><expr><name>logFile</name></expr></argument>, <argument><expr>"rw"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>isCreating</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Creating new commit log segment {}"</expr></argument>, <argument><expr><call><name><name>logFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <comment type="line">// Map the segment, extending or truncating it to the standard segment size</comment>
+            <expr_stmt><expr><call><name><name>logFileAccessor</name>.<name>setLength</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getCommitLogSegmentSize</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><name>buffer</name> = <call><name><name>logFileAccessor</name>.<name>getChannel</name></name><argument_list>()</argument_list></call>.<call><name>map</name><argument_list>(<argument><expr><name><name>FileChannel</name>.<name>MapMode</name>.<name>READ_WRITE</name></name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getCommitLogSegmentSize</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buffer</name>.<name>putInt</name></name><argument_list>(<argument><expr><name><name>CommitLog</name>.<name>END_OF_SEGMENT_MARKER</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buffer</name>.<name>position</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><name>needsSync</name> = true</expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Extracts the commit log ID from filename
+     *
+     * @param   filename  the filename of the commit log file
+     * @return the extracted commit log ID
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>idFromFilename</name><parameter_list>(<param><decl><type><name>String</name></type> <name>filename</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Matcher</name></type> <name>matcher</name> <init>= <expr><call><name><name>COMMIT_LOG_FILE_PATTERN</name>.<name>matcher</name></name><argument_list>(<argument><expr><name>filename</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><call><name><name>matcher</name>.<name>matches</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr><call><name><name>Long</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name><name>matcher</name>.<name>group</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return></then>
+            <else>else
+                <return>return <expr>-1L</expr>;</return></else></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>NumberFormatException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>-1L</expr>;</return>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @param   filename  the filename to check
+     * @return true if filename could be a commit log based on it's filename
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>possibleCommitLogFile</name><parameter_list>(<param><decl><type><name>String</name></type> <name>filename</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>COMMIT_LOG_FILE_PATTERN</name>.<name>matcher</name></name><argument_list>(<argument><expr><name>filename</name></expr></argument>)</argument_list></call>.<call><name>matches</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Completely discards a segment file by deleting it. (Potentially blocking operation)
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>discard</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>deleteFile</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// TODO shouldn't we close the file when we're done writing to it, which comes (potentially) much earlier than it's eligible for recyling?</comment>
+        <expr_stmt><expr><call><name>close</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><name>deleteFile</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>FileUtils</name>.<name>deleteWithConfirm</name></name><argument_list>(<argument><expr><name>logFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Recycle processes an unneeded segment file for reuse.
+     *
+     * @return a new CommitLogSegment representing the newly reusable segment.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>CommitLogSegment</name></type> <name>recycle</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// writes an end-of-segment marker at the very beginning of the file and closes it</comment>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>position</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>putInt</name></name><argument_list>(<argument><expr><name><name>CommitLog</name>.<name>END_OF_SEGMENT_MARKER</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>position</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>sync</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// This is a best effort thing anyway</comment>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"I/O error flushing " + <name>this</name> + " " + <name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+
+        <expr_stmt><expr><call><name>close</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <return>return <expr>new <call><name>CommitLogSegment</name><argument_list>(<argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if there is room to write() @param mutation to this segment
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasCapacityFor</name><parameter_list>(<param><decl><type><name>RowMutation</name></type> <name>mutation</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>totalSize</name> <init>= <expr><call><name><name>RowMutation</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serializedSize</name><argument_list>(<argument><expr><name>mutation</name></expr></argument>, <argument><expr><name><name>MessagingService</name>.<name>version_</name></name></expr></argument>)</argument_list></call> + <name>ENTRY_OVERHEAD_SIZE</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>totalSize</name> &lt;= <call><name><name>buffer</name>.<name>remaining</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * mark all of the column families we're modifying as dirty at this position
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>markDirty</name><parameter_list>(<param><decl><type><name>RowMutation</name></type> <name>rowMutation</name></decl></param>, <param><decl><type><name>ReplayPosition</name></type> <name>repPos</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ColumnFamily</name></type> <name>columnFamily</name> <range>: <expr><call><name><name>rowMutation</name>.<name>getColumnFamilies</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <comment type="line">// check for null cfm in case a cl write goes through after the cf is</comment>
+            <comment type="line">// defined but before a new segment is created.</comment>
+            <decl_stmt><decl><type><name>CFMetaData</name></type> <name>cfm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><call><name><name>columnFamily</name>.<name>id</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>cfm</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Attempted to write commit log entry for unrecognized column family: " + <call><name><name>columnFamily</name>.<name>id</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name>markCFDirty</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>cfId</name></name></expr></argument>, <argument><expr><name><name>repPos</name>.<name>position</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></for>
+    }</block></function>
+
+   <comment type="block" format="javadoc">/**
+     * Appends a row mutation onto the commit log.  Requres that hasCapacityFor has already been checked.
+     *
+     * @param   rowMutation   the mutation to append to the commit log.
+     * @return  the position of the appended mutation
+     */</comment>
+    <function><type><specifier>public</specifier> <name>ReplayPosition</name></type> <name>write</name><parameter_list>(<param><decl><type><name>RowMutation</name></type> <name>rowMutation</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr>!<name>closed</name></expr>;</assert>
+        <decl_stmt><decl><type><name>ReplayPosition</name></type> <name>repPos</name> <init>= <expr><call><name>getContext</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>markDirty</name><argument_list>(<argument><expr><name>rowMutation</name></expr></argument>, <argument><expr><name>repPos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>Checksum</name></type> <name>checksum</name> <init>= <expr>new <call><name>PureJavaCrc32</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>serializedRow</name> <init>= <expr><call><name><name>rowMutation</name>.<name>getSerializedBuffer</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>version_</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>checksum</name>.<name>update</name></name><argument_list>(<argument><expr><name><name>serializedRow</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>putInt</name></name><argument_list>(<argument><expr><name><name>serializedRow</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>putLong</name></name><argument_list>(<argument><expr><call><name><name>checksum</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>put</name></name><argument_list>(<argument><expr><name>serializedRow</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>checksum</name>.<name>update</name></name><argument_list>(<argument><expr><name>serializedRow</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name><name>serializedRow</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>putLong</name></name><argument_list>(<argument><expr><call><name><name>checksum</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>buffer</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt;= 4</expr>)</condition><then>
+        <block>{
+            <comment type="line">// writes end of segment marker and rewinds back to position where it starts</comment>
+            <expr_stmt><expr><call><name><name>buffer</name>.<name>putInt</name></name><argument_list>(<argument><expr><name><name>CommitLog</name>.<name>END_OF_SEGMENT_MARKER</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buffer</name>.<name>position</name></name><argument_list>(<argument><expr><call><name><name>buffer</name>.<name>position</name></name><argument_list>()</argument_list></call> - <name><name>CommitLog</name>.<name>END_OF_SEGMENT_MARKER_SIZE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <expr_stmt><expr><name>needsSync</name> = true</expr>;</expr_stmt>
+        <return>return <expr><name>repPos</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Forces a disk flush for this segment file.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>sync</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>needsSync</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>buffer</name>.<name>force</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>needsSync</name> = false</expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the current ReplayPosition for this log segment
+     */</comment>
+    <function><type><specifier>public</specifier> <name>ReplayPosition</name></type> <name>getContext</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>ReplayPosition</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>buffer</name>.<name>position</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the file path to this segment
+     */</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getPath</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>logFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the file name of this segment
+     */</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getName</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>logFile</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Close the segment file.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>closed</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>clean</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>logFileAccessor</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>closed</name> = true</expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Records the CF as dirty at a certain position.
+     *
+     * @param cfId      the column family ID that is now dirty
+     * @param position  the position the last write for this CF was written at
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>markCFDirty</name><parameter_list>(<param><decl><type><name>Integer</name></type> <name>cfId</name></decl></param>, <param><decl><type><name>Integer</name></type> <name>position</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>cfLastWrite</name>.<name>put</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>, <argument><expr><name>position</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Marks the ColumnFamily specified by cfId as clean for this log segment. If the
+     * given context argument is contained in this file, it will only mark the CF as
+     * clean if no newer writes have taken place.
+     *
+     * @param cfId    the column family ID that is now clean
+     * @param context the optional clean offset
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>markClean</name><parameter_list>(<param><decl><type><name>Integer</name></type> <name>cfId</name></decl></param>, <param><decl><type><name>ReplayPosition</name></type> <name>context</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Integer</name></type> <name>lastWritten</name> <init>= <expr><call><name><name>cfLastWrite</name>.<name>get</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>lastWritten</name> != null &amp;&amp; (!<call><name>contains</name><argument_list>(<argument><expr><name>context</name></expr></argument>)</argument_list></call> || <name>lastWritten</name> &lt; <name><name>context</name>.<name>position</name></name>)</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>cfLastWrite</name>.<name>remove</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return a collection of dirty CFIDs for this segment file.
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>getDirtyCFIDs</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cfLastWrite</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if this segment is unused and safe to recycle or delete
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isUnused</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cfLastWrite</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Check to see if a certain ReplayPosition is contained by this segment file.
+     *
+     * @param   context the replay position to be checked
+     * @return  true if the replay position is contained by this segment file.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>contains</name><parameter_list>(<param><decl><type><name>ReplayPosition</name></type> <name>context</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name><name>context</name>.<name>segment</name></name> == <name>id</name></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// For debugging, not fast</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>dirtyString</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Integer</name></type> <name>cfId</name> <range>: <expr><call><name><name>cfLastWrite</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>CFMetaData</name></type> <name>m</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>m</name> == null ? "&lt;deleted&gt;" : <name><name>m</name>.<name>cfName</name></name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>" ("</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"), "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>"CommitLogSegment(" + <call><name>getPath</name><argument_list>()</argument_list></call> + ')'</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>position</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>buffer</name>.<name>position</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

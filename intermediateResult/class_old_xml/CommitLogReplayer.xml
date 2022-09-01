@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\commitlog\CommitLogReplayer.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>commitlog</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataInputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>EOFException</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Set</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Future</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicInteger</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>zip</name>.<name>Checksum</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>Stage</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>StageManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamily</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowMutation</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>UnknownColumnFamilyException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IColumnSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FastByteArrayInputStream</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>RandomAccessReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>PureJavaCrc32</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>WrappedRunnable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>cliffc</name>.<name>high_scale_lib</name>.<name>NonBlockingHashSet</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Ordering</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>CommitLogReplayer</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CommitLogReplayer</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>MAX_OUTSTANDING_REPLAY_COUNT</name> <init>= <expr>1024</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Table</name></argument>&gt;</argument_list></name></type> <name>tablesRecovered</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>futures</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>AtomicInteger</name></argument>&gt;</argument_list></name></type> <name>invalidMutations</name></decl>;</decl_stmt>
+<decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>AtomicInteger</name></type> <name>replayedCount</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>ReplayPosition</name></argument>&gt;</argument_list></name></type> <name>cfPositions</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ReplayPosition</name></type> <name>globalPosition</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Checksum</name></type> <name>checksum</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>byte</name><index>[]</index></type> <name>buffer</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CommitLogReplayer</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>tablesRecovered</name></name> = new <call><name><name>NonBlockingHashSet</name><argument_list>&lt;<argument><name>Table</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>futures</name></name> = new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>buffer</name></name> = new <name><name>byte</name><index>[<expr>4096</expr>]</index></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>invalidMutations</name></name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>AtomicInteger</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// count the number of replayed mutation. We don't really care about atomicity, but we need it to be a reference.</comment>
+        <expr_stmt><expr><name><name>this</name>.<name>replayedCount</name></name> = new <call><name>AtomicInteger</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// compute per-CF and global replay positions</comment>
+        <expr_stmt><expr><name><name>this</name>.<name>cfPositions</name></name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>ReplayPosition</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><call><name><name>ColumnFamilyStore</name>.<name>all</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <comment type="line">// it's important to call RP.gRP per-cf, before aggregating all the positions w/ the Ordering.min call</comment>
+            <comment type="line">// below: gRP will return NONE if there are no flushed sstables, which is important to have in the</comment>
+            <comment type="line">// list (otherwise we'll just start replay from the first flush position that we do have, which is not correct).</comment>
+            <decl_stmt><decl><type><name>ReplayPosition</name></type> <name>rp</name> <init>= <expr><call><name><name>ReplayPosition</name>.<name>getReplayPosition</name></name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>cfPositions</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>cfs</name>.<name>metadata</name>.<name>cfId</name></name></expr></argument>, <argument><expr><name>rp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <expr_stmt><expr><name><name>this</name>.<name>globalPosition</name></name> = <call><name><name>Ordering</name>.<name>from</name></name><argument_list>(<argument><expr><name><name>ReplayPosition</name>.<name>comparator</name></name></expr></argument>)</argument_list></call>.<call><name>min</name><argument_list>(<argument><expr><call><name><name>cfPositions</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>checksum</name></name> = new <call><name>PureJavaCrc32</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>recover</name><parameter_list>(<param><decl><type><name><name>File</name><index>[]</index></name></type> <name>clogs</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <for>for (<init><decl><type><specifier>final</specifier> <name>File</name></type> <name>file</name> <range>: <expr><name>clogs</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name>recover</name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>blockForWrites</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>AtomicInteger</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>invalidMutations</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Skipped %d mutations from unknown (probably removed) CF with id %d"</expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>intValue</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <comment type="line">// wait for all the writes to finish on the mutation stage</comment>
+        <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>waitOnFutures</name></name><argument_list>(<argument><expr><name>futures</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Finished waiting on mutations from recovery"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// flush replayed tables</comment>
+        <expr_stmt><expr><call><name><name>futures</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>Table</name></type> <name>table</name> <range>: <expr><name>tablesRecovered</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>futures</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>table</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>waitOnFutures</name></name><argument_list>(<argument><expr><name>futures</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>replayedCount</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>recover</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Replaying " + <call><name><name>file</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>long</name></type> <name>segment</name> <init>= <expr><call><name><name>CommitLogSegment</name>.<name>idFromFilename</name></name><argument_list>(<argument><expr><call><name><name>file</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>RandomAccessReader</name></type> <name>reader</name> <init>= <expr><call><name><name>RandomAccessReader</name>.<name>open</name></name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>file</name>.<name>getAbsolutePath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <assert>assert <expr><call><name><name>reader</name>.<name>length</name></name><argument_list>()</argument_list></call> &lt;= <name><name>Integer</name>.<name>MAX_VALUE</name></name></expr>;</assert>
+            <decl_stmt><decl><type><name>int</name></type> <name>replayPosition</name></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name><name>globalPosition</name>.<name>segment</name></name> &lt; <name>segment</name></expr>)</condition><then>
+                <expr_stmt><expr><name>replayPosition</name> = 0</expr>;</expr_stmt></then>
+            <else>else <if>if <condition>(<expr><name><name>globalPosition</name>.<name>segment</name></name> == <name>segment</name></expr>)</condition><then>
+                <expr_stmt><expr><name>replayPosition</name> = <name><name>globalPosition</name>.<name>position</name></name></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><name>replayPosition</name> = (<name>int</name>) <call><name><name>reader</name>.<name>length</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></else></if></else></if>
+
+            <if>if <condition>(<expr><name><name>replayPosition</name> <argument_list>&lt; <argument>0 || <name>replayPosition</name></argument> &gt;</argument_list></name>= <call><name><name>reader</name>.<name>length</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <comment type="line">// replayPosition &gt; reader.length() can happen if some data gets flushed before it is written to the commitlog</comment>
+                <comment type="line">// (see https://issues.apache.org/jira/browse/CASSANDRA-2285)</comment>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"skipping replay of fully-flushed {}"</expr></argument>, <argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name><name>reader</name>.<name>seek</name></name><argument_list>(<argument><expr><name>replayPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Replaying " + <name>file</name> + " starting at " + <call><name><name>reader</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <comment type="block">/* read the logs populate RowMutation and apply */</comment>
+            <while>while <condition>(<expr>!<call><name><name>reader</name>.<name>isEOF</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Reading mutation at " + <call><name><name>reader</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <decl_stmt><decl><type><name>long</name></type> <name>claimedCRC32</name></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>serializedSize</name></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <comment type="line">// any of the reads may hit EOF</comment>
+                    <expr_stmt><expr><name>serializedSize</name> = <call><name><name>reader</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><name>serializedSize</name> == <name><name>CommitLog</name>.<name>END_OF_SEGMENT_MARKER</name></name></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Encountered end of segment marker at " + <call><name><name>reader</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <break>break;</break>
+                    }</block></then></if>
+
+                    <comment type="line">// RowMutation must be at LEAST 10 bytes:</comment>
+                    <comment type="line">// 3 each for a non-empty Table and Key (including the</comment>
+                    <comment type="line">// 2-byte length from writeUTF/writeWithShortLength) and 4 bytes for column count.</comment>
+                    <comment type="line">// This prevents CRC by being fooled by special-case garbage in the file; see CASSANDRA-2128</comment>
+                    <if>if <condition>(<expr><name>serializedSize</name> &lt; 10</expr>)</condition><then>
+                        <break>break;</break></then></if>
+                    <decl_stmt><decl><type><name>long</name></type> <name>claimedSizeChecksum</name> <init>= <expr><call><name><name>reader</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>checksum</name>.<name>reset</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>checksum</name>.<name>update</name></name><argument_list>(<argument><expr><name>serializedSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><call><name><name>checksum</name>.<name>getValue</name></name><argument_list>()</argument_list></call> != <name>claimedSizeChecksum</name></expr>)</condition><then>
+                        <break>break;</break></then></if> <comment type="line">// entry wasn't synced correctly/fully. that's</comment>
+                               <comment type="line">// ok.</comment>
+
+                    <if>if <condition>(<expr><name>serializedSize</name> &gt; <name><name>buffer</name>.<name>length</name></name></expr>)</condition><then>
+                        <expr_stmt><expr><name>buffer</name> = new <name><name>byte</name><index>[<expr><call>(<name>int</name>) <argument_list>(<argument><expr>1.2 * <name>serializedSize</name></expr></argument>)</argument_list></call></expr>]</index></name></expr>;</expr_stmt></then></if>
+                    <expr_stmt><expr><call><name><name>reader</name>.<name>readFully</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>serializedSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>claimedCRC32</name> = <call><name><name>reader</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>EOFException</name></type> <name>eof</name></decl></param>)</parameter_list>
+                <block>{
+                    <break>break;</break> <comment type="line">// last CL entry didn't get completely written. that's ok.</comment>
+                }</block></catch></try>
+
+                <expr_stmt><expr><call><name><name>checksum</name>.<name>update</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>serializedSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>claimedCRC32</name> != <call><name><name>checksum</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// this entry must not have been fsynced. probably the rest is bad too,</comment>
+                    <comment type="line">// but just in case there is no harm in trying them (since we still read on an entry boundary)</comment>
+                    <continue>continue;</continue>
+                }</block></then></if>
+
+                <comment type="block">/* deserialize the commit log entry */</comment>
+                <decl_stmt><decl><type><name>FastByteArrayInputStream</name></type> <name>bufIn</name> <init>= <expr>new <call><name>FastByteArrayInputStream</name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>serializedSize</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>RowMutation</name></type> <name>rm</name></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <comment type="line">// assuming version here. We've gone to lengths to make sure what gets written to the CL is in</comment>
+                    <comment type="line">// the current version. so do make sure the CL is drained prior to upgrading a node.</comment>
+                    <expr_stmt><expr><name>rm</name> = <call><name><name>RowMutation</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr><name>bufIn</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>MessagingService</name>.<name>version_</name></name></expr></argument>, <argument><expr><name><name>IColumnSerializer</name>.<name>Flag</name>.<name>LOCAL</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>UnknownColumnFamilyException</name></type> <name>ex</name></decl></param>)</parameter_list>
+                <block>{
+                    <decl_stmt><decl><type><name>AtomicInteger</name></type> <name>i</name> <init>= <expr><call><name><name>invalidMutations</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>ex</name>.<name>cfId</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>i</name> == null</expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><name>i</name> = new <call><name>AtomicInteger</name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>invalidMutations</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>ex</name>.<name>cfId</name></name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then>
+                    <else>else
+                        <expr_stmt><expr><call><name><name>i</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></else></if>
+                    <continue>continue;</continue>
+                }</block></catch></try>
+
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"replaying mutation for %s.%s: %s"</expr></argument>, <argument><expr><call><name><name>rm</name>.<name>getTable</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><call><name><name>rm</name>.<name>key</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>"{" + <call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><call><name><name>rm</name>.<name>getColumnFamilies</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call>
+                            + "}"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <decl_stmt><decl><type><specifier>final</specifier> <name>long</name></type> <name>entryLocation</name> <init>= <expr><call><name><name>reader</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><specifier>final</specifier> <name>RowMutation</name></type> <name>frm</name> <init>= <expr><name>rm</name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>WrappedRunnable</name></super><argument_list>()</argument_list>
+                <block>{
+                    <function><type><specifier>public</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+                    <block>{
+                        <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getKSMetaData</name></name><argument_list>(<argument><expr><call><name><name>frm</name>.<name>getTable</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+                            <return>return;</return></then></if>
+                        <if>if <condition>(<expr><call><name>pointInTimeExceeded</name><argument_list>(<argument><expr><name>frm</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                            <return>return;</return></then></if>
+
+                        <decl_stmt><decl><type><specifier>final</specifier> <name>Table</name></type> <name>table</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><call><name><name>frm</name>.<name>getTable</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <decl_stmt><decl><type><name>RowMutation</name></type> <name>newRm</name> <init>= <expr>new <call><name>RowMutation</name><argument_list>(<argument><expr><call><name><name>frm</name>.<name>getTable</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>frm</name>.<name>key</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                        <comment type="line">// Rebuild the row mutation, omitting column families that </comment>
+                        <comment type="line">// a) have already been flushed,</comment>
+                        <comment type="line">// b) are part of a cf that was dropped. Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.</comment>
+                        <for>for (<init><decl><type><name>ColumnFamily</name></type> <name>columnFamily</name> <range>: <expr><call><name><name>frm</name>.<name>getColumnFamilies</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                        <block>{
+                            <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCF</name></name><argument_list>(<argument><expr><call><name><name>columnFamily</name>.<name>id</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+                                <comment type="line">// null means the cf has been dropped</comment>
+                                <continue>continue;</continue></then></if>
+
+                            <decl_stmt><decl><type><name>ReplayPosition</name></type> <name>rp</name> <init>= <expr><call><name><name>cfPositions</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>columnFamily</name>.<name>id</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                            <comment type="line">// replay if current segment is newer than last flushed one or, </comment>
+                            <comment type="line">// if it is the last known segment, if we are after the replay position</comment>
+                            <if>if <condition>(<expr><name>segment</name> &gt; <name><name>rp</name>.<name>segment</name></name> || (<name>segment</name> == <name><name>rp</name>.<name>segment</name></name> &amp;&amp; <name>entryLocation</name> &gt; <name><name>rp</name>.<name>position</name></name>)</expr>)</condition><then>
+                            <block>{
+                                <expr_stmt><expr><call><name><name>newRm</name>.<name>add</name></name><argument_list>(<argument><expr><name>columnFamily</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                                <expr_stmt><expr><call><name><name>replayedCount</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                            }</block></then></if>
+                        }</block></for>
+                        <if>if <condition>(<expr>!<call><name><name>newRm</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><call><name><name>newRm</name>.<name>getTable</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>apply</name><argument_list>(<argument><expr><name>newRm</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name><name>tablesRecovered</name>.<name>add</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></then></if>
+                    }</block></function>
+                }</block></class></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>futures</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>MUTATION</name></name></expr></argument>)</argument_list></call>.<call><name>submit</name><argument_list>(<argument><expr><name>runnable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>futures</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; <name>MAX_OUTSTANDING_REPLAY_COUNT</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>waitOnFutures</name></name><argument_list>(<argument><expr><name>futures</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>futures</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></while>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>reader</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Finished reading " + <name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>pointInTimeExceeded</name><parameter_list>(<param><decl><type><name>RowMutation</name></type> <name>frm</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>restoreTarget</name> <init>= <expr><name><name>CommitLog</name>.<name>instance</name>.<name>archiver</name>.<name>restorePointInTime</name></name></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>ColumnFamily</name></type> <name>families</name> <range>: <expr><call><name><name>frm</name>.<name>getColumnFamilies</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>families</name>.<name>maxTimestamp</name></name><argument_list>()</argument_list></call> &gt; <name>restoreTarget</name></expr>)</condition><then>
+                <return>return <expr>true</expr>;</return></then></if>
+        }</block></for>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

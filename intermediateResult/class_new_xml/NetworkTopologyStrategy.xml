@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\locator\NetworkTopologyStrategy.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name>.<name>Entry</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>TokenMetadata</name>.<name>Topology</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Multimap</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * This Replication Strategy takes a property file that gives the intended
+ * replication factor in each datacenter.  The sum total of the datacenter
+ * replication factor values should be equal to the keyspace replication
+ * factor.
+ * &lt;p/&gt;
+ * So for example, if the keyspace replication factor is 6, the
+ * datacenter replication factors could be 3, 2, and 1 - so 3 replicas in
+ * one datacenter, 2 in another, and 1 in another - totalling 6.
+ * &lt;p/&gt;
+ * This class also caches the Endpoints and invalidates the cache if there is a
+ * change in the number of tokens.
+ */</comment>
+<class><specifier>public</specifier> class <name>NetworkTopologyStrategy</name> <super><extends>extends <name>AbstractReplicationStrategy</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>IEndpointSnitch</name></type> <name>snitch</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>datacenters</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>NetworkTopologyStrategy</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>NetworkTopologyStrategy</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name>TokenMetadata</name></type> <name>tokenMetadata</name></decl></param>, <param><decl><type><name>IEndpointSnitch</name></type> <name>snitch</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>configOptions</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>tokenMetadata</name></expr></argument>, <argument><expr><name>snitch</name></expr></argument>, <argument><expr><name>configOptions</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>snitch</name></name> = <name>snitch</name></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>newDatacenters</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>configOptions</name> != null</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>entry</name> <range>: <expr><call><name><name>configOptions</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>dc</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>dc</name>.<name>equalsIgnoreCase</name></name><argument_list>(<argument><expr>"replication_factor"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"replication_factor is an option for SimpleStrategy, not NetworkTopologyStrategy"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                <decl_stmt><decl><type><name>Integer</name></type> <name>replicas</name> <init>= <expr><call><name><name>Integer</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>newDatacenters</name>.<name>put</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>, <argument><expr><name>replicas</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></then></if>
+
+        <expr_stmt><expr><name>datacenters</name> = <call><name><name>Collections</name>.<name>unmodifiableMap</name></name><argument_list>(<argument><expr><name>newDatacenters</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Configured datacenter replicas are {}"</expr></argument>, <argument><expr><call><name><name>FBUtilities</name>.<name>toString</name></name><argument_list>(<argument><expr><name>datacenters</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * calculate endpoints in one pass through the tokens by tracking our progress in each DC, rack etc.
+     */</comment>
+    <function><type><annotation>@<name>SuppressWarnings</name><argument_list>(<argument><expr>"serial"</expr></argument>)</argument_list></annotation>
+    <specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>calculateNaturalEndpoints</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>searchToken</name></decl></param>, <param><decl><type><name>TokenMetadata</name></type> <name>tokenMetadata</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>replicas</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// replicas we have found in each DC</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>dcReplicas</name> <init>= <expr>new <class><super><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>(<argument><expr><call><name><name>datacenters</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list>
+        <block>{<block>{
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></name></type> <name>dc</name> <range>: <expr><call><name><name>datacenters</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name>put</name><argument_list>(<argument><expr><call><name><name>dc</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>dc</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block>}</block></class></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Topology</name></type> <name>topology</name> <init>= <expr><call><name><name>tokenMetadata</name>.<name>getTopology</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// all endpoints in each DC, so we can check when we have exhausted all the members of a DC</comment>
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>allEndpoints</name> <init>= <expr><call><name><name>topology</name>.<name>getDatacenterEndpoints</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// all racks in a DC so we can check when we have exhausted all racks in a DC</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>racks</name> <init>= <expr><call><name><name>topology</name>.<name>getDatacenterRacks</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr>!<call><name><name>allEndpoints</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> &amp;&amp; !<call><name><name>racks</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> : "not aware of any cluster members"</expr>;</assert>
+
+        <comment type="line">// tracks the racks we have already placed replicas in</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>seenRacks</name> <init>= <expr>new <class><super><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>(<argument><expr><call><name><name>datacenters</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list>
+        <block>{<block>{
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></name></type> <name>dc</name> <range>: <expr><call><name><name>datacenters</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name>put</name><argument_list>(<argument><expr><call><name><name>dc</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block>}</block></class></expr></init></decl>;</decl_stmt>
+        <comment type="line">// tracks the endpoints that we skipped over while looking for unique racks</comment>
+        <comment type="line">// when we relax the rack uniqueness we can append this to the current result so we don't have to wind back the iterator</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>skippedDcEndpoints</name> <init>= <expr>new <class><super><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>(<argument><expr><call><name><name>datacenters</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list>
+        <block>{<block>{
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></name></type> <name>dc</name> <range>: <expr><call><name><name>datacenters</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name>put</name><argument_list>(<argument><expr><call><name><name>dc</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>new <call><name><name>LinkedHashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block>}</block></class></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>tokenIter</name> <init>= <expr><call><name><name>TokenMetadata</name>.<name>ringIterator</name></name><argument_list>(<argument><expr><call><name><name>tokenMetadata</name>.<name>sortedTokens</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>searchToken</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><call><name><name>tokenIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call> &amp;&amp; !<call><name>hasSufficientReplicas</name><argument_list>(<argument><expr><name>dcReplicas</name></expr></argument>, <argument><expr><name>allEndpoints</name></expr></argument>)</argument_list></call></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>Token</name></type> <name>next</name> <init>= <expr><call><name><name>tokenIter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>ep</name> <init>= <expr><call><name><name>tokenMetadata</name>.<name>getEndpoint</name></name><argument_list>(<argument><expr><name>next</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>dc</name> <init>= <expr><call><name><name>snitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// have we already found all replicas for this dc?</comment>
+            <if>if <condition>(<expr>!<call><name><name>datacenters</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call> || <call><name>hasSufficientReplicas</name><argument_list>(<argument><expr><name>dc</name></expr></argument>, <argument><expr><name>dcReplicas</name></expr></argument>, <argument><expr><name>allEndpoints</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+            <comment type="line">// can we skip checking the rack?</comment>
+            <if>if <condition>(<expr><call><name><name>seenRacks</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> == <call><name><name>racks</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>keySet</name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>dcReplicas</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>replicas</name>.<name>add</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>rack</name> <init>= <expr><call><name><name>snitch</name>.<name>getRack</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <comment type="line">// is this a new rack?</comment>
+                <if>if <condition>(<expr><call><name><name>seenRacks</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>contains</name><argument_list>(<argument><expr><name>rack</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>skippedDcEndpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><call><name><name>dcReplicas</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>replicas</name>.<name>add</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>seenRacks</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>rack</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <comment type="line">// if we've run out of distinct racks, add the hosts we skipped past already (up to RF)</comment>
+                    <if>if <condition>(<expr><call><name><name>seenRacks</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> == <call><name><name>racks</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>keySet</name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>skippedIt</name> <init>= <expr><call><name><name>skippedDcEndpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <while>while <condition>(<expr><call><name><name>skippedIt</name>.<name>hasNext</name></name><argument_list>()</argument_list></call> &amp;&amp; !<call><name>hasSufficientReplicas</name><argument_list>(<argument><expr><name>dc</name></expr></argument>, <argument><expr><name>dcReplicas</name></expr></argument>, <argument><expr><name>allEndpoints</name></expr></argument>)</argument_list></call></expr>)</condition>
+                        <block>{
+                            <decl_stmt><decl><type><name>InetAddress</name></type> <name>nextSkipped</name> <init>= <expr><call><name><name>skippedIt</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                            <expr_stmt><expr><call><name><name>dcReplicas</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>nextSkipped</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name><name>replicas</name>.<name>add</name></name><argument_list>(<argument><expr><name>nextSkipped</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></while>
+                    }</block></then></if>
+                }</block></else></if>
+            }</block></else></if>
+        }</block></while>
+
+        <return>return <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>replicas</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>hasSufficientReplicas</name><parameter_list>(<param><decl><type><name>String</name></type> <name>dc</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>dcReplicas</name></decl></param>, <param><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>allEndpoints</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>dcReplicas</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> &gt;= <call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><call><name><name>allEndpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>getReplicationFactor</name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>hasSufficientReplicas</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>dcReplicas</name></decl></param>, <param><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>allEndpoints</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>String</name></type> <name>dc</name> <range>: <expr><call><name><name>datacenters</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <if>if <condition>(<expr>!<call><name>hasSufficientReplicas</name><argument_list>(<argument><expr><name>dc</name></expr></argument>, <argument><expr><name>dcReplicas</name></expr></argument>, <argument><expr><name>allEndpoints</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if></for>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getReplicationFactor</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>total</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>repFactor</name> <range>: <expr><call><name><name>datacenters</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><name>total</name> += <name>repFactor</name></expr>;</expr_stmt></for>
+        <return>return <expr><name>total</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getReplicationFactor</name><parameter_list>(<param><decl><type><name>String</name></type> <name>dc</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Integer</name></type> <name>replicas</name> <init>= <expr><call><name><name>datacenters</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>replicas</name> == null ? 0 : <name>replicas</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getDatacenters</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>datacenters</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>validateOptions</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <for>for (<init><decl><type><name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>e</name> <range>: <expr><call><name><name>this</name>.<name>configOptions</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name>validateReplicationFactor</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+}</block></class>
+</unit>

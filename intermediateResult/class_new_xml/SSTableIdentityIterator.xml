@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\io\sstable\SSTableIdentityIterator.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>ICountableColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>MarshalException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IColumnSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>RandomAccessReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>BytesReadTracker</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>SSTableIdentityIterator</name> <super><implements>implements <name><name>Comparable</name><argument_list>&lt;<argument><name>SSTableIdentityIterator</name></argument>&gt;</argument_list></name>, <name>ICountableColumnIterator</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SSTableIdentityIterator</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>DecoratedKey</name></type> <name>key</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>DataInput</name></type> <name>input</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>dataStart</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>long</name></type> <name>dataSize</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>IColumnSerializer</name>.<name>Flag</name></name></type> <name>flag</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ColumnFamily</name></type> <name>columnFamily</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>columnCount</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>columnPosition</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>OnDiskAtom</name>.<name>Serializer</name></name></type> <name>atomSerializer</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Descriptor</name>.<name>Version</name></name></type> <name>dataVersion</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>BytesReadTracker</name></type> <name>inputWithTracker</name></decl>;</decl_stmt> <comment type="line">// tracks bytes read</comment>
+
+    <comment type="line">// Used by lazilyCompactedRow, so that we see the same things when deserializing the first and second time</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>expireBefore</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>validateColumns</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>filename</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Used to iterate through the columns of a row.
+     * @param sstable SSTable we are reading ffrom.
+     * @param file Reading using this file.
+     * @param key Key of this row.
+     * @param dataStart Data for this row starts at this pos.
+     * @param dataSize length of row data
+     * @throws IOException
+     */</comment>
+    <constructor><specifier>public</specifier> <name>SSTableIdentityIterator</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>RandomAccessReader</name></type> <name>file</name></decl></param>, <param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>long</name></type> <name>dataStart</name></decl></param>, <param><decl><type><name>long</name></type> <name>dataSize</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>file</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>dataStart</name></expr></argument>, <argument><expr><name>dataSize</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Used to iterate through the columns of a row.
+     * @param sstable SSTable we are reading ffrom.
+     * @param file Reading using this file.
+     * @param key Key of this row.
+     * @param dataStart Data for this row starts at this pos.
+     * @param dataSize length of row data
+     * @param checkData if true, do its best to deserialize and check the coherence of row data
+     */</comment>
+    <constructor><specifier>public</specifier> <name>SSTableIdentityIterator</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>RandomAccessReader</name></type> <name>file</name></decl></param>, <param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>long</name></type> <name>dataStart</name></decl></param>, <param><decl><type><name>long</name></type> <name>dataSize</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>checkData</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name><name>sstable</name>.<name>metadata</name></name></expr></argument>, <argument><expr><name>file</name></expr></argument>, <argument><expr><call><name><name>file</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>dataStart</name></expr></argument>, <argument><expr><name>dataSize</name></expr></argument>, <argument><expr><name>checkData</name></expr></argument>, <argument><expr><name>sstable</name></expr></argument>, <argument><expr><name><name>IColumnSerializer</name>.<name>Flag</name>.<name>LOCAL</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="line">// Must only be used against current file format</comment>
+    <constructor><specifier>public</specifier> <name>SSTableIdentityIterator</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>DataInput</name></type> <name>file</name></decl></param>, <param><decl><type><name>String</name></type> <name>filename</name></decl></param>, <param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>long</name></type> <name>dataStart</name></decl></param>, <param><decl><type><name>long</name></type> <name>dataSize</name></decl></param>, <param><decl><type><name><name>IColumnSerializer</name>.<name>Flag</name></name></type> <name>flag</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>file</name></expr></argument>, <argument><expr><name>filename</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>dataStart</name></expr></argument>, <argument><expr><name>dataSize</name></expr></argument>, <argument><expr>false</expr></argument>, <argument><expr>null</expr></argument>, <argument><expr><name>flag</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="line">// sstable may be null *if* checkData is false</comment>
+    <comment type="line">// If it is null, we assume the data is in the current file format</comment>
+    <constructor><specifier>private</specifier> <name>SSTableIdentityIterator</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>,
+                                    <param><decl><type><name>DataInput</name></type> <name>input</name></decl></param>,
+                                    <param><decl><type><name>String</name></type> <name>filename</name></decl></param>,
+                                    <param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>,
+                                    <param><decl><type><name>long</name></type> <name>dataStart</name></decl></param>,
+                                    <param><decl><type><name>long</name></type> <name>dataSize</name></decl></param>,
+                                    <param><decl><type><name>boolean</name></type> <name>checkData</name></decl></param>,
+                                    <param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>,
+                                    <param><decl><type><name><name>IColumnSerializer</name>.<name>Flag</name></name></type> <name>flag</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr>!<name>checkData</name> || (<name>sstable</name> != null)</expr>;</assert>
+        <expr_stmt><expr><name><name>this</name>.<name>input</name></name> = <name>input</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>filename</name></name> = <name>filename</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>inputWithTracker</name></name> = new <call><name>BytesReadTracker</name><argument_list>(<argument><expr><name>input</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>key</name></name> = <name>key</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>dataStart</name></name> = <name>dataStart</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>dataSize</name></name> = <name>dataSize</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>expireBefore</name></name> = <call>(<name>int</name>)<argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> / 1000</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>flag</name></name> = <name>flag</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>validateColumns</name></name> = <name>checkData</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>dataVersion</name></name> = <name>sstable</name> == null ? <name><name>Descriptor</name>.<name>Version</name>.<name>CURRENT</name></name> : <name><name>sstable</name>.<name>descriptor</name>.<name>version</name></name></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><name>input</name> instanceof <name>RandomAccessReader</name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>RandomAccessReader</name></type> <name>file</name> <init>= <expr>(<name>RandomAccessReader</name>) <name>input</name></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>file</name>.<name>seek</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>dataStart</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>dataStart</name> + <name>dataSize</name> &gt; <call><name><name>file</name>.<name>length</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"dataSize of %s starting at %s would be larger than file %s length %s"</expr></argument>,
+                                          <argument><expr><name>dataSize</name></expr></argument>, <argument><expr><name>dataStart</name></expr></argument>, <argument><expr><call><name><name>file</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>file</name>.<name>length</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                <if>if <condition>(<expr><name>checkData</name> &amp;&amp; !<name><name>sstable</name>.<name>descriptor</name>.<name>version</name>.<name>hasPromotedIndexes</name></name></expr>)</condition><then>
+                <block>{
+                    <try>try
+                    <block>{
+                        <expr_stmt><expr><call><name><name>IndexHelper</name>.<name>defreezeBloomFilter</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name>dataSize</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>version</name>.<name>filterType</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block>
+                    <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <if>if <condition>(<expr><name>e</name> instanceof <name>EOFException</name></expr>)</condition><then>
+                            <throw>throw <expr>(<name>EOFException</name>) <name>e</name></expr>;</throw></then></if>
+
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Invalid bloom filter in {}; will rebuild it"</expr></argument>, <argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></catch></try>
+
+                    <try>try
+                    <block>{
+                        <comment type="line">// deFreeze should have left the file position ready to deserialize index</comment>
+                        <expr_stmt><expr><call><name><name>IndexHelper</name>.<name>deserializeIndex</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block>
+                    <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Invalid row summary in {}; will rebuild it"</expr></argument>, <argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></catch></try>
+                    <expr_stmt><expr><call><name><name>file</name>.<name>seek</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>dataStart</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>inputWithTracker</name>.<name>reset</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></then></if>
+
+            <if>if <condition>(<expr><name>sstable</name> != null &amp;&amp; !<name><name>sstable</name>.<name>descriptor</name>.<name>version</name>.<name>hasPromotedIndexes</name></name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>IndexHelper</name>.<name>skipBloomFilter</name></name><argument_list>(<argument><expr><name>inputWithTracker</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>IndexHelper</name>.<name>skipIndex</name></name><argument_list>(<argument><expr><name>inputWithTracker</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+            <expr_stmt><expr><name>columnFamily</name> = <call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name>metadata</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>columnFamily</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>DeletionInfo</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserializeFromSSTable</name><argument_list>(<argument><expr><name>inputWithTracker</name></expr></argument>, <argument><expr><name>dataVersion</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>atomSerializer</name> = <call><name><name>columnFamily</name>.<name>getOnDiskSerializer</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>columnCount</name> = <call><name><name>inputWithTracker</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>columnPosition</name> = <name>dataStart</name> + <call><name><name>inputWithTracker</name>.<name>getBytesRead</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>sstable</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>sstable</name>.<name>markSuspect</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>filename</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>getKey</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>key</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getColumnFamily</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>columnFamily</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>inputWithTracker</name>.<name>getBytesRead</name></name><argument_list>()</argument_list></call> &lt; <name>dataSize</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>OnDiskAtom</name></type> <name>next</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>OnDiskAtom</name></type> <name>atom</name> <init>= <expr><call><name><name>atomSerializer</name>.<name>deserializeFromSSTable</name></name><argument_list>(<argument><expr><name>inputWithTracker</name></expr></argument>, <argument><expr><name>flag</name></expr></argument>, <argument><expr><name>expireBefore</name></expr></argument>, <argument><expr><name>dataVersion</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>validateColumns</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>atom</name>.<name>validateFields</name></name><argument_list>(<argument><expr><call><name><name>columnFamily</name>.<name>metadata</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <return>return <expr><name>atom</name></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>filename</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>me</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr><name>me</name></expr></argument>, <argument><expr><name>filename</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>()</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// creator is responsible for closing file when finished</comment>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getPath</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// if input is from file, then return that path, otherwise it's from streaming</comment>
+        <if>if <condition>(<expr><name>input</name> instanceof <name>RandomAccessReader</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>RandomAccessReader</name></type> <name>file</name> <init>= <expr>(<name>RandomAccessReader</name>) <name>input</name></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>file</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></then>
+        <else>else
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getColumnFamilyWithColumns</name><parameter_list>(<param><decl><type><name><name>ISortedColumns</name>.<name>Factory</name></name></type> <name>containerFactory</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><call><name><name>inputWithTracker</name>.<name>getBytesRead</name></name><argument_list>()</argument_list></call> == <call><name>headerSize</name><argument_list>()</argument_list></call></expr>;</assert>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>columnFamily</name>.<name>cloneMeShallow</name></name><argument_list>(<argument><expr><name>containerFactory</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// since we already read column count, just pass that value and continue deserialization</comment>
+        <expr_stmt><expr><call><name><name>columnFamily</name>.<name>serializer</name>.<name>deserializeColumnsFromSSTable</name></name><argument_list>(<argument><expr><name>inputWithTracker</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>columnCount</name></expr></argument>, <argument><expr><name>flag</name></expr></argument>, <argument><expr><name>expireBefore</name></expr></argument>, <argument><expr><name>dataVersion</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>validateColumns</name></expr>)</condition><then>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>cf</name>.<name>validateColumnFields</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Error validating row " + <name>key</name></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></then></if>
+        <return>return <expr><name>cf</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>long</name></type> <name>headerSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>columnPosition</name> - <name>dataStart</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>compareTo</name><parameter_list>(<param><decl><type><name>SSTableIdentityIterator</name></type> <name>o</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>key</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>o</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>reset</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!(<name>input</name> instanceof <name>RandomAccessReader</name>)</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>RandomAccessReader</name></type> <name>file</name> <init>= <expr>(<name>RandomAccessReader</name>) <name>input</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>file</name>.<name>seek</name></name><argument_list>(<argument><expr><name>columnPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>inputWithTracker</name>.<name>reset</name></name><argument_list>(<argument><expr><call><name>headerSize</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getColumnCount</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>columnCount</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

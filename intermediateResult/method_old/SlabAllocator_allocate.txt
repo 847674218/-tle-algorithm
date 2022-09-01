@@ -1,0 +1,28 @@
+public ByteBuffer allocate(int size)
+        {
+            while (true)
+            {
+                int oldOffset = nextFreeOffset.get();
+                if (oldOffset == UNINITIALIZED)
+                {
+                    // The region doesn't have its data allocated yet.
+                    // Since we found this in currentRegion, we know that whoever
+                    // CAS-ed it there is allocating it right now. So spin-loop
+                    // shouldn't spin long!
+                    Thread.yield();
+                    continue;
+                }
+
+                if (oldOffset + size > data.capacity()) // capacity == remaining
+                    return null;
+
+                // Try to atomically claim this region
+                if (nextFreeOffset.compareAndSet(oldOffset, oldOffset + size))
+                {
+                    // we got the alloc
+                    allocCount.incrementAndGet();
+                    return (ByteBuffer) data.duplicate().position(oldOffset).limit(oldOffset + size);
+                }
+                // we raced and lost alloc, try again
+            }
+        }

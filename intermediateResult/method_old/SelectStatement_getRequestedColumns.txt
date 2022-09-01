@@ -1,0 +1,51 @@
+private List<ByteBuffer> getRequestedColumns(List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        assert !isColumnRange();
+
+        ColumnNameBuilder builder = cfDef.getColumnNameBuilder();
+        for (Restriction r : columnRestrictions)
+        {
+            assert r != null && r.isEquality();
+            if (r.eqValues.size() > 1)
+            {
+                // We have a IN. We only support this for the last column, so just create all columns and return.
+                List<ByteBuffer> columns = new ArrayList<ByteBuffer>(r.eqValues.size());
+                Iterator<Term> iter = r.eqValues.iterator();
+                while (iter.hasNext())
+                {
+                    Term v = iter.next();
+                    ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
+                    ByteBuffer cname = b.add(v, Relation.Type.EQ, variables).build();
+                    columns.add(cname);
+                }
+                return columns;
+            }
+            else
+            {
+                builder.add(r.eqValues.get(0), Relation.Type.EQ, variables);
+            }
+        }
+
+        if (cfDef.isCompact)
+        {
+            return Collections.singletonList(builder.build());
+        }
+        else
+        {
+            // Adds all columns (even if the user selected a few columns, we
+            // need to query all columns to know if the row exists or not).
+            // Note that when we allow IS NOT NULL in queries and if all
+            // selected name are request 'not null', we will allow to only
+            // query those.
+            List<ByteBuffer> columns = new ArrayList<ByteBuffer>(cfDef.columns.size());
+            Iterator<ColumnIdentifier> iter = cfDef.metadata.keySet().iterator();
+            while (iter.hasNext())
+            {
+                ColumnIdentifier name = iter.next();
+                ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
+                ByteBuffer cname = b.add(name.key).build();
+                columns.add(cname);
+            }
+            return columns;
+        }
+    }

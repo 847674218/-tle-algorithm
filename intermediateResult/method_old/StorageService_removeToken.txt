@@ -1,0 +1,74 @@
+public void removeToken(String tokenString)
+    {
+        InetAddress myAddress = FBUtilities.getBroadcastAddress();
+        Token localToken = tokenMetadata_.getToken(myAddress);
+        Token token = getPartitioner().getTokenFactory().fromString(tokenString);
+        InetAddress endpoint = tokenMetadata_.getEndpoint(token);
+
+        if (endpoint == null)
+            throw new UnsupportedOperationException("Token not found.");
+
+        if (endpoint.equals(myAddress))
+             throw new UnsupportedOperationException("Cannot remove node's own token");
+
+        if (Gossiper.instance.getLiveMembers().contains(endpoint))
+            throw new UnsupportedOperationException("Node " + endpoint + " is alive and owns this token. Use decommission command to remove it from the ring");
+
+        // A leaving endpoint that is dead is already being removed.
+        if (tokenMetadata_.isLeaving(endpoint))
+            logger_.warn("Node " + endpoint + " is already being removed, continuing removal anyway");
+
+        if (!replicatingNodes.isEmpty())
+            throw new UnsupportedOperationException("This node is already processing a removal. Wait for it to complete, or use 'removetoken force' if this has failed.");
+
+        // Find the endpoints that are going to become responsible for data
+        for (String table : Schema.instance.getNonSystemTables())
+        {
+            // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
+            if (Table.open(table).getReplicationStrategy().getReplicationFactor() == 1)
+                continue;
+
+            // get all ranges that change ownership (that is, a node needs
+            // to take responsibility for new range)
+            Multimap<Range<Token>, InetAddress> changedRanges = getChangedRangesForLeaving(table, endpoint);
+            IFailureDetector failureDetector = FailureDetector.instance;
+            for (InetAddress ep : changedRanges.values())
+            {
+                if (failureDetector.isAlive(ep))
+                    replicatingNodes.add(ep);
+                else
+                    logger_.warn("Endpoint " + ep + " is down and will not receive data for re-replication of " + endpoint);
+            }
+        }
+        removingNode = endpoint;
+
+        tokenMetadata_.addLeavingEndpoint(endpoint);
+        PendingRangeCalculatorService.instance.update();
+        // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
+        // we add our own token so other nodes to let us know when they're done
+        Gossiper.instance.advertiseRemoving(endpoint, token, localToken);
+
+        // kick off streaming commands
+        restoreReplicaCount(endpoint, myAddress);
+
+        // wait for ReplicationFinishedVerbHandler to signal we're done
+        while (!replicatingNodes.isEmpty())
+        {
+            try
+            {
+                Thread.sleep(100);
+            }
+            catch (InterruptedException e)
+            {
+                throw new AssertionError(e);
+            }
+        }
+
+        excise(token, endpoint);
+
+        // gossiper will indicate the token has left
+        Gossiper.instance.advertiseTokenRemoved(endpoint, token);
+
+        replicatingNodes.clear();
+        removingNode = null;
+    }

@@ -1,0 +1,65 @@
+public long appendFromStream(DecoratedKey<?> key, CFMetaData metadata, long dataSize, DataInput in) throws IOException
+    {
+        long currentPosition = beforeAppend(key);
+        ByteBufferUtil.writeWithShortLength(key.key, dataFile.stream);
+        long dataStart = dataFile.getFilePointer();
+
+        // write row size
+        dataFile.stream.writeLong(dataSize);
+
+        // write BF
+        int bfSize = in.readInt();
+        dataFile.stream.writeInt(bfSize);
+        for (int i = 0; i < bfSize; i++)
+            dataFile.stream.writeByte(in.readByte());
+
+        // write index
+        int indexSize = in.readInt();
+        dataFile.stream.writeInt(indexSize);
+        for (int i = 0; i < indexSize; i++)
+            dataFile.stream.writeByte(in.readByte());
+
+        // cf data
+        dataFile.stream.writeInt(in.readInt());
+        dataFile.stream.writeLong(in.readLong());
+
+        // column size
+        int columnCount = in.readInt();
+        dataFile.stream.writeInt(columnCount);
+
+        // deserialize each column to obtain maxTimestamp and immediately serialize it.
+        long maxTimestamp = Long.MIN_VALUE;
+        ColumnFamily cf = ColumnFamily.create(metadata, ArrayBackedSortedColumns.factory());
+        for (int i = 0; i < columnCount; i++)
+        {
+            // deserialize column with PRESERVE_SIZE because we've written the dataSize based on the
+            // data size received, so we must reserialize the exact same data
+            IColumn column = cf.getColumnSerializer().deserialize(in, IColumnSerializer.Flag.PRESERVE_SIZE, Integer.MIN_VALUE);
+            if (column instanceof CounterColumn)
+            {
+                column = ((CounterColumn) column).markDeltaToBeCleared();
+            }
+            else if (column instanceof SuperColumn)
+            {
+                SuperColumn sc = (SuperColumn) column;
+                for (IColumn subColumn : sc.getSubColumns())
+                {
+                    if (subColumn instanceof CounterColumn)
+                    {
+                        IColumn marked = ((CounterColumn) subColumn).markDeltaToBeCleared();
+                        sc.replace(subColumn, marked);
+                    }
+                }
+            }
+            maxTimestamp = Math.max(maxTimestamp, column.maxTimestamp());
+            cf.getColumnSerializer().serialize(column, dataFile.stream);
+        }
+
+        assert dataSize == dataFile.getFilePointer() - (dataStart + 8)
+                : "incorrect row data size " + dataSize + " written to " + dataFile.getPath() + "; correct is " + (dataFile.getFilePointer() - (dataStart + 8));
+        sstableMetadataCollector.updateMaxTimestamp(maxTimestamp);
+        sstableMetadataCollector.addRowSize(dataFile.getFilePointer() - currentPosition);
+        sstableMetadataCollector.addColumnCount(columnCount);
+        afterAppend(key, currentPosition);
+        return currentPosition;
+    }

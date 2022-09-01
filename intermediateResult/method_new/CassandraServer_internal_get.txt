@@ -1,0 +1,29 @@
+private ColumnOrSuperColumn internal_get(ByteBuffer key, ColumnPath column_path, ConsistencyLevel consistency_level)
+    throws RequestValidationException, NotFoundException, UnavailableException, TimedOutException
+    {
+        ThriftClientState cState = state();
+        String keyspace = cState.getKeyspace();
+        cState.hasColumnFamilyAccess(keyspace, column_path.column_family, Permission.SELECT);
+
+        CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_path.column_family);
+        ThriftValidation.validateColumnPath(metadata, column_path);
+        org.apache.cassandra.db.ConsistencyLevel consistencyLevel = ThriftConversion.fromThrift(consistency_level);
+        consistencyLevel.validateForRead(keyspace);
+
+        QueryPath path = new QueryPath(column_path.column_family, column_path.column == null ? null : column_path.super_column);
+        List<ByteBuffer> nameAsList = Arrays.asList(column_path.column == null ? column_path.super_column : column_path.column);
+        ThriftValidation.validateKey(metadata, key);
+        ReadCommand command = new SliceByNamesReadCommand(keyspace, key, path, nameAsList);
+
+        Map<DecoratedKey, ColumnFamily> cfamilies = readColumnFamily(Arrays.asList(command), consistencyLevel);
+
+        ColumnFamily cf = cfamilies.get(StorageService.getPartitioner().decorateKey(command.key));
+
+        if (cf == null)
+            throw new NotFoundException();
+        List<ColumnOrSuperColumn> tcolumns = thriftifyColumnFamily(cf, command.queryPath.superColumnName != null, false);
+        if (tcolumns.isEmpty())
+            throw new NotFoundException();
+        assert tcolumns.size() == 1;
+        return tcolumns.get(0);
+    }

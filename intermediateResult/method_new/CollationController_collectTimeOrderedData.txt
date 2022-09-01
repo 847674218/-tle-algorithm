@@ -1,0 +1,129 @@
+private ColumnFamily collectTimeOrderedData()
+    {
+        logger.trace("collectTimeOrderedData");
+        ColumnFamily container = ColumnFamily.create(cfs.metadata, factory, filter.filter.isReversed());
+        List<OnDiskAtomIterator> iterators = new ArrayList<OnDiskAtomIterator>();
+        Tracing.trace("Acquiring sstable references");
+        ColumnFamilyStore.ViewFragment view = cfs.markReferenced(filter.key);
+
+        // We use a temporary CF object per memtable or sstable source so we can accomodate this.factory being ABSC,
+        // which requires addAtom to happen in sorted order.  Then we use addAll to merge into the final collection,
+        // which allows a (sorted) set of columns to be merged even if they are not uniformly sorted after the existing
+        // ones.
+        ColumnFamily temp = ColumnFamily.create(cfs.metadata, ArrayBackedSortedColumns.factory(), filter.filter.isReversed());
+
+        try
+        {
+            Tracing.trace("Merging memtable contents");
+            for (Memtable memtable : view.memtables)
+            {
+                OnDiskAtomIterator iter = filter.getMemtableColumnIterator(memtable);
+                if (iter != null)
+                {
+                    iterators.add(iter);
+                    temp.delete(iter.getColumnFamily());
+                    while (iter.hasNext())
+                        temp.addAtom(iter.next());
+                }
+
+                container.addAll(temp, HeapAllocator.instance);
+                temp.clear();
+            }
+
+            // avoid changing the filter columns of the original filter
+            // (reduceNameFilter removes columns that are known to be irrelevant)
+            NamesQueryFilter namesFilter = (NamesQueryFilter) filter.filter;
+            TreeSet<ByteBuffer> filterColumns = new TreeSet<ByteBuffer>(namesFilter.columns);
+            QueryFilter reducedFilter = new QueryFilter(filter.key, filter.path, namesFilter.withUpdatedColumns(filterColumns));
+
+            /* add the SSTables on disk */
+            Collections.sort(view.sstables, SSTable.maxTimestampComparator);
+
+            // read sorted sstables
+            long mostRecentRowTombstone = Long.MIN_VALUE;
+            for (SSTableReader sstable : view.sstables)
+            {
+                // if we've already seen a row tombstone with a timestamp greater
+                // than the most recent update to this sstable, we're done, since the rest of the sstables
+                // will also be older
+                if (sstable.getMaxTimestamp() < mostRecentRowTombstone)
+                    break;
+
+                long currentMaxTs = sstable.getMaxTimestamp();
+                reduceNameFilter(reducedFilter, container, currentMaxTs);
+                if (((NamesQueryFilter) reducedFilter.filter).columns.isEmpty())
+                    break;
+
+                OnDiskAtomIterator iter = reducedFilter.getSSTableColumnIterator(sstable);
+                iterators.add(iter);
+                if (iter.getColumnFamily() != null)
+                {
+                    ColumnFamily cf = iter.getColumnFamily();
+                    if (cf.isMarkedForDelete())
+                    {
+                        // track the most recent row level tombstone we encounter
+                        mostRecentRowTombstone = cf.deletionInfo().getTopLevelDeletion().markedForDeleteAt;
+                    }
+
+                    temp.delete(cf);
+                    sstablesIterated++;
+                    Tracing.trace("Merging data from sstable {}", sstable.descriptor.generation);
+                    while (iter.hasNext())
+                        temp.addAtom(iter.next());
+                }
+
+                container.addAll(temp, HeapAllocator.instance);
+                temp.clear();
+            }
+
+            // we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)
+            // and "there used to be data, but it's gone now" (we should cache the empty CF so we don't need to rebuild that slower)
+            if (iterators.isEmpty())
+                return null;
+
+            // do a final collate.  toCollate is boilerplate required to provide a CloseableIterator
+            final ColumnFamily c2 = container;
+            CloseableIterator<OnDiskAtom> toCollate = new SimpleAbstractColumnIterator()
+            {
+                final Iterator<IColumn> iter = c2.iterator();
+
+                protected OnDiskAtom computeNext()
+                {
+                    return iter.hasNext() ? iter.next() : endOfData();
+                }
+
+                public ColumnFamily getColumnFamily()
+                {
+                    return c2;
+                }
+
+                public DecoratedKey getKey()
+                {
+                    return filter.key;
+                }
+            };
+            ColumnFamily returnCF = container.cloneMeShallow();
+            Tracing.trace("Collating all results");
+            filter.collateOnDiskAtom(returnCF, Collections.singletonList(toCollate), gcBefore);
+
+            // "hoist up" the requested data into a more recent sstable
+            if (sstablesIterated > cfs.getMinimumCompactionThreshold()
+                && !cfs.isCompactionDisabled()
+                && cfs.getCompactionStrategy() instanceof SizeTieredCompactionStrategy)
+            {
+                Tracing.trace("Defragmenting requested data");
+                RowMutation rm = new RowMutation(cfs.table.name, new Row(filter.key, returnCF.cloneMe()));
+                // skipping commitlog and index updates is fine since we're just de-fragmenting existing data
+                Table.open(rm.getTable()).apply(rm, false, false);
+            }
+
+            // Caller is responsible for final removeDeletedCF.  This is important for cacheRow to work correctly:
+            return returnCF;
+        }
+        finally
+        {
+            for (OnDiskAtomIterator iter : iterators)
+                FileUtils.closeQuietly(iter);
+            SSTableReader.releaseReferences(view.sstables);
+        }
+    }

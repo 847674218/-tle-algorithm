@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\MeteredFlusher.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Comparator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>MeteredFlusher</name> <super><implements>implements <name>Runnable</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>MeteredFlusher</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// first, find how much memory non-active memtables are using</comment>
+        <decl_stmt><decl><type><name>Memtable</name></type> <name>activelyMeasuring</name> <init>= <expr><name><name>Memtable</name>.<name>activelyMeasuring</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>flushingBytes</name> <init>= <expr><name>activelyMeasuring</name> == null ? 0 : <call><name><name>activelyMeasuring</name>.<name>getLiveSize</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>flushingBytes</name> += <call><name>countFlushingBytes</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// next, flush CFs using more than 1 / (maximum number of memtables it could have in the pipeline)</comment>
+        <comment type="line">// of the total size allotted.  Then, flush other CFs in order of size if necessary.</comment>
+        <decl_stmt><decl><type><name>long</name></type> <name>liveBytes</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><call><name><name>ColumnFamilyStore</name>.<name>all</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><call><name><name>cfs</name>.<name>getTotalMemtableLiveSize</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>maxInFlight</name> <init>= <expr>(<name>int</name>) <call><name><name>Math</name>.<name>ceil</name></name><argument_list>(<argument><expr><call>(<name>double</name>) <argument_list>(<argument><expr>1 <comment type="line">// live memtable</comment>
+                                                            + 1 <comment type="line">// potentially a flushed memtable being counted by jamm</comment>
+                                                            + <call><name><name>DatabaseDescriptor</name>.<name>getFlushWriters</name></name><argument_list>()</argument_list></call>
+                                                            + <call><name><name>DatabaseDescriptor</name>.<name>getFlushQueueSize</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+                                                  / (1 + <call><name><name>cfs</name>.<name>indexManager</name>.<name>getIndexedColumns</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call>)</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>size</name> &gt; (<call><name><name>DatabaseDescriptor</name>.<name>getTotalMemtableSpaceInMB</name></name><argument_list>()</argument_list></call> * 1048576L - <name>flushingBytes</name>) / <name>maxInFlight</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"flushing high-traffic column family {} (estimated {} bytes)"</expr></argument>, <argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>cfs</name>.<name>forceFlush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><name>liveBytes</name> += <name>size</name></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></for>
+
+            <if>if <condition>(<expr><name>flushingBytes</name> + <name>liveBytes</name> &lt;= <call><name><name>DatabaseDescriptor</name>.<name>getTotalMemtableSpaceInMB</name></name><argument_list>()</argument_list></call> * 1048576L</expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"estimated {} bytes used by all memtables pre-flush"</expr></argument>, <argument><expr><name>liveBytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// sort memtables by size</comment>
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>sorted</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>Iterables</name>.<name>addAll</name></name><argument_list>(<argument><expr><name>sorted</name></expr></argument>, <argument><expr><call><name><name>ColumnFamilyStore</name>.<name>all</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>sorted</name></expr></argument>, <argument><expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+            <block>{
+                <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>o1</name></decl></param>, <param><decl><type><name>ColumnFamilyStore</name></type> <name>o2</name></decl></param>)</parameter_list>
+                <block>{
+                    <decl_stmt><decl><type><name>long</name></type> <name>size1</name> <init>= <expr><call><name><name>o1</name>.<name>getTotalMemtableLiveSize</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>long</name></type> <name>size2</name> <init>= <expr><call><name><name>o2</name>.<name>getTotalMemtableLiveSize</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>size1</name> &lt; <name>size2</name></expr>)</condition><then>
+                        <return>return <expr>-1</expr>;</return></then></if>
+                    <if>if <condition>(<expr><name>size1</name> &gt; <name>size2</name></expr>)</condition><then>
+                        <return>return <expr>1</expr>;</return></then></if>
+                    <return>return <expr>0</expr>;</return>
+                }</block></function>
+            }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// flush largest first until we get below our threshold.</comment>
+            <comment type="line">// although it looks like liveBytes + flushingBytes will stay a constant, it will not if flushes finish</comment>
+            <comment type="line">// while we loop, which is especially likely to happen if the flush queue fills up (so further forceFlush calls block)</comment>
+            <while>while <condition>(<expr>true</expr>)</condition>
+            <block>{
+                <expr_stmt><expr><name>flushingBytes</name> = <call><name>countFlushingBytes</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>liveBytes</name> + <name>flushingBytes</name> &lt;= <call><name><name>DatabaseDescriptor</name>.<name>getTotalMemtableSpaceInMB</name></name><argument_list>()</argument_list></call> * 1048576L || <call><name><name>sorted</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <break>break;</break></then></if>
+
+                <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>sorted</name>.<name>remove</name></name><argument_list>(<argument><expr><call><name><name>sorted</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><call><name><name>cfs</name>.<name>getTotalMemtableLiveSize</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"flushing {} to free up {} bytes"</expr></argument>, <argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>liveBytes</name> -= <name>size</name></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>cfs</name>.<name>forceFlush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></while>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"memtable memory usage is {} bytes with {} live"</expr></argument>, <argument><expr><name>liveBytes</name> + <name>flushingBytes</name></expr></argument>, <argument><expr><name>liveBytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>long</name></type> <name>countFlushingBytes</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>flushingBytes</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><call><name><name>ColumnFamilyStore</name>.<name>all</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <for>for (<init><decl><type><name>Memtable</name></type> <name>memtable</name> <range>: <expr><call><name><name>cfs</name>.<name>getMemtablesPendingFlush</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><name>flushingBytes</name> += <call><name><name>memtable</name>.<name>getLiveSize</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        }</block></for>
+        <return>return <expr><name>flushingBytes</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

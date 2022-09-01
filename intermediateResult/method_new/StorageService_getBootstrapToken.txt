@@ -1,0 +1,28 @@
+public Token getBootstrapToken()
+    {
+        Range<Token> range = getLocalPrimaryRange();
+
+        List<DecoratedKey> keys = keySamples(ColumnFamilyStore.allUserDefined(), range);
+
+        Token token;
+        if (keys.size() < 3)
+        {
+            token = getPartitioner().midpoint(range.left, range.right);
+            logger.debug("Used midpoint to assign token " + token);
+        }
+        else
+        {
+            token = keys.get(keys.size() / 2).token;
+            logger.debug("Used key sample of size " + keys.size() + " to assign token " + token);
+        }
+        if (tokenMetadata.getEndpoint(token) != null && tokenMetadata.isMember(tokenMetadata.getEndpoint(token)))
+            throw new RuntimeException("Chose token " + token + " which is already in use by " + tokenMetadata.getEndpoint(token) + " -- specify one manually with initial_token");
+        // Hack to prevent giving nodes tokens with DELIMITER_STR in them (which is fine in a row key/token)
+        if (token instanceof StringToken)
+        {
+            token = new StringToken(((String)token.token).replaceAll(VersionedValue.DELIMITER_STR, ""));
+            if (tokenMetadata.getNormalAndBootstrappingTokenToEndpointMap().containsKey(token))
+                throw new RuntimeException("Unable to compute unique token for new node -- specify one manually with initial_token");
+        }
+        return token;
+    }

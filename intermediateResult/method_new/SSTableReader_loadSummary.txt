@@ -1,0 +1,32 @@
+public static boolean loadSummary(SSTableReader reader, SegmentedFile.Builder ibuilder, SegmentedFile.Builder dbuilder)
+    {
+        File summariesFile = new File(reader.descriptor.filenameFor(Component.SUMMARY));
+        if (!summariesFile.exists())
+            return false;
+
+        DataInputStream iStream = null;
+        try
+        {
+            iStream = new DataInputStream(new FileInputStream(summariesFile));
+            reader.indexSummary = IndexSummary.serializer.deserialize(iStream, reader.partitioner);
+            reader.first = decodeKey(reader.partitioner, reader.descriptor, ByteBufferUtil.readWithLength(iStream));
+            reader.last = decodeKey(reader.partitioner, reader.descriptor, ByteBufferUtil.readWithLength(iStream));
+            ibuilder.deserializeBounds(iStream);
+            dbuilder.deserializeBounds(iStream);
+        }
+        catch (IOException e)
+        {
+            logger.debug("Cannot deserialize SSTable Summary: ", e);
+            // corrupted hence delete it and let it load it now.
+            if (summariesFile.exists())
+                summariesFile.delete();
+
+            return false;
+        }
+        finally
+        {
+            FileUtils.closeQuietly(iStream);
+        }
+
+        return true;
+    }

@@ -1,0 +1,87 @@
+public long appendFromStream(DecoratedKey key, CFMetaData metadata, long dataSize, DataInput in) throws IOException
+    {
+        long currentPosition = beforeAppend(key);
+        long dataStart;
+        try
+        {
+            ByteBufferUtil.writeWithShortLength(key.key, dataFile.stream);
+            dataStart = dataFile.getFilePointer();
+            // write row size
+            dataFile.stream.writeLong(dataSize);
+        }
+        catch (IOException e)
+        {
+            throw new FSWriteError(e, dataFile.getPath());
+        }
+
+        DeletionInfo deletionInfo = DeletionInfo.serializer().deserializeFromSSTable(in, descriptor.version);
+        int columnCount = in.readInt();
+
+        try
+        {
+            DeletionInfo.serializer().serializeForSSTable(deletionInfo, dataFile.stream);
+            dataFile.stream.writeInt(columnCount);
+        }
+        catch (IOException e)
+        {
+            throw new FSWriteError(e, dataFile.getPath());
+        }
+
+        // deserialize each column to obtain maxTimestamp and immediately serialize it.
+        long minTimestamp = Long.MAX_VALUE;
+        long maxTimestamp = Long.MIN_VALUE;
+        StreamingHistogram tombstones = new StreamingHistogram(TOMBSTONE_HISTOGRAM_BIN_SIZE);
+        ColumnFamily cf = ColumnFamily.create(metadata, ArrayBackedSortedColumns.factory());
+        cf.delete(deletionInfo);
+
+        ColumnIndex.Builder columnIndexer = new ColumnIndex.Builder(cf, key.key, columnCount, dataFile.stream);
+        OnDiskAtom.Serializer atomSerializer = cf.getOnDiskSerializer();
+        for (int i = 0; i < columnCount; i++)
+        {
+            // deserialize column with PRESERVE_SIZE because we've written the dataSize based on the
+            // data size received, so we must reserialize the exact same data
+            OnDiskAtom atom = atomSerializer.deserializeFromSSTable(in, IColumnSerializer.Flag.PRESERVE_SIZE, Integer.MIN_VALUE, Descriptor.Version.CURRENT);
+            if (atom instanceof CounterColumn)
+            {
+                atom = ((CounterColumn) atom).markDeltaToBeCleared();
+            }
+            else if (atom instanceof SuperColumn)
+            {
+                SuperColumn sc = (SuperColumn) atom;
+                for (IColumn subColumn : sc.getSubColumns())
+                {
+                    if (subColumn instanceof CounterColumn)
+                    {
+                        IColumn marked = ((CounterColumn) subColumn).markDeltaToBeCleared();
+                        sc.replace(subColumn, marked);
+                    }
+                }
+            }
+
+            int deletionTime = atom.getLocalDeletionTime();
+            if (deletionTime < Integer.MAX_VALUE)
+            {
+                tombstones.update(deletionTime);
+            }
+            minTimestamp = Math.min(minTimestamp, atom.minTimestamp());
+            maxTimestamp = Math.max(maxTimestamp, atom.maxTimestamp());
+            try
+            {
+                columnIndexer.add(atom); // This write the atom on disk too
+            }
+            catch (IOException e)
+            {
+                throw new FSWriteError(e, dataFile.getPath());
+            }
+        }
+
+        assert dataSize == dataFile.getFilePointer() - (dataStart + 8)
+                : "incorrect row data size " + dataSize + " written to " + dataFile.getPath() + "; correct is " + (dataFile.getFilePointer() - (dataStart + 8));
+        sstableMetadataCollector.updateMinTimestamp(minTimestamp);
+        sstableMetadataCollector.updateMaxTimestamp(maxTimestamp);
+        sstableMetadataCollector.addRowSize(dataFile.getFilePointer() - currentPosition);
+        sstableMetadataCollector.addColumnCount(columnCount);
+        sstableMetadataCollector.mergeTombstoneHistogram(tombstones);
+        afterAppend(key, currentPosition, deletionInfo, columnIndexer.build());
+        return currentPosition;
+    }

@@ -1,0 +1,50 @@
+public void serialize(RangeSliceCommand sliceCommand, DataOutput dos, int version) throws IOException
+    {
+        dos.writeUTF(sliceCommand.keyspace);
+        dos.writeUTF(sliceCommand.column_family);
+        ByteBuffer sc = sliceCommand.super_column;
+        dos.writeInt(sc == null ? 0 : sc.remaining());
+        if (sc != null)
+            ByteBufferUtil.write(sc, dos);
+
+        if (version < MessagingService.VERSION_12)
+        {
+            FBUtilities.serialize(new TSerializer(new TBinaryProtocol.Factory()), asSlicePredicate(sliceCommand.predicate), dos);
+        }
+        else
+        {
+            IDiskAtomFilter.Serializer.instance.serialize(sliceCommand.predicate, dos, version);
+        }
+
+        if (version >= MessagingService.VERSION_11)
+        {
+            if (sliceCommand.row_filter == null)
+            {
+                dos.writeInt(0);
+            }
+            else
+            {
+                dos.writeInt(sliceCommand.row_filter.size());
+                for (IndexExpression expr : sliceCommand.row_filter)
+                {
+                    if (version < MessagingService.VERSION_12)
+                    {
+                        FBUtilities.serialize(new TSerializer(new TBinaryProtocol.Factory()), expr, dos);
+                    }
+                    else
+                    {
+                        ByteBufferUtil.writeWithShortLength(expr.column_name, dos);
+                        dos.writeInt(expr.op.getValue());
+                        ByteBufferUtil.writeWithShortLength(expr.value, dos);
+                    }
+                }
+            }
+        }
+        AbstractBounds.serializer.serialize(sliceCommand.range, dos, version);
+        dos.writeInt(sliceCommand.maxResults);
+        if (version >= MessagingService.VERSION_11)
+        {
+            dos.writeBoolean(sliceCommand.countCQL3Rows);
+            dos.writeBoolean(sliceCommand.isPaging);
+        }
+    }

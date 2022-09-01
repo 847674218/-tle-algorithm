@@ -1,0 +1,632 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\service\PBSPredictor.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentHashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentLinkedQueue</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>LinkedBlockingQueue</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>MBeanServer</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>ObjectName</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Performs latency and consistency predictions as described in
+ * &lt;a href="http://arxiv.org/pdf/1204.6082.pdf"&gt;
+ * "Probabilistically Bounded Staleness for Practical Partial Quorums"&lt;/a&gt;
+ * by Bailis et al. in VLDB 2012. The predictions are of the form:
+ * &lt;p/&gt;
+ * &lt;i&gt;With ReplicationFactor &lt;tt&gt;N&lt;/tt&gt;, read consistency level of
+ * &lt;tt&gt;R&lt;/tt&gt;, and write consistency level &lt;tt&gt;W&lt;/tt&gt;, after
+ * &lt;tt&gt;t&lt;/tt&gt; seconds, &lt;tt&gt;p&lt;/tt&gt;% of reads will return a version
+ * within &lt;tt&gt;k&lt;/tt&gt; versions of the last written; this should result
+ * in a latency of &lt;tt&gt;L&lt;/tt&gt; ms.&lt;/i&gt;
+ * &lt;p/&gt;
+ * &lt;p/&gt;
+ * These predictions should be used as a rough guideline for system
+ * operators. This interface is exposed through nodetool.
+ * &lt;p/&gt;
+ * &lt;p/&gt;
+ * The class accomplishes this by measuring latencies for reads and
+ * writes, then using Monte Carlo simulation to predict behavior under
+ * a given N,R, and W based on those latencies.
+ * &lt;p/&gt;
+ * &lt;p/&gt;
+ * We capture four distributions:
+ * &lt;p/&gt;
+ * &lt;ul&gt;
+ * &lt;li&gt;
+ * &lt;tt&gt;W&lt;/tt&gt;: time from when the coordinator sends a mutation to the time
+ * that a replica begins to serve the new value(s)
+ * &lt;/li&gt;
+ * &lt;p/&gt;
+ * &lt;li&gt;
+ * &lt;tt&gt;A&lt;/tt&gt;: time from when a replica accepting a mutation sends an
+ * acknowledgment to the time the coordinator hears of it
+ * &lt;/li&gt;
+ * &lt;p/&gt;
+ * &lt;li&gt;
+ * &lt;tt&gt;R&lt;/tt&gt;: time from when the coordinator sends a read request to the time
+ * that the replica performs the read
+ * &lt;/li&gt;
+ * &lt;p/&gt;
+ * &lt;li&gt;
+ * &lt;tt&gt;S&lt;/tt&gt;: time from when the replica sends a read response to the time
+ * when the coordinator receives it
+ * &lt;/li&gt;
+ * &lt;/ul&gt;
+ * &lt;p/&gt;
+ * &lt;tt&gt;A&lt;/tt&gt; and &lt;tt&gt;S&lt;/tt&gt; are mostly network-bound, while W and R
+ * depend on both the network and local processing time.
+ * &lt;p/&gt;
+ * &lt;p/&gt;
+ * &lt;b&gt;Caveats:&lt;/b&gt;
+ * Prediction is only as good as the latencies collected. Accurate
+ * prediction requires synchronizing clocks between replicas.  We
+ * collect a running sample of latencies, but, if latencies change
+ * dramatically, predictions will be off.
+ * &lt;p/&gt;
+ * &lt;p/&gt;
+ * The predictions are conservative, or worst-case, meaning we may
+ * predict more staleness than in practice in the following ways:
+ * &lt;ul&gt;
+ * &lt;li&gt;
+ * We do not account for read repair.
+ * &lt;/li&gt;
+ * &lt;li&gt;
+ * We do not account for Merkle tree exchange.
+ * &lt;/li&gt;
+ * &lt;li&gt;
+ * Multi-version staleness is particularly conservative.
+ * &lt;/li&gt;
+ * &lt;li&gt;
+ * We simulate non-local reads and writes. We assume that the
+ * coordinating Cassandra node is not itself a replica for a given key.
+ * &lt;/li&gt;
+ * &lt;/ul&gt;
+ * &lt;p/&gt;
+ * &lt;p/&gt;
+ * The predictions are optimistic in the following ways:
+ * &lt;ul&gt;
+ * &lt;li&gt;
+ * We do not predict the impact of node failure.
+ * &lt;/li&gt;
+ * &lt;li&gt;
+ * We do not model hinted handoff.
+ * &lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * @see org.apache.cassandra.thrift.ConsistencyLevel
+ * @see org.apache.cassandra.locator.AbstractReplicationStrategy
+ */</comment>
+
+<class><specifier>public</specifier> class <name>PBSPredictor</name> <super><implements>implements <name>PBSPredictorMBean</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>PBSPredictor</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>MBEAN_NAME</name> <init>= <expr>"org.apache.cassandra.service:type=PBSPredictor"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>DEFAULT_DO_LOG_LATENCIES</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>DEFAULT_MAX_LOGGED_LATENCIES</name> <init>= <expr>10000</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>DEFAULT_NUMBER_TRIALS_PREDICTION</name> <init>= <expr>10000</expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/*
+     * We record a fixed size set of WARS latencies for read and
+     * mutation operations.  We store the order in which each
+     * operation arrived, and use an LRU policy to evict old
+     * messages.
+     *
+     * This information is stored as a mapping from messageIDs to
+     * latencies.
+     */</comment>
+
+    <comment type="block">/*
+     * Helper class which minimizes the number of HashMaps we maintain.
+     * For a given messageId, this class maintains the startTime of the message,
+     * and a queue for send times and reply times.
+     *
+     * sendLats corresponds to W and R, while replyLats is used for A and S.
+     */</comment>
+    <class><specifier>private</specifier> class <name>MessageLatencyCollection</name>
+    <block>{
+        <constructor><name>MessageLatencyCollection</name><parameter_list>(<param><decl><type><name>Long</name></type> <name>startTime</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>startTime</name></name> = <name>startTime</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>sendLats</name></name> = new <call><name><name>ConcurrentLinkedQueue</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>replyLats</name></name> = new <call><name><name>ConcurrentLinkedQueue</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><name>void</name></type> <name>addSendLat</name><parameter_list>(<param><decl><type><name>Long</name></type> <name>sendLat</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>sendLats</name>.<name>add</name></name><argument_list>(<argument><expr><name>sendLat</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><name>void</name></type> <name>addReplyLat</name><parameter_list>(<param><decl><type><name>Long</name></type> <name>replyLat</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>replyLats</name>.<name>add</name></name><argument_list>(<argument><expr><name>replyLat</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>getSendLats</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>sendLats</name></expr>;</return>
+        }</block></function>
+
+        <function><type><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>getReplyLats</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>replyLats</name></expr>;</return>
+        }</block></function>
+
+        <function><type><name>Long</name></type> <name>getStartTime</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>startTime</name></expr>;</return>
+        }</block></function>
+
+        <decl_stmt><decl><type><name>Long</name></type> <name>startTime</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>sendLats</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>replyLats</name></decl>;</decl_stmt>
+    }</block></class>
+
+    <comment type="line">// used for LRU replacement</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Queue</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>writeMessageIds</name> <init>= <expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Queue</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>readMessageIds</name> <init>= <expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>MessageLatencyCollection</name></argument>&gt;</argument_list></name></type> <name>messageIdToWriteLats</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>MessageLatencyCollection</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>MessageLatencyCollection</name></argument>&gt;</argument_list></name></type> <name>messageIdToReadLats</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>MessageLatencyCollection</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>Random</name></type> <name>random</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>initialized</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>logLatencies</name> <init>= <expr><name>DEFAULT_DO_LOG_LATENCIES</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>maxLoggedLatencies</name> <init>= <expr><name>DEFAULT_MAX_LOGGED_LATENCIES</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>numberTrialsPrediction</name> <init>= <expr><name>DEFAULT_NUMBER_TRIALS_PREDICTION</name></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>PBSPredictor</name></type> <name>instance</name> <init>= <expr>new <call><name>PBSPredictor</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>PBSPredictor</name></type> <name>instance</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>instance</name></expr>;</return>
+    }</block></function>
+
+    <constructor><specifier>private</specifier> <name>PBSPredictor</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>init</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>enableConsistencyPredictionLogging</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>logLatencies</name> = true</expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>disableConsistencyPredictionLogging</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>logLatencies</name> = false</expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isLoggingEnabled</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>logLatencies</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setMaxLoggedLatenciesForConsistencyPrediction</name><parameter_list>(<param><decl><type><name>int</name></type> <name>maxLogged</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>maxLoggedLatencies</name> = <name>maxLogged</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setNumberTrialsForConsistencyPrediction</name><parameter_list>(<param><decl><type><name>int</name></type> <name>numTrials</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>numberTrialsPrediction</name> = <name>numTrials</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>init</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>initialized</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>random</name> = new <call><name>Random</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>MBeanServer</name></type> <name>mbs</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>mbs</name>.<name>registerMBean</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>PBSPredictor</name>.<name>MBEAN_NAME</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+            <expr_stmt><expr><name>initialized</name> = true</expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+
+    <comment type="line">// used for random sampling from the latencies</comment>
+    <function><type><specifier>private</specifier> <name>long</name></type> <name>getRandomElement</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>list</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>list</name>.<name>size</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Not enough data for prediction"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr><call><name><name>list</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>random</name>.<name>nextInt</name></name><argument_list>(<argument><expr><call><name><name>list</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// used for calculating the average latency of a read or write operation</comment>
+    <comment type="line">// given a set of simulated latencies</comment>
+    <function><type><specifier>private</specifier> <name>float</name></type> <name>listAverage</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>list</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>accum</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>long</name></type> <name>value</name> <range>: <expr><name>list</name></expr></range></decl></init>)
+            <expr_stmt><expr><name>accum</name> += <name>value</name></expr>;</expr_stmt></for>
+        <return>return <expr>(<name>float</name>) <name>accum</name> / <call><name><name>list</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// calculate the percentile entry of a list</comment>
+    <function><type><specifier>private</specifier> <name>long</name></type> <name>getPercentile</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>list</name></decl></param>, <param><decl><type><name>float</name></type> <name>percentile</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>list</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>list</name>.<name>get</name></name><argument_list>(<argument><expr><call>(<name>int</name>) <argument_list>(<argument><expr><call><name><name>list</name>.<name>size</name></name><argument_list>()</argument_list></call> * <name>percentile</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     * For our trials, sample the latency for the (replicaNumber)th
+     * reply for one of WARS
+     * if replicaNumber &gt; the number of replicas we have data for
+     *   (say we have data for ReplicationFactor 2 but ask for N=3)
+     * then we randomly sample from all response times
+     */</comment>
+    <function><type><specifier>private</specifier> <name>long</name></type> <name>getRandomLatencySample</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>samples</name></decl></param>, <param><decl><type><name>int</name></type> <name>replicaNumber</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>samples</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>replicaNumber</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <return>return <expr><call><name>getRandomElement</name><argument_list>(<argument><expr><call><name><name>samples</name>.<name>get</name></name><argument_list>(<argument><expr><name>replicaNumber</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then></if>
+
+        <return>return <expr><call><name>getRandomElement</name><argument_list>(<argument><expr><call><name><name>samples</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>samples</name>.<name>keySet</name></name><argument_list>()</argument_list></call>.<call><name>toArray</name><argument_list>()</argument_list></call><index>[<expr><call><name><name>random</name>.<name>nextInt</name></name><argument_list>(<argument><expr><call><name><name>samples</name>.<name>keySet</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>]</index></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     *  To perform the prediction, we randomly sample from the
+     *  collected WARS latencies, simulating writes followed by reads
+     *  exactly t milliseconds afterwards. We count the number of
+     *  reordered reads and writes to calculate the probability of
+     *  staleness along with recording operation latencies.
+     */</comment>
+
+
+    <function><type><specifier>public</specifier> <name>PBSPredictionResult</name></type> <name>doPrediction</name><parameter_list>(<param><decl><type><name>int</name></type> <name>n</name></decl></param>,
+                                            <param><decl><type><name>int</name></type> <name>r</name></decl></param>,
+                                            <param><decl><type><name>int</name></type> <name>w</name></decl></param>,
+                                            <param><decl><type><name>float</name></type> <name>timeSinceWrite</name></decl></param>,
+                                            <param><decl><type><name>int</name></type> <name>numberVersionsStale</name></decl></param>,
+                                            <param><decl><type><name>float</name></type> <name>percentileLatency</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>r</name> &gt; <name>n</name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"r must be less than n"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><name>r</name> &lt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"r must be positive"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><name>w</name> &gt; <name>n</name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"w must be less than n"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><name>w</name> &lt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"w must be positive"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><name><name>percentileLatency</name> <argument_list>&lt; <argument>0 || <name>percentileLatency</name></argument> &gt;</argument_list></name> 1</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"percentileLatency must be between 0 and 1 inclusive"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><name>numberVersionsStale</name> &lt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"numberVersionsStale must be positive"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr>!<name>logLatencies</name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"Latency logging is not enabled"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <comment type="line">// get a mapping of {replica number : latency} for each of WARS</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>wLatencies</name> <init>= <expr><call><name>getOrderedWLatencies</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>aLatencies</name> <init>= <expr><call><name>getOrderedALatencies</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>rLatencies</name> <init>= <expr><call><name>getOrderedRLatencies</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>sLatencies</name> <init>= <expr><call><name>getOrderedSLatencies</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>wLatencies</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> || <call><name><name>aLatencies</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"No write latencies have been recorded so far. Run some (non-local) inserts."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr><call><name><name>rLatencies</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> || <call><name><name>sLatencies</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"No read latencies have been recorded so far. Run some (non-local) reads."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <comment type="line">// storage for simulated read and write latencies</comment>
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>readLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>writeLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>consistentReads</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// storage for latencies for each replica for a given Monte Carlo trial</comment>
+        <comment type="line">// arr[i] will hold the ith replica's latency for one of WARS</comment>
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>trialWLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>trialRLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>replicaWriteLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>replicaReadLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">//run repeated trials and observe staleness</comment>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>numberTrialsPrediction</name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+        <block>{
+            <comment type="line">//simulate sending a write to N replicas then sending a</comment>
+            <comment type="line">//read to N replicas and record the latencies by randomly</comment>
+            <comment type="line">//sampling from gathered latencies</comment>
+            <for>for (<init><decl><type><name>int</name></type> <name>replicaNo</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>replicaNo</name> &lt; <name>n</name></expr>;</condition> <incr><expr>++<name>replicaNo</name></expr></incr>)
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>trialWLatency</name> <init>= <expr><call><name>getRandomLatencySample</name><argument_list>(<argument><expr><name>wLatencies</name></expr></argument>, <argument><expr><name>replicaNo</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>trialALatency</name> <init>= <expr><call><name>getRandomLatencySample</name><argument_list>(<argument><expr><name>aLatencies</name></expr></argument>, <argument><expr><name>replicaNo</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <expr_stmt><expr><call><name><name>trialWLatencies</name>.<name>add</name></name><argument_list>(<argument><expr><name>trialWLatency</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <expr_stmt><expr><call><name><name>replicaWriteLatencies</name>.<name>add</name></name><argument_list>(<argument><expr><name>trialWLatency</name> + <name>trialALatency</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+
+            <comment type="line">// reads are only sent to R replicas - so pick R random read and</comment>
+            <comment type="line">// response latencies</comment>
+            <for>for (<init><decl><type><name>int</name></type> <name>replicaNo</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>replicaNo</name> &lt; <name>r</name></expr>;</condition> <incr><expr>++<name>replicaNo</name></expr></incr>)
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>trialRLatency</name> <init>= <expr><call><name>getRandomLatencySample</name><argument_list>(<argument><expr><name>rLatencies</name></expr></argument>, <argument><expr><name>replicaNo</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>trialSLatency</name> <init>= <expr><call><name>getRandomLatencySample</name><argument_list>(<argument><expr><name>sLatencies</name></expr></argument>, <argument><expr><name>replicaNo</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <expr_stmt><expr><call><name><name>trialRLatencies</name>.<name>add</name></name><argument_list>(<argument><expr><name>trialRLatency</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <expr_stmt><expr><call><name><name>replicaReadLatencies</name>.<name>add</name></name><argument_list>(<argument><expr><name>trialRLatency</name> + <name>trialSLatency</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+
+            <comment type="line">// the write latency for this trial is the time it takes</comment>
+            <comment type="line">// for the wth replica to respond (W+A)</comment>
+            <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>replicaWriteLatencies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>writeLatency</name> <init>= <expr><call><name><name>replicaWriteLatencies</name>.<name>get</name></name><argument_list>(<argument><expr><name>w</name> - 1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>writeLatencies</name>.<name>add</name></name><argument_list>(<argument><expr><name>writeLatency</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>sortedReplicaReadLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>replicaReadLatencies</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>sortedReplicaReadLatencies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// the read latency for this trial is the time it takes</comment>
+            <comment type="line">// for the rth replica to respond (R+S)</comment>
+            <expr_stmt><expr><call><name><name>readLatencies</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>sortedReplicaReadLatencies</name>.<name>get</name></name><argument_list>(<argument><expr><name>r</name> - 1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// were all of the read responses reordered?</comment>
+
+            <comment type="line">// for each of the first r messages (the ones the</comment>
+            <comment type="line">// coordinator will pick from):</comment>
+            <comment type="line">//--if the read message came in after this replica saw the</comment>
+            <comment type="line">// write, it will be consistent</comment>
+            <comment type="line">//--each read request is sent at time</comment>
+            <comment type="line">// writeLatency+timeSinceWrite</comment>
+
+            <for>for (<init><decl><type><name>int</name></type> <name>responseNumber</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>responseNumber</name> &lt; <name>r</name></expr>;</condition> <incr><expr>++<name>responseNumber</name></expr></incr>)
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>replicaNumber</name> <init>= <expr><call><name><name>replicaReadLatencies</name>.<name>indexOf</name></name><argument_list>(<argument><expr><call><name><name>sortedReplicaReadLatencies</name>.<name>get</name></name><argument_list>(<argument><expr><name>responseNumber</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><name>writeLatency</name> + <name>timeSinceWrite</name> + <call><name><name>trialRLatencies</name>.<name>get</name></name><argument_list>(<argument><expr><name>replicaNumber</name></expr></argument>)</argument_list></call> &gt;=
+                    <call><name><name>trialWLatencies</name>.<name>get</name></name><argument_list>(<argument><expr><name>replicaNumber</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>consistentReads</name>++</expr>;</expr_stmt>
+                    <break>break;</break>
+                }</block></then></if>
+
+                <comment type="line">// tombstone this replica in the case that we have</comment>
+                <comment type="line">// duplicate read latencies</comment>
+                <expr_stmt><expr><call><name><name>replicaReadLatencies</name>.<name>set</name></name><argument_list>(<argument><expr><name>replicaNumber</name></expr></argument>, <argument><expr>-1L</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+
+            <comment type="line">// clear storage for the next trial</comment>
+            <expr_stmt><expr><call><name><name>trialWLatencies</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>trialRLatencies</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>replicaReadLatencies</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>replicaWriteLatencies</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <decl_stmt><decl><type><name>float</name></type> <name>oneVersionConsistencyProbability</name> <init>= <expr>(<name>float</name>) <name>consistentReads</name> / <name>numberTrialsPrediction</name></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// to calculate multi-version staleness, we exponentiate the staleness probability by the number of versions</comment>
+        <decl_stmt><decl><type><name>float</name></type> <name>consistencyProbability</name> <init>= <expr><call>(<name>float</name>) <argument_list>(<argument><expr>1 - <call><name><name>Math</name>.<name>pow</name></name><argument_list>(<argument><expr><call>(<name>double</name>) <argument_list>(<argument><expr>1 - <name>oneVersionConsistencyProbability</name></expr></argument>)</argument_list></call></expr></argument>,
+                                                             <argument><expr><name>numberVersionsStale</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>float</name></type> <name>averageWriteLatency</name> <init>= <expr><call><name>listAverage</name><argument_list>(<argument><expr><name>writeLatencies</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>float</name></type> <name>averageReadLatency</name> <init>= <expr><call><name>listAverage</name><argument_list>(<argument><expr><name>readLatencies</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>percentileWriteLatency</name> <init>= <expr><call><name>getPercentile</name><argument_list>(<argument><expr><name>writeLatencies</name></expr></argument>, <argument><expr><name>percentileLatency</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>percentileReadLatency</name> <init>= <expr><call><name>getPercentile</name><argument_list>(<argument><expr><name>readLatencies</name></expr></argument>, <argument><expr><name>percentileLatency</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <return>return <expr>new <call><name>PBSPredictionResult</name><argument_list>(<argument><expr><name>n</name></expr></argument>,
+                                       <argument><expr><name>r</name></expr></argument>,
+                                       <argument><expr><name>w</name></expr></argument>,
+                                       <argument><expr><name>timeSinceWrite</name></expr></argument>,
+                                       <argument><expr><name>numberVersionsStale</name></expr></argument>,
+                                       <argument><expr><name>consistencyProbability</name></expr></argument>,
+                                       <argument><expr><name>averageReadLatency</name></expr></argument>,
+                                       <argument><expr><name>averageWriteLatency</name></expr></argument>,
+                                       <argument><expr><name>percentileReadLatency</name></expr></argument>,
+                                       <argument><expr><name>percentileLatency</name></expr></argument>,
+                                       <argument><expr><name>percentileWriteLatency</name></expr></argument>,
+                                       <argument><expr><name>percentileLatency</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>startWriteOperation</name><parameter_list>(<param><decl><type><name>String</name></type> <name>id</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>logLatencies</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name>startWriteOperation</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>startWriteOperation</name><parameter_list>(<param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>startTime</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>logLatencies</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <assert>assert <expr>(!<call><name><name>messageIdToWriteLats</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call>)</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>writeMessageIds</name>.<name>add</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// LRU replacement of latencies</comment>
+        <comment type="line">// the maximum number of entries is sloppy, but that's acceptable for our purposes</comment>
+        <if>if <condition>(<expr><call><name><name>writeMessageIds</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; <name>maxLoggedLatencies</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>toEvict</name> <init>= <expr><call><name><name>writeMessageIds</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>messageIdToWriteLats</name>.<name>remove</name></name><argument_list>(<argument><expr><name>toEvict</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>messageIdToWriteLats</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr>new <call><name>MessageLatencyCollection</name><argument_list>(<argument><expr><name>startTime</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>startReadOperation</name><parameter_list>(<param><decl><type><name>String</name></type> <name>id</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>logLatencies</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name>startReadOperation</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>startReadOperation</name><parameter_list>(<param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>startTime</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>logLatencies</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <assert>assert <expr>(!<call><name><name>messageIdToReadLats</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call>)</expr>;</assert>
+        <expr_stmt><expr><call><name><name>readMessageIds</name>.<name>add</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// LRU replacement of latencies</comment>
+        <comment type="line">// the maximum number of entries is sloppy, but that's acceptable for our purposes</comment>
+        <if>if <condition>(<expr><call><name><name>readMessageIds</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; <name>maxLoggedLatencies</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>toEvict</name> <init>= <expr><call><name><name>readMessageIds</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>messageIdToReadLats</name>.<name>remove</name></name><argument_list>(<argument><expr><name>toEvict</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>messageIdToReadLats</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr>new <call><name>MessageLatencyCollection</name><argument_list>(<argument><expr><name>startTime</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>logWriteResponse</name><parameter_list>(<param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>constructionTime</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>logLatencies</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name>logWriteResponse</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>constructionTime</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>logWriteResponse</name><parameter_list>(<param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>responseCreationTime</name></decl></param>, <param><decl><type><name>long</name></type> <name>receivedTime</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>logLatencies</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>MessageLatencyCollection</name></type> <name>writeLatsCollection</name> <init>= <expr><call><name><name>messageIdToWriteLats</name>.<name>get</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>writeLatsCollection</name> == null</expr>)</condition><then>
+        <block>{
+            <return>return;</return>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>Long</name></type> <name>startTime</name> <init>= <expr><call><name><name>writeLatsCollection</name>.<name>getStartTime</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>writeLatsCollection</name>.<name>addSendLat</name></name><argument_list>(<argument><expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><name>responseCreationTime</name> - <name>startTime</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>writeLatsCollection</name>.<name>addReplyLat</name></name><argument_list>(<argument><expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><name>receivedTime</name> - <name>responseCreationTime</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>logReadResponse</name><parameter_list>(<param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>constructionTime</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>logLatencies</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name>logReadResponse</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>constructionTime</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>logReadResponse</name><parameter_list>(<param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>responseCreationTime</name></decl></param>, <param><decl><type><name>long</name></type> <name>receivedTime</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>logLatencies</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>MessageLatencyCollection</name></type> <name>readLatsCollection</name> <init>= <expr><call><name><name>messageIdToReadLats</name>.<name>get</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>readLatsCollection</name> == null</expr>)</condition><then>
+        <block>{
+            <return>return;</return>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>Long</name></type> <name>startTime</name> <init>= <expr><call><name><name>readLatsCollection</name>.<name>getStartTime</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>readLatsCollection</name>.<name>addSendLat</name></name><argument_list>(<argument><expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><name>responseCreationTime</name> - <name>startTime</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>readLatsCollection</name>.<name>addReplyLat</name></name><argument_list>(<argument><expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><name>receivedTime</name> - <name>responseCreationTime</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getOrderedWLatencies</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>allWLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>MessageLatencyCollection</name></type> <name>wlc</name> <range>: <expr><call><name><name>messageIdToWriteLats</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>allWLatencies</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>wlc</name>.<name>getSendLats</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <return>return <expr><call><name>getOrderedLatencies</name><argument_list>(<argument><expr><name>allWLatencies</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getOrderedALatencies</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>allALatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>MessageLatencyCollection</name></type> <name>wlc</name> <range>: <expr><call><name><name>messageIdToWriteLats</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>allALatencies</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>wlc</name>.<name>getReplyLats</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><call><name>getOrderedLatencies</name><argument_list>(<argument><expr><name>allALatencies</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getOrderedRLatencies</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>allRLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>MessageLatencyCollection</name></type> <name>rlc</name> <range>: <expr><call><name><name>messageIdToReadLats</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>allRLatencies</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>rlc</name>.<name>getSendLats</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><call><name>getOrderedLatencies</name><argument_list>(<argument><expr><name>allRLatencies</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getOrderedSLatencies</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>allSLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>MessageLatencyCollection</name></type> <name>rlc</name> <range>: <expr><call><name><name>messageIdToReadLats</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>allSLatencies</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>rlc</name>.<name>getReplyLats</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><call><name>getOrderedLatencies</name><argument_list>(<argument><expr><name>allSLatencies</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// Return the collected latencies indexed by response number instead of by messageID</comment>
+    <function><type><specifier>private</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getOrderedLatencies</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>latencyLists</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ret</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// N may vary</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>maxResponses</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>latencies</name> <range>: <expr><name>latencyLists</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>sortedLatencies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>latencies</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>sortedLatencies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><call><name><name>sortedLatencies</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; <name>maxResponses</name></expr>)</condition><then>
+            <block>{
+                <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name>maxResponses</name> + 1</expr></init></decl>;</init> <condition><expr><name>i</name> &lt;= <call><name><name>sortedLatencies</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+                <block>{
+                    <expr_stmt><expr><call><name><name>ret</name>.<name>put</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>, <argument><expr>new <call><name><name>Vector</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+
+                <expr_stmt><expr><name>maxResponses</name> = <call><name><name>sortedLatencies</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <comment type="line">// indexing by 0 is awkward since we're talking about the ith response</comment>
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>1</expr></init></decl>;</init> <condition><expr><name>i</name> &lt;= <call><name><name>sortedLatencies</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+            <block>{
+                <expr_stmt><expr><call><name><name>ret</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><call><name><name>sortedLatencies</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name> - 1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></for>
+
+        <return>return <expr><name>ret</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

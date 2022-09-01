@@ -1,0 +1,591 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\Table.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOError</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collection</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Comparator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Iterator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>SortedSet</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>TreeSet</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentHashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutionException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Future</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>locks</name>.<name>ReentrantReadWriteLock</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>commitlog</name>.<name>CommitLog</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryPath</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>AbstractReplicationStrategy</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>NodeId</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Function</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * It represents a Keyspace.
+ */</comment>
+<class><specifier>public</specifier> class <name>Table</name>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>SYSTEM_TABLE</name> <init>= <expr>"system"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * accesses to CFS.memtable should acquire this for thread safety.
+     * CFS.maybeSwitchMemtable should aquire the writeLock; see that method for the full explanation.
+     *
+     * (Enabling fairness in the RRWL is observed to decrease throughput, so we leave it off.)
+     */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>ReentrantReadWriteLock</name></type> <name>switchLock</name> <init>= <expr>new <call><name>ReentrantReadWriteLock</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// It is possible to call Table.open without a running daemon, so it makes sense to ensure</comment>
+    <comment type="line">// proper directories here as well as in CassandraDaemon.</comment>
+    <expr_stmt><expr>static
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>createAllDirectories</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt/></block></try></block></then></if>}</block></expr></expr_stmt>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>ex</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>ex</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+        }</block></class>
+    }
+
+    <comment type="block">/* Table name. */</comment>
+    public <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>name</name></decl>;</decl_stmt>
+    <comment type="block">/* ColumnFamilyStore per column family */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>columnFamilyStores</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Object</name><index>[]</index></type> <name>indexLocks</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>AbstractReplicationStrategy</name></type> <name>replicationStrategy</name></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Table</name></type> <name>open</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>open</name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name><name>Schema</name>.<name>instance</name></name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Table</name></type> <name>openWithoutSSTables</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>open</name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name><name>Schema</name>.<name>instance</name></name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>Table</name></type> <name>open</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name>Schema</name></type> <name>schema</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>loadSSTables</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Table</name></type> <name>tableInstance</name> <init>= <expr><call><name><name>schema</name>.<name>getTableInstance</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>tableInstance</name> == null</expr>)</condition><then>
+        <block>{
+            <comment type="line">// instantiate the Table.  we could use putIfAbsent but it's important to making sure it is only done once</comment>
+            <comment type="line">// per keyspace, so we synchronize and re-check before doing it.</comment>
+            <synchronized>synchronized (<expr><name><name>Table</name>.<name>class</name></name></expr>)
+            <block>{
+                <expr_stmt><expr><name>tableInstance</name> = <call><name><name>schema</name>.<name>getTableInstance</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>tableInstance</name> == null</expr>)</condition><then>
+                <block>{
+                    <comment type="line">// open and store the table</comment>
+                    <expr_stmt><expr><name>tableInstance</name> = new <call><name>Table</name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>loadSSTables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>schema</name>.<name>storeTableInstance</name></name><argument_list>(<argument><expr><name>tableInstance</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                    <comment type="line">// table has to be constructed and in the cache before cacheRow can be called</comment>
+                    <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><call><name><name>tableInstance</name>.<name>getColumnFamilyStores</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                        <expr_stmt><expr><call><name><name>cfs</name>.<name>initRowCache</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+                }</block></then></if>
+            }</block></synchronized>
+        }</block></then></if>
+        <return>return <expr><name>tableInstance</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Table</name></type> <name>clear</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>clear</name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name><name>Schema</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Table</name></type> <name>clear</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name>Schema</name></type> <name>schema</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <synchronized>synchronized (<expr><name><name>Table</name>.<name>class</name></name></expr>)
+        <block>{
+            <decl_stmt><decl><type><name>Table</name></type> <name>t</name> <init>= <expr><call><name><name>schema</name>.<name>removeTableInstance</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>t</name> != null</expr>)</condition><then>
+            <block>{
+                <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><call><name><name>t</name>.<name>getColumnFamilyStores</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>t</name>.<name>unloadCf</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></then></if>
+            <return>return <expr><name>t</name></expr>;</return>
+        }</block></synchronized>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>getColumnFamilyStores</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>Collections</name>.<name>unmodifiableCollection</name></name><argument_list>(<argument><expr><call><name><name>columnFamilyStores</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamilyStore</name></type> <name>getColumnFamilyStore</name><parameter_list>(<param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Integer</name></type> <name>id</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getId</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>id</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Unknown table/cf pair (%s.%s)"</expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr><call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamilyStore</name></type> <name>getColumnFamilyStore</name><parameter_list>(<param><decl><type><name>Integer</name></type> <name>id</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>columnFamilyStores</name>.<name>get</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>cfs</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"Unknown CF " + <name>id</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr><name>cfs</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Do a cleanup of keys that do not belong locally.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceCleanup</name><parameter_list>(<param><decl><type><name><name>NodeId</name>.<name>OneShotRenewer</name></name></type> <name>renewer</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>name</name>.<name>equals</name></name><argument_list>(<argument><expr><name>SYSTEM_TABLE</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"Cleanup of the system table is neither necessary nor wise"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <comment type="line">// Sort the column families in order of SSTable size, so cleanup of smaller CFs</comment>
+        <comment type="line">// can free up space for larger ones</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>sortedColumnFamilies</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>columnFamilyStores</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>sortedColumnFamilies</name></expr></argument>, <argument><expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <comment type="line">// Compare first on size and, if equal, sort by name (arbitrary &amp; deterministic).</comment>
+            <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cf1</name></decl></param>, <param><decl><type><name>ColumnFamilyStore</name></type> <name>cf2</name></decl></param>)</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>diff</name> <init>= <expr>(<call><name><name>cf1</name>.<name>getTotalDiskSpaceUsed</name></name><argument_list>()</argument_list></call> - <call><name><name>cf2</name>.<name>getTotalDiskSpaceUsed</name></name><argument_list>()</argument_list></call>)</expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>diff</name> &gt; 0</expr>)</condition><then>
+                    <return>return <expr>1</expr>;</return></then></if>
+                <if>if <condition>(<expr><name>diff</name> &lt; 0</expr>)</condition><then>
+                    <return>return <expr>-1</expr>;</return></then></if>
+                <return>return <expr><call><name><name>cf1</name>.<name>columnFamily</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>cf2</name>.<name>columnFamily</name></name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// Cleanup in sorted order to free up space for the larger ones</comment>
+        <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><name>sortedColumnFamilies</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>cfs</name>.<name>forceCleanup</name></name><argument_list>(<argument><expr><name>renewer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Take a snapshot of the specific column family, or the entire set of column families
+     * if columnFamily is null with a given timestamp
+     *
+     * @param snapshotName the tag associated with the name of the snapshot.  This value may not be null
+     * @param columnFamilyName the column family to snapshot or all on null
+     *
+     * @throws IOException if the column family doesn't exist
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>snapshot</name><parameter_list>(<param><decl><type><name>String</name></type> <name>snapshotName</name></decl></param>, <param><decl><type><name>String</name></type> <name>columnFamilyName</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><name>snapshotName</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>tookSnapShot</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfStore</name> <range>: <expr><call><name><name>columnFamilyStores</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name>columnFamilyName</name> == null || <call><name><name>cfStore</name>.<name>columnFamily</name>.<name>equals</name></name><argument_list>(<argument><expr><name>columnFamilyName</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>tookSnapShot</name> = true</expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>cfStore</name>.<name>snapshot</name></name><argument_list>(<argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+
+        <if>if <condition>(<expr>(<name>columnFamilyName</name> != null) &amp;&amp; !<name>tookSnapShot</name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Failed taking snapshot. Column family " + <name>columnFamilyName</name> + " does not exist."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @param clientSuppliedName may be null.
+     * @return the name of the snapshot
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>String</name></type> <name>getTimestampedSnapshotName</name><parameter_list>(<param><decl><type><name>String</name></type> <name>clientSuppliedName</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>snapshotName</name> <init>= <expr><call><name><name>Long</name>.<name>toString</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>clientSuppliedName</name> != null &amp;&amp; !<call><name><name>clientSuppliedName</name>.<name>equals</name></name><argument_list>(<argument><expr>""</expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>snapshotName</name> = <name>snapshotName</name> + "-" + <name>clientSuppliedName</name></expr>;</expr_stmt>
+        }</block></then></if>
+        <return>return <expr><name>snapshotName</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Check whether snapshots already exists for a given name.
+     *
+     * @param snapshotName the user supplied snapshot name
+     * @return true if the snapshot exists
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>snapshotExists</name><parameter_list>(<param><decl><type><name>String</name></type> <name>snapshotName</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>snapshotName</name> != null</expr>;</assert>
+        <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfStore</name> <range>: <expr><call><name><name>columnFamilyStores</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>cfStore</name>.<name>snapshotExists</name></name><argument_list>(<argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr>true</expr>;</return></then></if>
+        }</block></for>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Clear all the snapshots for a given table.
+     *
+     * @param snapshotName the user supplied snapshot name. It empty or null,
+     * all the snapshots will be cleaned
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>clearSnapshot</name><parameter_list>(<param><decl><type><name>String</name></type> <name>snapshotName</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfStore</name> <range>: <expr><call><name><name>columnFamilyStores</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>cfStore</name>.<name>clearSnapshot</name></name><argument_list>(<argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return A list of open SSTableReaders
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>getAllSSTables</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>list</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>columnFamilyStores</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfStore</name> <range>: <expr><call><name><name>columnFamilyStores</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>list</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>cfStore</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>list</name></expr>;</return>
+    }</block></function>
+
+    <constructor><specifier>private</specifier> <name>Table</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>loadSSTables</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>name</name> = <name>table</name></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>KSMetaData</name></type> <name>ksm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getKSMetaData</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>ksm</name> != null : "Unknown keyspace " + <name>table</name></expr>;</assert>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>createReplicationStrategy</name><argument_list>(<argument><expr><name>ksm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><name>indexLocks</name> = new <name><name>Object</name><index>[<expr><call><name><name>DatabaseDescriptor</name>.<name>getConcurrentWriters</name></name><argument_list>()</argument_list></call> * 128</expr>]</index></name></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>indexLocks</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><name><name>indexLocks</name><index>[<expr><name>i</name></expr>]</index></name> = new <call><name>Object</name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+
+        <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfm</name> <range>: <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>CFMetaData</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableDefinition</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>cfMetaData</name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Initializing {}.{}"</expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>initCf</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>cfId</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>loadSSTables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>createReplicationStrategy</name><parameter_list>(<param><decl><type><name>KSMetaData</name></type> <name>ksm</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>replicationStrategy</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call>.<call><name>unregister</name><argument_list>(<argument><expr><name>replicationStrategy</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><name>replicationStrategy</name> = <call><name><name>AbstractReplicationStrategy</name>.<name>createReplicationStrategy</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>,
+                                                                                    <argument><expr><name><name>ksm</name>.<name>strategyClass</name></name></expr></argument>,
+                                                                                    <argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                                    <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getEndpointSnitch</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                                    <argument><expr><name><name>ksm</name>.<name>strategyOptions</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="line">// best invoked on the compaction mananger.</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>dropCf</name><parameter_list>(<param><decl><type><name>Integer</name></type> <name>cfId</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><call><name><name>columnFamilyStores</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr>;</assert>
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>columnFamilyStores</name>.<name>remove</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>cfs</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name>unloadCf</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="line">// disassociate a cfs from this table instance.</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>unloadCf</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>cfs</name>.<name>forceBlockingFlush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <expr_stmt><expr><call><name><name>cfs</name>.<name>invalidate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** adds a cf to internal structures, ends up creating disk files). */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>initCf</name><parameter_list>(<param><decl><type><name>Integer</name></type> <name>cfId</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>loadSSTables</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>columnFamilyStores</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <comment type="line">// this is the case when you reset local schema</comment>
+            <comment type="line">// just reload metadata</comment>
+            <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>columnFamilyStores</name>.<name>get</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><call><name><name>cfs</name>.<name>getColumnFamilyName</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr>;</assert>
+
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>cfs</name>.<name>metadata</name>.<name>reload</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>cfs</name>.<name>reload</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr><call><name><name>FBUtilities</name>.<name>unchecked</name></name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name><name>columnFamilyStores</name>.<name>put</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>, <argument><expr><call><name><name>ColumnFamilyStore</name>.<name>createColumnFamilyStore</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>loadSSTables</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Row</name></type> <name>getRow</name><parameter_list>(<param><decl><type><name>QueryFilter</name></type> <name>filter</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfStore</name> <init>= <expr><call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><call><name><name>filter</name>.<name>getColumnFamilyName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>columnFamily</name> <init>= <expr><call><name><name>cfStore</name>.<name>getColumnFamily</name></name><argument_list>(<argument><expr><name>filter</name></expr></argument>, <argument><expr><call><name><name>ArrayBackedSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name>Row</name><argument_list>(<argument><expr><name><name>filter</name>.<name>key</name></name></expr></argument>, <argument><expr><name>columnFamily</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>apply</name><parameter_list>(<param><decl><type><name>RowMutation</name></type> <name>mutation</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>writeCommitLog</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>apply</name><argument_list>(<argument><expr><name>mutation</name></expr></argument>, <argument><expr><name>writeCommitLog</name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * This method adds the row to the Commit Log associated with this table.
+     * Once this happens the data associated with the individual column families
+     * is also written to the column family store's memtable.
+    */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>apply</name><parameter_list>(<param><decl><type><name>RowMutation</name></type> <name>mutation</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>writeCommitLog</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>updateIndexes</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"applying mutation of row {}"</expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><call><name><name>mutation</name>.<name>key</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <comment type="line">// write the mutation to the commitlog and memtables</comment>
+        <expr_stmt><expr><call><name><name>switchLock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><name>writeCommitLog</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>CommitLog</name>.<name>instance</name>.<name>add</name></name><argument_list>(<argument><expr><name>mutation</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <decl_stmt><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>decorateKey</name><argument_list>(<argument><expr><call><name><name>mutation</name>.<name>key</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>ColumnFamily</name></type> <name>cf</name> <range>: <expr><call><name><name>mutation</name>.<name>getColumnFamilies</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>columnFamilyStores</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>id</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>cfs</name> == null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Attempting to mutate non-existant column family " + <call><name><name>cf</name>.<name>id</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <continue>continue;</continue>
+                }</block></then></if>
+
+                <decl_stmt><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>mutatedIndexedColumns</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>updateIndexes</name></expr>)</condition><then>
+                <block>{
+                    <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>column</name> <range>: <expr><call><name><name>cfs</name>.<name>indexManager</name>.<name>getIndexedColumns</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <block>{
+                        <if>if <condition>(<expr><call><name><name>cf</name>.<name>getColumnNames</name></name><argument_list>()</argument_list></call>.<call><name>contains</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call> || <call><name><name>cf</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <block>{
+                            <if>if <condition>(<expr><name>mutatedIndexedColumns</name> == null</expr>)</condition><then>
+                                <expr_stmt><expr><name>mutatedIndexedColumns</name> = new <call><name><name>TreeSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                            <expr_stmt><expr><call><name><name>mutatedIndexedColumns</name>.<name>add</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                            <block>{
+                                <comment type="line">// can't actually use validator to print value here, because we overload value</comment>
+                                <comment type="line">// for deletion timestamp as well (which may not be a well-formed value for the column type)</comment>
+                                <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>value</name> <init>= <expr><call><name><name>cf</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call> == null ? null : <call><name><name>cf</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call>.<call><name>value</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// may be null on row-level deletion</comment>
+                                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"mutating indexed column %s value %s"</expr></argument>,
+                                                           <argument><expr><call><name><name>cf</name>.<name>getComparator</name></name><argument_list>()</argument_list></call>.<call><name>getString</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr></argument>,
+                                                           <argument><expr><name>value</name> == null ? "null" : <call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            }</block></then></if>
+                        }</block></then></if>
+                    }</block></for>
+                }</block></then></if>
+
+                <comment type="line">// Sharding the lock is insufficient to avoid contention when there is a "hot" row, e.g., for</comment>
+                <comment type="line">// hint writes when a node is down (keyed by target IP).  So it is worth special-casing the</comment>
+                <comment type="line">// no-index case to avoid the synchronization.</comment>
+                <if>if <condition>(<expr><name>mutatedIndexedColumns</name> == null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>cfs</name>.<name>apply</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <continue>continue;</continue>
+                }</block></then></if>
+                <comment type="line">// else mutatedIndexedColumns != null</comment>
+                <synchronized>synchronized (<expr><call><name>indexLockFor</name><argument_list>(<argument><expr><call><name><name>mutation</name>.<name>key</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)
+                <block>{
+                    <comment type="line">// with the raw data CF, we can just apply every update in any order and let</comment>
+                    <comment type="line">// read-time resolution throw out obsolete versions, thus avoiding read-before-write.</comment>
+                    <comment type="line">// but for indexed data we need to make sure that we're not creating index entries</comment>
+                    <comment type="line">// for obsolete writes.</comment>
+                    <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>oldIndexedColumns</name> <init>= <expr><call><name>readCurrentIndexedColumns</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>mutatedIndexedColumns</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Pre-mutation index row is {}"</expr></argument>, <argument><expr><name>oldIndexedColumns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>ignoreObsoleteMutations</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>mutatedIndexedColumns</name></expr></argument>, <argument><expr><name>oldIndexedColumns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                    <expr_stmt><expr><call><name><name>cfs</name>.<name>apply</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                    <comment type="line">// ignore full index memtables -- we flush those when the "master" one is full</comment>
+                    <expr_stmt><expr><call><name><name>cfs</name>.<name>indexManager</name>.<name>applyIndexUpdates</name></name><argument_list>(<argument><expr><call><name><name>mutation</name>.<name>key</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>mutatedIndexedColumns</name></expr></argument>, <argument><expr><name>oldIndexedColumns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></synchronized>
+            }</block></for>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>switchLock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>ignoreObsoleteMutations</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>mutatedIndexedColumns</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>oldIndexedColumns</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// DO NOT modify the cf object here, it can race w/ the CL write (see https://issues.apache.org/jira/browse/CASSANDRA-2604)</comment>
+
+        <if>if <condition>(<expr><name>oldIndexedColumns</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <for>for (<init><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name><name>mutatedIndexedColumns</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</init> <condition><expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr/>)
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>name</name> <init>= <expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>IColumn</name></type> <name>newColumn</name> <init>= <expr><call><name><name>cf</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// null == row delete or it wouldn't be marked Mutated</comment>
+            <if>if <condition>(<expr><name>newColumn</name> != null &amp;&amp; <call><name><name>cf</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <comment type="line">// row is marked for delete, but column was also updated.  if column is timestamped less than</comment>
+                <comment type="line">// the row tombstone, treat it as if it didn't exist.  Otherwise we don't care about row</comment>
+                <comment type="line">// tombstone for the purpose of the index update and we can proceed as usual.</comment>
+                <if>if <condition>(<expr><call><name><name>newColumn</name>.<name>timestamp</name></name><argument_list>()</argument_list></call> &lt;= <call><name><name>cf</name>.<name>getMarkedForDeleteAt</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// don't remove from the cf object; that can race w/ CommitLog write.  Leaving it is harmless.</comment>
+                    <expr_stmt><expr><name>newColumn</name> = null</expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></then></if>
+            <decl_stmt><decl><type><name>IColumn</name></type> <name>oldColumn</name> <init>= <expr><call><name><name>oldIndexedColumns</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// deletions are irrelevant to the index unless we're changing state from live -&gt; deleted, i.e.,</comment>
+            <comment type="line">// just updating w/ a newer tombstone doesn't matter</comment>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>bothDeleted</name> <init>= <expr>(<name>newColumn</name> == null || <call><name><name>newColumn</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call>)
+                                  &amp;&amp; (<name>oldColumn</name> == null || <call><name><name>oldColumn</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call>)</expr></init></decl>;</decl_stmt>
+            <comment type="line">// obsolete means either the row or the column timestamp we're applying is older than existing data</comment>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>obsoleteRowTombstone</name> <init>= <expr><name>newColumn</name> == null &amp;&amp; <name>oldColumn</name> != null &amp;&amp; <call><name><name>cf</name>.<name>getMarkedForDeleteAt</name></name><argument_list>()</argument_list></call> &lt; <call><name><name>oldColumn</name>.<name>timestamp</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>obsoleteColumn</name> <init>= <expr><name>newColumn</name> != null &amp;&amp; (<call><name><name>newColumn</name>.<name>timestamp</name></name><argument_list>()</argument_list></call> &lt;= <call><name><name>oldIndexedColumns</name>.<name>getMarkedForDeleteAt</name></name><argument_list>()</argument_list></call>
+                                                           || (<name>oldColumn</name> != null &amp;&amp; <call><name><name>oldColumn</name>.<name>reconcile</name></name><argument_list>(<argument><expr><name>newColumn</name></expr></argument>)</argument_list></call> == <name>oldColumn</name>))</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>bothDeleted</name> || <name>obsoleteRowTombstone</name> || <name>obsoleteColumn</name></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"skipping index update for obsolete mutation of " + <call><name><name>cf</name>.<name>getComparator</name></name><argument_list>()</argument_list></call>.<call><name>getString</name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <expr_stmt><expr><call><name><name>iter</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>oldIndexedColumns</name>.<name>remove</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>ColumnFamily</name></type> <name>readCurrentIndexedColumns</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>, <param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>mutatedIndexedColumns</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>QueryFilter</name></type> <name>filter</name> <init>= <expr><call><name><name>QueryFilter</name>.<name>getNamesFilter</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>getColumnFamilyName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>mutatedIndexedColumns</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>cfs</name>.<name>getColumnFamily</name></name><argument_list>(<argument><expr><name>filter</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>AbstractReplicationStrategy</name></type> <name>getReplicationStrategy</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>replicationStrategy</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @param key row to index
+     * @param cfs ColumnFamily to index row in
+     * @param indexedColumns columns to index, in comparator order
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>indexRow</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>, <param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>indexedColumns</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Indexing row {} "</expr></argument>, <argument><expr><call><name><name>cfs</name>.<name>metadata</name>.<name>getKeyValidator</name></name><argument_list>()</argument_list></call>.<call><name>getString</name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name><name>switchLock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <synchronized>synchronized (<expr><call><name><name>cfs</name>.<name>table</name>.<name>indexLockFor</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>)
+            <block>{
+                <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name>readCurrentIndexedColumns</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>indexedColumns</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>cf</name> != null</expr>)</condition><then>
+                    <try>try
+                    <block>{
+                        <expr_stmt><expr><call><name><name>cfs</name>.<name>indexManager</name>.<name>applyIndexUpdates</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><call><name><name>cf</name>.<name>getColumnNames</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block>
+                    <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                    }</block></catch></try></then></if>
+            }</block></synchronized>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>switchLock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>Object</name></type> <name>indexLockFor</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name><name>indexLocks</name><index>[<expr><call><name><name>Math</name>.<name>abs</name></name><argument_list>(<argument><expr><call><name><name>key</name>.<name>hashCode</name></name><argument_list>()</argument_list></call> % <name><name>indexLocks</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>]</index></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>flush</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>futures</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Integer</name></type> <name>cfId</name> <range>: <expr><call><name><name>columnFamilyStores</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>future</name> <init>= <expr><call><name><name>columnFamilyStores</name>.<name>get</name></name><argument_list>(<argument><expr><name>cfId</name></expr></argument>)</argument_list></call>.<call><name>forceFlush</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>future</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>futures</name>.<name>add</name></name><argument_list>(<argument><expr><name>future</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <return>return <expr><name>futures</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Iterable</name><argument_list>&lt;<argument><name>Table</name></argument>&gt;</argument_list></name></type> <name>all</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Function</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Table</name></argument>&gt;</argument_list></name></type> <name>transformer</name> <init>= <expr>new <class><super><name><name>Function</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Table</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>Table</name></type> <name>apply</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>)</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>Iterables</name>.<name>transform</name></name><argument_list>(<argument><expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTables</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>transformer</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call> + "(name='" + <name>name</name> + "')"</expr>;</return>
+    }</block></function>
+}
+</unit>

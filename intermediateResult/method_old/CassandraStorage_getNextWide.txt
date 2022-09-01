@@ -1,0 +1,96 @@
+public Tuple getNextWide() throws IOException
+    {
+        CfDef cfDef = getCfDef(loadSignature);
+        ByteBuffer key = null;
+        Tuple tuple = null; 
+        DefaultDataBag bag = new DefaultDataBag();
+        try
+        {
+            while(true)
+            {
+                hasNext = reader.nextKeyValue();
+                if (!hasNext)
+                {
+                    if (tuple == null)
+                        tuple = TupleFactory.getInstance().newTuple();
+
+                    if (lastRow != null)
+                    {
+                        if (tuple.size() == 0) // lastRow is a new one
+                        {
+                            key = (ByteBuffer)reader.getCurrentKey();
+                            tuple = keyToTuple(key, cfDef, parseType(cfDef.getKey_validation_class()));
+                        }
+                        for (Map.Entry<ByteBuffer, IColumn> entry : lastRow.entrySet())
+                        {
+                            bag.add(columnToTuple(entry.getValue(), cfDef, parseType(cfDef.getComparator_type())));
+                        }
+                        lastKey = null;
+                        lastRow = null;
+                        tuple.append(bag);
+                        return tuple;
+                    }
+                    else
+                    {
+                        if (tuple.size() == 1) // rare case of just one wide row, key already set
+                        {
+                            tuple.append(bag);
+                            return tuple;
+                        }
+                        else
+                            return null;
+                    }
+                }
+                if (key != null && !((ByteBuffer)reader.getCurrentKey()).equals(key)) // key changed
+                {
+                    // read too much, hold on to it for next time
+                    lastKey = (ByteBuffer)reader.getCurrentKey();
+                    lastRow = (SortedMap<ByteBuffer,IColumn>)reader.getCurrentValue();
+                    // but return what we have so far
+                    tuple.append(bag);
+                    return tuple;
+                }
+                if (key == null) // only set the key on the first iteration
+                {
+                    key = (ByteBuffer)reader.getCurrentKey();
+                    if (lastKey != null && !(key.equals(lastKey))) // last key only had one value
+                    {
+                        if (tuple == null)
+                            tuple = keyToTuple(lastKey, cfDef, parseType(cfDef.getKey_validation_class()));
+                        else
+                            addKeyToTuple(tuple, lastKey, cfDef, parseType(cfDef.getKey_validation_class()));
+                        for (Map.Entry<ByteBuffer, IColumn> entry : lastRow.entrySet())
+                        {
+                            bag.add(columnToTuple(entry.getValue(), cfDef, parseType(cfDef.getComparator_type())));
+                        }
+                        tuple.append(bag);
+                        lastKey = key;
+                        lastRow = (SortedMap<ByteBuffer,IColumn>)reader.getCurrentValue();
+                        return tuple;
+                    }
+                    if (tuple == null)
+                        tuple = keyToTuple(key, cfDef, parseType(cfDef.getKey_validation_class()));
+                    else
+                        addKeyToTuple(tuple, lastKey, cfDef, parseType(cfDef.getKey_validation_class()));
+                }
+                SortedMap<ByteBuffer,IColumn> row = (SortedMap<ByteBuffer,IColumn>)reader.getCurrentValue();
+                if (lastRow != null) // prepend what was read last time
+                {
+                    for (Map.Entry<ByteBuffer, IColumn> entry : lastRow.entrySet())
+                    {
+                        bag.add(columnToTuple(entry.getValue(), cfDef, parseType(cfDef.getComparator_type())));
+                    }
+                    lastKey = null;
+                    lastRow = null;
+                }
+                for (Map.Entry<ByteBuffer, IColumn> entry : row.entrySet())
+                {
+                    bag.add(columnToTuple(entry.getValue(), cfDef, parseType(cfDef.getComparator_type())));
+                }
+            }
+        }
+        catch (InterruptedException e)
+        {
+            throw new IOException(e.getMessage());
+        }
+    }

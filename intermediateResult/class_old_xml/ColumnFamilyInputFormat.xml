@@ -1,0 +1,357 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\hadoop\ColumnFamilyInputFormat.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>hadoop</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Random</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>SortedMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Callable</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutorService</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Executors</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Future</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>ImmutableList</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Lists</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>TApplicationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>IColumn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>IPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>conf</name>.<name>Configuration</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name>JobConf</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name>Reporter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>TException</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Hadoop InputFormat allowing map/reduce against Cassandra rows within one ColumnFamily.
+ *
+ * At minimum, you need to set the CF and predicate (description of columns to extract from each row)
+ * in your Hadoop job Configuration.  The ConfigHelper class is provided to make this
+ * simple:
+ *   ConfigHelper.setColumnFamily
+ *   ConfigHelper.setSlicePredicate
+ *
+ * You can also configure the number of rows per InputSplit with
+ *   ConfigHelper.setInputSplitSize
+ * This should be "as big as possible, but no bigger."  Each InputSplit is read from Cassandra
+ * with multiple get_slice_range queries, and the per-call overhead of get_slice_range is high,
+ * so larger split sizes are better -- but if it is too large, you will run out of memory.
+ *
+ * The default split size is 64k rows.
+ */</comment>
+<class><specifier>public</specifier> class <name>ColumnFamilyInputFormat</name> <super><extends>extends <name><name>InputFormat</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></extends>
+    <implements>implements <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name><name>InputFormat</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>ColumnFamilyInputFormat</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>MAPRED_TASK_ID</name> <init>= <expr>"mapred.task.id"</expr></init></decl>;</decl_stmt>
+    <comment type="line">// The simple fact that we need this is because the old Hadoop API wants us to "write"</comment>
+    <comment type="line">// to the key and value whereas the new asks for it.</comment>
+    <comment type="line">// I choose 8kb as the default max key size (instanciated only once), but you can</comment>
+    <comment type="line">// override it in your jobConf with this setting.</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>CASSANDRA_HADOOP_MAX_KEY_SIZE</name> <init>= <expr>"cassandra.hadoop.max_key_size"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type>    <name>CASSANDRA_HADOOP_MAX_KEY_SIZE_DEFAULT</name> <init>= <expr>8192</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>keyspace</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>cfName</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>IPartitioner</name></type> <name>partitioner</name></decl>;</decl_stmt>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateConfiguration</name><parameter_list>(<param><decl><type><name>Configuration</name></type> <name>conf</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getInputKeyspace</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null || <call><name><name>ConfigHelper</name>.<name>getInputColumnFamily</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"you must set the keyspace and columnfamily with setColumnFamily()"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getInputSlicePredicate</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"you must set the predicate with setPredicate"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getInputInitialAddress</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"You must set the initial output address to a Cassandra node"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getInputPartitioner</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"You must set the Cassandra partitioner class"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name></type> <name>getSplits</name><parameter_list>(<param><decl><type><name>JobContext</name></type> <name>context</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>Configuration</name></type> <name>conf</name> <init>= <expr><call><name><name>context</name>.<name>getConfiguration</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name>validateConfiguration</name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// cannonical ranges and nodes holding replicas</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>TokenRange</name></argument>&gt;</argument_list></name></type> <name>masterRangeNodes</name> <init>= <expr><call><name>getRangeMap</name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><name>keyspace</name> = <call><name><name>ConfigHelper</name>.<name>getInputKeyspace</name></name><argument_list>(<argument><expr><call><name><name>context</name>.<name>getConfiguration</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>cfName</name> = <call><name><name>ConfigHelper</name>.<name>getInputColumnFamily</name></name><argument_list>(<argument><expr><call><name><name>context</name>.<name>getConfiguration</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>partitioner</name> = <call><name><name>ConfigHelper</name>.<name>getInputPartitioner</name></name><argument_list>(<argument><expr><call><name><name>context</name>.<name>getConfiguration</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"partitioner is " + <name>partitioner</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// cannonical ranges, split into pieces, fetching the splits in parallel</comment>
+        <decl_stmt><decl><type><name>ExecutorService</name></type> <name>executor</name> <init>= <expr><call><name><name>Executors</name>.<name>newCachedThreadPool</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name></type> <name>splits</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>splitfutures</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>KeyRange</name></type> <name>jobKeyRange</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getInputKeyRange</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>jobRange</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>jobKeyRange</name> != null &amp;&amp; <name><name>jobKeyRange</name>.<name>start_token</name></name> != null</expr>)</condition><then>
+            <block>{
+                <assert>assert <expr><call><name><name>partitioner</name>.<name>preservesOrder</name></name><argument_list>()</argument_list></call> : "ConfigHelper.setInputKeyRange(..) can only be used with a order preserving paritioner"</expr>;</assert>
+                <assert>assert <expr><name><name>jobKeyRange</name>.<name>start_key</name></name> == null : "only start_token supported"</expr>;</assert>
+                <assert>assert <expr><name><name>jobKeyRange</name>.<name>end_key</name></name> == null : "only end_token supported"</expr>;</assert>
+                <expr_stmt><expr><name>jobRange</name> = new <call><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>partitioner</name>.<name>getTokenFactory</name></name><argument_list>()</argument_list></call>.<call><name>fromString</name><argument_list>(<argument><expr><name><name>jobKeyRange</name>.<name>start_token</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                            <argument><expr><call><name><name>partitioner</name>.<name>getTokenFactory</name></name><argument_list>()</argument_list></call>.<call><name>fromString</name><argument_list>(<argument><expr><name><name>jobKeyRange</name>.<name>end_token</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                            <argument><expr><name>partitioner</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <for>for (<init><decl><type><name>TokenRange</name></type> <name>range</name> <range>: <expr><name>masterRangeNodes</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><name>jobRange</name> == null</expr>)</condition><then>
+                <block>{
+                    <comment type="line">// for each range, pick a live owner and ask it to compute bite-sized splits</comment>
+                    <expr_stmt><expr><call><name><name>splitfutures</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>executor</name>.<name>submit</name></name><argument_list>(<argument><expr>new <call><name>SplitCallable</name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>dhtRange</name> <init>= <expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>partitioner</name>.<name>getTokenFactory</name></name><argument_list>()</argument_list></call>.<call><name>fromString</name><argument_list>(<argument><expr><name><name>range</name>.<name>start_token</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                                             <argument><expr><call><name><name>partitioner</name>.<name>getTokenFactory</name></name><argument_list>()</argument_list></call>.<call><name>fromString</name><argument_list>(<argument><expr><name><name>range</name>.<name>end_token</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                                             <argument><expr><name>partitioner</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <if>if <condition>(<expr><call><name><name>dhtRange</name>.<name>intersects</name></name><argument_list>(<argument><expr><name>jobRange</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>intersection</name><range>: <expr><call><name><name>dhtRange</name>.<name>intersectionWith</name></name><argument_list>(<argument><expr><name>jobRange</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+                        <block>{
+                            <expr_stmt><expr><name><name>range</name>.<name>start_token</name></name> = <call><name><name>partitioner</name>.<name>getTokenFactory</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>(<argument><expr><name><name>intersection</name>.<name>left</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><name><name>range</name>.<name>end_token</name></name> = <call><name><name>partitioner</name>.<name>getTokenFactory</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>(<argument><expr><name><name>intersection</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <comment type="line">// for each range, pick a live owner and ask it to compute bite-sized splits</comment>
+                            <expr_stmt><expr><call><name><name>splitfutures</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>executor</name>.<name>submit</name></name><argument_list>(<argument><expr>new <call><name>SplitCallable</name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></for>
+                    }</block></then></if>
+                }</block></else></if>
+            }</block></for>
+
+            <comment type="line">// wait until we have all the results back</comment>
+            <for>for (<init><decl><type><name><name>Future</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>futureInputSplits</name> <range>: <expr><name>splitfutures</name></expr></range></decl></init>)
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name><name>splits</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>futureInputSplits</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Could not get input splits"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></for>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>executor</name>.<name>shutdownNow</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+
+        <assert>assert <expr><call><name><name>splits</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>;</assert>
+        <expr_stmt><expr><call><name><name>Collections</name>.<name>shuffle</name></name><argument_list>(<argument><expr><name>splits</name></expr></argument>, <argument><expr>new <call><name>Random</name><argument_list>(<argument><expr><call><name><name>System</name>.<name>nanoTime</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>splits</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Gets a token range and splits it up according to the suggested
+     * size into input splits that Hadoop can use.
+     */</comment>
+    <class>class <name>SplitCallable</name> <super><implements>implements <name><name>Callable</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>TokenRange</name></type> <name>range</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Configuration</name></type> <name>conf</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>SplitCallable</name><parameter_list>(<param><decl><type><name>TokenRange</name></type> <name>tr</name></decl></param>, <param><decl><type><name>Configuration</name></type> <name>conf</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>range</name></name> = <name>tr</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>conf</name></name> = <name>conf</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name></type> <name>call</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name></type> <name>splits</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InputSplit</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>CfSplit</name></argument>&gt;</argument_list></name></type> <name>subSplits</name> <init>= <expr><call><name>getSubSplits</name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>range</name></expr></argument>, <argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><call><name><name>range</name>.<name>rpc_endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call> == <call><name><name>range</name>.<name>endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call> : "rpc_endpoints size must match endpoints size"</expr>;</assert>
+            <comment type="line">// turn the sub-ranges into InputSplits</comment>
+            <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>endpoints</name> <init>= <expr><call><name><name>range</name>.<name>endpoints</name>.<name>toArray</name></name><argument_list>(<argument><expr>new <name><name>String</name><index>[<expr><call><name><name>range</name>.<name>endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>]</index></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// hadoop needs hostname, not ip</comment>
+            <decl_stmt><decl><type><name>int</name></type> <name>endpointIndex</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>String</name></type> <name>endpoint</name><range>: <expr><name><name>range</name>.<name>rpc_endpoints</name></name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>endpoint_address</name> <init>= <expr><name>endpoint</name></expr></init></decl>;</decl_stmt>
+		        <if>if <condition>(<expr><name>endpoint_address</name> == null || <call><name><name>endpoint_address</name>.<name>equals</name></name><argument_list>(<argument><expr>"0.0.0.0"</expr></argument>)</argument_list></call></expr>)</condition><then>
+			        <expr_stmt><expr><name>endpoint_address</name> = <call><name><name>range</name>.<name>endpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpointIndex</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+		        <expr_stmt><expr><name><name>endpoints</name><index>[<expr><name>endpointIndex</name>++</expr>]</index></name> = <call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>endpoint_address</name></expr></argument>)</argument_list></call>.<call><name>getHostName</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+
+            <decl_stmt><decl><type><name><name>Token</name>.<name>TokenFactory</name></name></type> <name>factory</name> <init>= <expr><call><name><name>partitioner</name>.<name>getTokenFactory</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>CfSplit</name></type> <name>subSplit</name> <range>: <expr><name>subSplits</name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>Token</name></type> <name>left</name> <init>= <expr><call><name><name>factory</name>.<name>fromString</name></name><argument_list>(<argument><expr><call><name><name>subSplit</name>.<name>getStart_token</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>Token</name></type> <name>right</name> <init>= <expr><call><name><name>factory</name>.<name>fromString</name></name><argument_list>(<argument><expr><call><name><name>subSplit</name>.<name>getEnd_token</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <init>= <expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>left</name></expr></argument>, <argument><expr><name>right</name></expr></argument>, <argument><expr><name>partitioner</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name> <init>= <expr><call><name><name>range</name>.<name>isWrapAround</name></name><argument_list>()</argument_list></call> ? <call><name><name>range</name>.<name>unwrap</name></name><argument_list>()</argument_list></call> : <call><name><name>ImmutableList</name>.<name>of</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>subrange</name> <range>: <expr><name>ranges</name></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnFamilySplit</name></type> <name>split</name> <init>=
+                            <expr>new <call><name>ColumnFamilySplit</name><argument_list>(
+                                    <argument><expr><call><name><name>factory</name>.<name>toString</name></name><argument_list>(<argument><expr><name><name>subrange</name>.<name>left</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                    <argument><expr><call><name><name>factory</name>.<name>toString</name></name><argument_list>(<argument><expr><name><name>subrange</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                    <argument><expr><call><name><name>subSplit</name>.<name>getRow_count</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                    <argument><expr><name>endpoints</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"adding " + <name>split</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>splits</name>.<name>add</name></name><argument_list>(<argument><expr><name>split</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></for>
+            <return>return <expr><name>splits</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>CfSplit</name></argument>&gt;</argument_list></name></type> <name>getSubSplits</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>, <param><decl><type><name>TokenRange</name></type> <name>range</name></decl></param>, <param><decl><type><name>Configuration</name></type> <name>conf</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>splitsize</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getInputSplitSize</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>range</name>.<name>rpc_endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>host</name> <init>= <expr><call><name><name>range</name>.<name>rpc_endpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>host</name> == null || <call><name><name>host</name>.<name>equals</name></name><argument_list>(<argument><expr>"0.0.0.0"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><name>host</name> = <call><name><name>range</name>.<name>endpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <try>try
+            <block>{
+                <decl_stmt><decl><type><name><name>Cassandra</name>.<name>Client</name></name></type> <name>client</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>createConnection</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><name>host</name></expr></argument>, <argument><expr><call><name><name>ConfigHelper</name>.<name>getInputRpcPort</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>client</name>.<name>set_keyspace</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <try>try
+                <block>{
+                    <return>return <expr><call><name><name>client</name>.<name>describe_splits_ex</name></name><argument_list>(<argument><expr><name>cfName</name></expr></argument>, <argument><expr><name><name>range</name>.<name>start_token</name></name></expr></argument>, <argument><expr><name><name>range</name>.<name>end_token</name></name></expr></argument>, <argument><expr><name>splitsize</name></expr></argument>)</argument_list></call></expr>;</return>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>TApplicationException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <comment type="line">// fallback to guessing split size if talking to a server without describe_splits_ex method</comment>
+                    <if>if <condition>(<expr><call><name><name>e</name>.<name>getType</name></name><argument_list>()</argument_list></call> == <name><name>TApplicationException</name>.<name>UNKNOWN_METHOD</name></name></expr>)</condition><then>
+                    <block>{
+                        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>splitPoints</name> <init>= <expr><call><name><name>client</name>.<name>describe_splits</name></name><argument_list>(<argument><expr><name>cfName</name></expr></argument>, <argument><expr><name><name>range</name>.<name>start_token</name></name></expr></argument>, <argument><expr><name><name>range</name>.<name>end_token</name></name></expr></argument>, <argument><expr><name>splitsize</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <return>return <expr><call><name>tokenListToSplits</name><argument_list>(<argument><expr><name>splitPoints</name></expr></argument>, <argument><expr><name>splitsize</name></expr></argument>)</argument_list></call></expr>;</return>
+                    }</block></then></if>
+                    <throw>throw <expr><name>e</name></expr>;</throw>
+                }</block></catch></try>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"failed connect to endpoint " + <name>host</name></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>TException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>InvalidRequestException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></for>
+        <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"failed connecting to all endpoints " + <call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><name><name>range</name>.<name>endpoints</name></name></expr></argument>, <argument><expr>","</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>CfSplit</name></argument>&gt;</argument_list></name></type> <name>tokenListToSplits</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>splitTokens</name></decl></param>, <param><decl><type><name>int</name></type> <name>splitsize</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>CfSplit</name></argument>&gt;</argument_list></name></type> <name>splits</name> <init>= <expr><call><name><name>Lists</name>.<name>newArrayListWithExpectedSize</name></name><argument_list>(<argument><expr><call><name><name>splitTokens</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>j</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>j</name> &lt; <call><name><name>splitTokens</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr>;</condition> <incr><expr><name>j</name>++</expr></incr>)
+            <expr_stmt><expr><call><name><name>splits</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>CfSplit</name><argument_list>(<argument><expr><call><name><name>splitTokens</name>.<name>get</name></name><argument_list>(<argument><expr><name>j</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>splitTokens</name>.<name>get</name></name><argument_list>(<argument><expr><name>j</name> + 1</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>splitsize</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>splits</name></expr>;</return>
+    }</block></function>
+
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>TokenRange</name></argument>&gt;</argument_list></name></type> <name>getRangeMap</name><parameter_list>(<param><decl><type><name>Configuration</name></type> <name>conf</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Cassandra</name>.<name>Client</name></name></type> <name>client</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getClientFromInputAddressList</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>TokenRange</name></argument>&gt;</argument_list></name></type> <name>map</name></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>map</name> = <call><name><name>client</name>.<name>describe_ring</name></name><argument_list>(<argument><expr><call><name><name>ConfigHelper</name>.<name>getInputKeyspace</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>TException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>InvalidRequestException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <return>return <expr><name>map</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>RecordReader</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>createRecordReader</name><parameter_list>(<param><decl><type><name>InputSplit</name></type> <name>inputSplit</name></decl></param>, <param><decl><type><name>TaskAttemptContext</name></type> <name>taskAttemptContext</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr>new <call><name>ColumnFamilyRecordReader</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+
+    <comment type="line">//</comment>
+    <comment type="line">// Old Hadoop API</comment>
+    <comment type="line">//</comment>
+    <function><type><specifier>public</specifier> <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name>InputSplit</name></name><index>[]</index></type> <name>getSplits</name><parameter_list>(<param><decl><type><name>JobConf</name></type> <name>jobConf</name></decl></param>, <param><decl><type><name>int</name></type> <name>numSplits</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>TaskAttemptContext</name></type> <name>tac</name> <init>= <expr>new <call><name>TaskAttemptContext</name><argument_list>(<argument><expr><name>jobConf</name></expr></argument>, <argument><expr>new <call><name>TaskAttemptID</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name>.<name>InputSplit</name></name></argument>&gt;</argument_list></name></type> <name>newInputSplits</name> <init>= <expr><call><name><name>this</name>.<name>getSplits</name></name><argument_list>(<argument><expr><name>tac</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name>InputSplit</name></name><index>[]</index></type> <name>oldInputSplits</name> <init>= <expr>new <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name>InputSplit</name><index>[<expr><call><name><name>newInputSplits</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>newInputSplits</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><name><name>oldInputSplits</name><index>[<expr><name>i</name></expr>]</index></name> = (<name>ColumnFamilySplit</name>)<call><name><name>newInputSplits</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>oldInputSplits</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name><name>RecordReader</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>getRecordReader</name><parameter_list>(<param><decl><type><name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name>InputSplit</name></name></type> <name>split</name></decl></param>, <param><decl><type><name>JobConf</name></type> <name>jobConf</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>Reporter</name></type> <name>reporter</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>TaskAttemptContext</name></type> <name>tac</name> <init>= <expr>new <class><super><name>TaskAttemptContext</name></super><argument_list>(<argument><expr><name>jobConf</name></expr></argument>, <argument><expr><call><name><name>TaskAttemptID</name>.<name>forName</name></name><argument_list>(<argument><expr><call><name><name>jobConf</name>.<name>get</name></name><argument_list>(<argument><expr><name>MAPRED_TASK_ID</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list>
+        <block>{
+            <function><type><annotation>@<name>Override</name></annotation>
+            <specifier>public</specifier> <name>void</name></type> <name>progress</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>reporter</name>.<name>progress</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>ColumnFamilyRecordReader</name></type> <name>recordReader</name> <init>= <expr>new <call><name>ColumnFamilyRecordReader</name><argument_list>(<argument><expr><call><name><name>jobConf</name>.<name>getInt</name></name><argument_list>(<argument><expr><name>CASSANDRA_HADOOP_MAX_KEY_SIZE</name></expr></argument>, <argument><expr><name>CASSANDRA_HADOOP_MAX_KEY_SIZE_DEFAULT</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>recordReader</name>.<name>initialize</name></name><argument_list>(<argument><expr>(<name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name>.<name>InputSplit</name></name>)<name>split</name></expr></argument>, <argument><expr><name>tac</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>recordReader</name></expr>;</return>
+    }</block></function>
+
+}</block></class>
+</unit>

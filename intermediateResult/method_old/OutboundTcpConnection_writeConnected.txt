@@ -1,0 +1,42 @@
+private void writeConnected(Entry entry, String id)
+    {
+        Message message = entry.message;
+        try
+        {
+            write(message, id, out);
+            completed++;
+            if (active.peek() == null)
+            {
+                out.flush();
+            }
+        }
+        catch (Exception e)
+        {
+            disconnect();
+
+            if (e instanceof IOException)
+            {
+                if (logger.isDebugEnabled())
+                    logger.debug("error writing to " + poolReference.endPoint(), e);
+
+                // if the message was important, such as a repair acknowledgement, put it back on the queue
+                // to retry after re-connecting.  See CASSANDRA-5393
+                if (e instanceof SocketException && entry.shouldRetry())
+                {
+                    try
+                    {
+                        backlog.put(new RetriedEntry(entry));
+                    }
+                    catch (InterruptedException e1)
+                    {
+                        throw new AssertionError(e1);
+                    }
+                }
+            }
+            else
+            {
+                // Non IO exceptions are likely a programming error so let's not silence them
+                logger.error("error writing to " + poolReference.endPoint(), e);
+            }
+        }
+    }

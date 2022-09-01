@@ -1,0 +1,35 @@
+private void handleStateBootstrap(InetAddress endpoint, String[] pieces)
+    {
+        assert pieces.length >= 2;
+
+        // Parse versioned values according to end-point version:
+        //   versions  < 1.2 .....: STATUS,TOKEN
+        //   versions >= 1.2 .....: use TOKENS app state
+        Collection<Token> tokens;
+        // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
+        tokens = getTokensFor(endpoint, pieces[1]);
+
+        if (logger.isDebugEnabled())
+            logger.debug("Node " + endpoint + " state bootstrapping, token " + tokens);
+
+        // if this node is present in token metadata, either we have missed intermediate states
+        // or the node had crashed. Print warning if needed, clear obsolete stuff and
+        // continue.
+        if (tokenMetadata.isMember(endpoint))
+        {
+            // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
+            // isLeaving is true, we have only missed LEFT. Waiting time between completing
+            // leave operation and rebootstrapping is relatively short, so the latter is quite
+            // common (not enough time for gossip to spread). Therefore we report only the
+            // former in the log.
+            if (!tokenMetadata.isLeaving(endpoint))
+                logger.info("Node " + endpoint + " state jump to bootstrap");
+            tokenMetadata.removeEndpoint(endpoint);
+        }
+
+        tokenMetadata.addBootstrapTokens(tokens, endpoint);
+        calculatePendingRanges();
+
+        if (Gossiper.instance.usesHostId(endpoint))
+            tokenMetadata.updateHostId(Gossiper.instance.getHostId(endpoint), endpoint);
+    }

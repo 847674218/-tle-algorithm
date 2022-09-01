@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\service\PendingRangeCalculatorService.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>HashMultimap</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>ImmutableSet</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Multimap</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Sets</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>JMXEnabledThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>NamedThreadFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>AbstractReplicationStrategy</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>TokenMetadata</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashSet</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Set</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>LinkedHashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+
+
+<class><specifier>public</specifier> class <name>PendingRangeCalculatorService</name> <super><extends>extends <name>PendingRangeCalculatorServiceMBean</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>PendingRangeCalculatorService</name></type> <name>instance</name> <init>= <expr>new <call><name>PendingRangeCalculatorService</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>PendingRangeCalculatorService</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>JMXEnabledThreadPoolExecutor</name></type> <name>executor</name> <init>= <expr>new <call><name>JMXEnabledThreadPoolExecutor</name><argument_list>(<argument><expr>1</expr></argument>, <argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>SECONDS</name></name></expr></argument>,
+            <argument><expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>Runnable</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></argument>, <argument><expr>new <call><name>NamedThreadFactory</name><argument_list>(<argument><expr>"PendingRangeCalculator"</expr></argument>)</argument_list></call></expr></argument>, <argument><expr>"internal"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>PendingRangeCalculatorService</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>executor</name>.<name>setRejectedExecutionHandler</name></name><argument_list>(<argument><expr>new <call><name><name>ThreadPoolExecutor</name>.<name>DiscardPolicy</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <class><specifier>private</specifier> class <name>PendingRangeTask</name> <super><implements>implements <name>Runnable</name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>long</name></type> <name>start</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>String</name></type> <name>table</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getNonSystemTables</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name>calculatePendingRanges</name><argument_list>(<argument><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>getReplicationStrategy</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>table</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"finished calculation for {} keyspaces in {}ms"</expr></argument>, <argument><expr><call><name><name>Schema</name>.<name>instance</name>.<name>getNonSystemTables</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>start</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <function><type><specifier>public</specifier> <name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>update</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>executor</name>.<name>submit</name></name><argument_list>(<argument><expr>new <call><name>PendingRangeTask</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>blockUntilFinished</name><parameter_list>()</parameter_list>
+    <block>{
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>executor</name>.<name>getActiveCount</name></name><argument_list>()</argument_list></call> + <call><name><name>executor</name>.<name>getPendingTasks</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+                <break>break;</break></then></if>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr>100</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></while>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Calculate pending ranges according to bootstrapping and leaving nodes. Reasoning is:
+     *
+     * (1) When in doubt, it is better to write too much to a node than too little. That is, if
+     * there are multiple nodes moving, calculate the biggest ranges a node could have. Cleaning
+     * up unneeded data afterwards is better than missing writes during movement.
+     * (2) When a node leaves, ranges for other nodes can only grow (a node might get additional
+     * ranges, but it will not lose any of its current ranges as a result of a leave). Therefore
+     * we will first remove _all_ leaving tokens for the sake of calculation and then check what
+     * ranges would go where if all nodes are to leave. This way we get the biggest possible
+     * ranges with regard current leave operations, covering all subsets of possible final range
+     * values.
+     * (3) When a node bootstraps, ranges of other nodes can only get smaller. Without doing
+     * complex calculations to see if multiple bootstraps overlap, we simply base calculations
+     * on the same token ring used before (reflecting situation after all leave operations have
+     * completed). Bootstrapping nodes will be added and removed one by one to that metadata and
+     * checked what their ranges would be. This will give us the biggest possible ranges the
+     * node could have. It might be that other bootstraps make our actual final ranges smaller,
+     * but it does not matter as we can clean up the data afterwards.
+     *
+     * NOTE: This is heavy and ineffective operation. This will be done only once when a node
+     * changes state in the cluster, so it should be manageable.
+     */</comment>
+
+    <comment type="line">// public &amp; static for testing purposes</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>calculatePendingRanges</name><parameter_list>(<param><decl><type><name>AbstractReplicationStrategy</name></type> <name>strategy</name></decl></param>, <param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>TokenMetadata</name></type> <name>tm</name> <init>= <expr><call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>pendingRanges</name> <init>= <expr><call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>bootstrapTokens</name> <init>= <expr><call><name><name>tm</name>.<name>getBootstrapTokens</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>leavingEndpoints</name> <init>= <expr><call><name><name>tm</name>.<name>getLeavingEndpoints</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>bootstrapTokens</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>leavingEndpoints</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>tm</name>.<name>getMovingEndpoints</name></name><argument_list>()</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"No bootstrapping, leaving or moving nodes -&gt; empty pending ranges for {}"</expr></argument>, <argument><expr><name>table</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>tm</name>.<name>setPendingRanges</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>pendingRanges</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>addressRanges</name> <init>= <expr><call><name><name>strategy</name>.<name>getAddressRanges</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// Copy of metadata reflecting the situation after all leave operations are finished.</comment>
+        <decl_stmt><decl><type><name>TokenMetadata</name></type> <name>allLeftMetadata</name> <init>= <expr><call><name><name>tm</name>.<name>cloneAfterAllLeft</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// get all ranges that will be affected by leaving nodes</comment>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>affectedRanges</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>leavingEndpoints</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>affectedRanges</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>addressRanges</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <comment type="line">// for each of those ranges, find what new nodes will be responsible for the range when</comment>
+        <comment type="line">// all leaving nodes are gone.</comment>
+        <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><name>affectedRanges</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>currentEndpoints</name> <init>= <expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><call><name><name>strategy</name>.<name>calculateNaturalEndpoints</name></name><argument_list>(<argument><expr><name><name>range</name>.<name>right</name></name></expr></argument>, <argument><expr><name>tm</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>newEndpoints</name> <init>= <expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><call><name><name>strategy</name>.<name>calculateNaturalEndpoints</name></name><argument_list>(<argument><expr><name><name>range</name>.<name>right</name></name></expr></argument>, <argument><expr><name>allLeftMetadata</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>pendingRanges</name>.<name>putAll</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><name>newEndpoints</name></expr></argument>, <argument><expr><name>currentEndpoints</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <comment type="line">// At this stage pendingRanges has been updated according to leave operations. We can</comment>
+        <comment type="line">// now continue the calculation by checking bootstrapping nodes.</comment>
+
+        <comment type="line">// For each of the bootstrapping nodes, simply add and remove them one by one to</comment>
+        <comment type="line">// allLeftMetadata and check in between what their ranges would be.</comment>
+	<synchronized>synchronized(<expr><name>bootstrapTokens</name></expr>) <block>{
+	    <expr_stmt><expr><name>bootstrapTokens</name> = new <call><name><name>LinkedHashMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>bootstrapTokens</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+	}</block></synchronized>
+
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>bootstrapTokens</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>InetAddress</name></type> <name>endpoint</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <expr_stmt><expr><call><name><name>allLeftMetadata</name>.<name>updateNormalToken</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><call><name><name>strategy</name>.<name>getAddressRanges</name></name><argument_list>(<argument><expr><name>allLeftMetadata</name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>pendingRanges</name>.<name>put</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                <expr_stmt><expr><call><name><name>allLeftMetadata</name>.<name>removeEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+
+        <comment type="line">// At this stage pendingRanges has been updated according to leaving and bootstrapping nodes.</comment>
+        <comment type="line">// We can now finish the calculation by checking moving nodes.</comment>
+
+        <comment type="line">// For each of the moving nodes, we do the same thing we did for bootstrapping:</comment>
+        <comment type="line">// simply add and remove them one by one to allLeftMetadata and check in between what their ranges would be.</comment>
+        <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>moving</name> <range>: <expr><call><name><name>tm</name>.<name>getMovingEndpoints</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>endpoint</name> <init>= <expr><name><name>moving</name>.<name>right</name></name></expr></init></decl>;</decl_stmt> <comment type="line">// address of the moving node</comment>
+
+            <comment type="line">//  moving.left is a new token of the endpoint</comment>
+            <expr_stmt><expr><call><name><name>allLeftMetadata</name>.<name>updateNormalToken</name></name><argument_list>(<argument><expr><name><name>moving</name>.<name>left</name></name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><call><name><name>strategy</name>.<name>getAddressRanges</name></name><argument_list>(<argument><expr><name>allLeftMetadata</name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>pendingRanges</name>.<name>put</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+
+            <expr_stmt><expr><call><name><name>allLeftMetadata</name>.<name>removeEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <expr_stmt><expr><call><name><name>tm</name>.<name>setPendingRanges</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>pendingRanges</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Pending ranges:\n" + (<call><name><name>pendingRanges</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> ? "&lt;empty&gt;" : <call><name><name>tm</name>.<name>printPendingRanges</name></name><argument_list>()</argument_list></call>)</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+}</block></class>
+</unit>

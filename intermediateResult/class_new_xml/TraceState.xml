@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\tracing\TraceState.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tracing</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Arrays</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>UUID</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Stopwatch</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>helpers</name>.<name>MessageFormatter</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>Stage</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>StageManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamily</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ConsistencyLevel</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowMutation</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageProxy</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>.*;</import>
+
+<comment type="block" format="javadoc">/**
+ * ThreadLocal state for a tracing session. The presence of an instance of this class as a ThreadLocal denotes that an
+ * operation is being traced.
+ */</comment>
+<class><specifier>public</specifier> class <name>TraceState</name>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>UUID</name></type> <name>sessionId</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>coordinator</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Stopwatch</name></type> <name>watch</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>ByteBuffer</name></type> <name>sessionIdBytes</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>isLocallyOwned</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>TraceState</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>coordinator</name></decl></param>, <param><decl><type><name>UUID</name></type> <name>sessionId</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>locallyOwned</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>coordinator</name> != null</expr>;</assert>
+        <assert>assert <expr><name>sessionId</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><name><name>this</name>.<name>coordinator</name></name> = <name>coordinator</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>sessionId</name></name> = <name>sessionId</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>isLocallyOwned</name></name> = <name>locallyOwned</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>sessionIdBytes</name> = <call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr><name>sessionId</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>watch</name> = new <call><name>Stopwatch</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>watch</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>elapsed</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>elapsed</name> <init>= <expr><call><name><name>watch</name>.<name>elapsedTime</name></name><argument_list>(<argument><expr><name><name>TimeUnit</name>.<name>MICROSECONDS</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>elapsed</name> &lt; <name><name>Integer</name>.<name>MAX_VALUE</name></name> ? (<name>int</name>) <name>elapsed</name> : <name><name>Integer</name>.<name>MAX_VALUE</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>trace</name><parameter_list>(<param><decl><type><name>String</name></type> <name>format</name></decl></param>, <param><decl><type><name>Object</name></type> <name>arg</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>trace</name><argument_list>(<argument><expr><call><name><name>MessageFormatter</name>.<name>format</name></name><argument_list>(<argument><expr><name>format</name></expr></argument>, <argument><expr><name>arg</name></expr></argument>)</argument_list></call>.<call><name>getMessage</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>trace</name><parameter_list>(<param><decl><type><name>String</name></type> <name>format</name></decl></param>, <param><decl><type><name>Object</name></type> <name>arg1</name></decl></param>, <param><decl><type><name>Object</name></type> <name>arg2</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>trace</name><argument_list>(<argument><expr><call><name><name>MessageFormatter</name>.<name>format</name></name><argument_list>(<argument><expr><name>format</name></expr></argument>, <argument><expr><name>arg1</name></expr></argument>, <argument><expr><name>arg2</name></expr></argument>)</argument_list></call>.<call><name>getMessage</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>trace</name><parameter_list>(<param><decl><type><name>String</name></type> <name>format</name></decl></param>, <param><decl><type><name><name>Object</name><index>[]</index></name></type> <name>args</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>trace</name><argument_list>(<argument><expr><call><name><name>MessageFormatter</name>.<name>arrayFormat</name></name><argument_list>(<argument><expr><name>format</name></expr></argument>, <argument><expr><name>args</name></expr></argument>)</argument_list></call>.<call><name>getMessage</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>trace</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>String</name></type> <name>message</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><specifier>final</specifier> <name>int</name></type> <name>elapsed</name> <init>= <expr><call><name>elapsed</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>ByteBuffer</name></type> <name>eventId</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>UUIDGen</name>.<name>getTimeUUIDBytes</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>threadName</name> <init>= <expr><call><name><name>Thread</name>.<name>currentThread</name></name><argument_list>()</argument_list></call>.<call><name>getName</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>TRACING</name></name></expr></argument>)</argument_list></call>.<call><name>execute</name><argument_list>(<argument><expr>new <class><super><name>WrappedRunnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+            <block>{
+                <decl_stmt><decl><type><name>CFMetaData</name></type> <name>cfMeta</name> <init>= <expr><name><name>CFMetaData</name>.<name>TraceEventsCf</name></name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name>cfMeta</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>Tracing</name>.<name>addColumn</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><call><name><name>Tracing</name>.<name>buildName</name></name><argument_list>(<argument><expr><name>cfMeta</name></expr></argument>, <argument><expr><name>eventId</name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"source"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>Tracing</name>.<name>addColumn</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><call><name><name>Tracing</name>.<name>buildName</name></name><argument_list>(<argument><expr><name>cfMeta</name></expr></argument>, <argument><expr><name>eventId</name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"thread"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>threadName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>Tracing</name>.<name>addColumn</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><call><name><name>Tracing</name>.<name>buildName</name></name><argument_list>(<argument><expr><name>cfMeta</name></expr></argument>, <argument><expr><name>eventId</name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"source_elapsed"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>elapsed</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>Tracing</name>.<name>addColumn</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><call><name><name>Tracing</name>.<name>buildName</name></name><argument_list>(<argument><expr><name>cfMeta</name></expr></argument>, <argument><expr><name>eventId</name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"activity"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>message</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>RowMutation</name></type> <name>mutation</name> <init>= <expr>new <call><name>RowMutation</name><argument_list>(<argument><expr><name><name>Tracing</name>.<name>TRACE_KS</name></name></expr></argument>, <argument><expr><name>sessionIdBytes</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>mutation</name>.<name>add</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>StorageProxy</name>.<name>mutate</name></name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>mutation</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>ConsistencyLevel</name>.<name>ANY</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+}</block></class>
+</unit>

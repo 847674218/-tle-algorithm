@@ -1,0 +1,26 @@
+public static synchronized void mergeSchema(Collection<RowMutation> mutations) throws ConfigurationException, IOException
+    {
+        // current state of the schema
+        Map<DecoratedKey, ColumnFamily> oldKeyspaces = SystemTable.getSchema(SystemTable.SCHEMA_KEYSPACES_CF);
+        Map<DecoratedKey, ColumnFamily> oldColumnFamilies = SystemTable.getSchema(SystemTable.SCHEMA_COLUMNFAMILIES_CF);
+
+        for (RowMutation mutation : mutations)
+            mutation.apply();
+
+        if (!StorageService.instance.isClientMode())
+            flushSchemaCFs();
+
+        Schema.instance.updateVersionAndAnnounce();
+
+        // with new data applied
+        Map<DecoratedKey, ColumnFamily> newKeyspaces = SystemTable.getSchema(SystemTable.SCHEMA_KEYSPACES_CF);
+        Map<DecoratedKey, ColumnFamily> newColumnFamilies = SystemTable.getSchema(SystemTable.SCHEMA_COLUMNFAMILIES_CF);
+
+        Set<String> keyspacesToDrop = mergeKeyspaces(oldKeyspaces, newKeyspaces);
+        mergeColumnFamilies(oldColumnFamilies, newColumnFamilies);
+
+        // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
+        for (String keyspaceToDrop : keyspacesToDrop)
+            dropKeyspace(keyspaceToDrop);
+
+    }

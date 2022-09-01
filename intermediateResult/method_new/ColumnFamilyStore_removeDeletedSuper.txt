@@ -1,0 +1,31 @@
+private static void removeDeletedSuper(ColumnFamily cf, int gcBefore)
+    {
+        // TODO assume deletion means "most are deleted?" and add to clone, instead of remove from original?
+        // this could be improved by having compaction, or possibly even removeDeleted, r/m the tombstone
+        // once gcBefore has passed, so if new stuff is added in it doesn't used the wrong algorithm forever
+        Iterator<IColumn> iter = cf.iterator();
+        while (iter.hasNext())
+        {
+            SuperColumn c = (SuperColumn)iter.next();
+            Iterator<IColumn> subIter = c.getSubColumns().iterator();
+            while (subIter.hasNext())
+            {
+                IColumn subColumn = subIter.next();
+                // remove subcolumns if
+                // (a) the subcolumn itself is gcable or
+                // (b) the supercolumn is shadowed by the CF and the column is not newer
+                // (b) the subcolumn is shadowed by the supercolumn
+                if (subColumn.getLocalDeletionTime() < gcBefore
+                    || cf.deletionInfo().isDeleted(c.name(), subColumn.timestamp())
+                    || c.deletionInfo().isDeleted(subColumn))
+                {
+                    subIter.remove();
+                }
+            }
+            c.maybeResetDeletionTimes(gcBefore);
+            if (c.getSubColumns().isEmpty() && !c.isMarkedForDelete())
+            {
+                iter.remove();
+            }
+        }
+    }

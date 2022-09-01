@@ -1,0 +1,65 @@
+public void init(String keyspace)
+        {
+            Set<InetAddress> hosts = new HashSet<InetAddress>();
+            String[] nodes = hostlist.split(",");
+            for (String node : nodes)
+            {
+                try
+                {
+                    hosts.add(InetAddress.getByName(node));
+                }
+                catch (UnknownHostException e)
+                {
+                    throw new RuntimeException(e);
+                }
+            }
+            Iterator<InetAddress> hostiter = hosts.iterator();
+            while (hostiter.hasNext())
+            {
+                try
+                {
+                    InetAddress host = hostiter.next();
+                    Cassandra.Client client = createThriftClient(host.getHostAddress(), rpcPort);
+
+                    // log in
+                    client.set_keyspace(keyspace);
+                    if (username != null)
+                    {
+                        Map<String, String> creds = new HashMap<String, String>();
+                        creds.put(IAuthenticator.USERNAME_KEY, username);
+                        creds.put(IAuthenticator.PASSWORD_KEY, password);
+                        AuthenticationRequest authRequest = new AuthenticationRequest(creds);
+                        client.login(authRequest);
+                    }
+
+                    List<TokenRange> tokenRanges = client.describe_ring(keyspace);
+                    List<KsDef> ksDefs = client.describe_keyspaces();
+
+                    setPartitioner(client.describe_partitioner());
+                    Token.TokenFactory tkFactory = getPartitioner().getTokenFactory();
+
+                    for (TokenRange tr : tokenRanges)
+                    {
+                        Range<Token> range = new Range<Token>(tkFactory.fromString(tr.start_token), tkFactory.fromString(tr.end_token));
+                        for (String ep : tr.endpoints)
+                        {
+                            addRangeForEndpoint(range, InetAddress.getByName(ep));
+                        }
+                    }
+
+                    for (KsDef ksDef : ksDefs)
+                    {
+                        Set<String> cfs = new HashSet<String>();
+                        for (CfDef cfDef : ksDef.cf_defs)
+                            cfs.add(cfDef.name);
+                        knownCfs.put(ksDef.name, cfs);
+                    }
+                    break;
+                }
+                catch (Exception e)
+                {
+                    if (!hostiter.hasNext())
+                        throw new RuntimeException("Could not retrieve endpoint ranges: ", e);
+                }
+            }
+        }

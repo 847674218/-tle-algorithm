@@ -1,0 +1,50 @@
+public void truncate(String cfname) throws InvalidRequestException, UnavailableException, TimedOutException, TException
+    {
+        ClientState cState = state();
+
+        try
+        {
+            String keyspace = cState.getKeyspace();
+            cState.hasColumnFamilyAccess(keyspace, cfname, Permission.MODIFY);
+
+            if (startSessionIfRequested())
+            {
+                Tracing.instance().begin("truncate", ImmutableMap.of("cf", cfname, "ks", keyspace));
+            }
+            else
+            {
+                logger.debug("truncating {}.{}", cState.getKeyspace(), cfname);
+            }
+
+            schedule(DatabaseDescriptor.getTruncateRpcTimeout());
+            try
+            {
+                StorageProxy.truncateBlocking(cState.getKeyspace(), cfname);
+            }
+            finally
+            {
+                release();
+            }
+        }
+        catch (RequestValidationException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (org.apache.cassandra.exceptions.UnavailableException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (TimeoutException e)
+        {
+            logger.debug("... timed out");
+            throw new TimedOutException();
+        }
+        catch (IOException e)
+        {
+            throw (UnavailableException) new UnavailableException().initCause(e);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
+    }

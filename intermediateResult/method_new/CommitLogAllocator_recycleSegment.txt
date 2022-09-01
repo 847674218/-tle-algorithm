@@ -1,0 +1,24 @@
+public void recycleSegment(final File file)
+    {
+        // check against SEGMENT_SIZE avoids recycling odd-sized or empty segments from old C* versions and unit tests
+        if (isCapExceeded() || file.length() != DatabaseDescriptor.getCommitLogSegmentSize()
+                || CommitLogDescriptor.fromFileName(file.getName()).getMessagingVersion() != MessagingService.current_version)
+        {
+            // (don't decrease managed size, since this was never a "live" segment)
+            logger.debug("(Unopened) segment {} is no longer needed and will be deleted now", file);
+            FileUtils.deleteWithConfirm(file);
+            return;
+        }
+
+        logger.debug("Recycling {}", file);
+        // this wasn't previously a live segment, so add it to the managed size when we make it live
+        size.addAndGet(DatabaseDescriptor.getCommitLogSegmentSize());
+        queue.add(new Runnable()
+        {
+            public void run()
+            {
+                CommitLogSegment segment = new CommitLogSegment(file.getPath());
+                internalAddReadySegment(segment);
+            }
+        });
+    }

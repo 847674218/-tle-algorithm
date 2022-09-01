@@ -1,0 +1,54 @@
+public AbstractCompactionTask getNextBackgroundTask(final int gcBefore)
+    {
+        if (cfs.isCompactionDisabled())
+        {
+            logger.debug("Compaction is currently disabled.");
+            return null;
+        }
+
+        Set<SSTableReader> candidates = cfs.getUncompactingSSTables();
+        List<List<SSTableReader>> buckets = getBuckets(createSSTableAndLengthPairs(filterSuspectSSTables(candidates)), minSSTableSize);
+        logger.debug("Compaction buckets are {}", buckets);
+        updateEstimatedCompactionsByTasks(buckets);
+
+        List<List<SSTableReader>> prunedBuckets = new ArrayList<List<SSTableReader>>();
+        for (List<SSTableReader> bucket : buckets)
+        {
+            if (bucket.size() < cfs.getMinimumCompactionThreshold())
+                continue;
+
+            Collections.sort(bucket, new Comparator<SSTableReader>()
+            {
+                public int compare(SSTableReader o1, SSTableReader o2)
+                {
+                    return o1.descriptor.generation - o2.descriptor.generation;
+                }
+            });
+            prunedBuckets.add(bucket.subList(0, Math.min(bucket.size(), cfs.getMaximumCompactionThreshold())));
+        }
+
+        if (prunedBuckets.isEmpty())
+            return null;
+
+        List<SSTableReader> smallestBucket = Collections.min(prunedBuckets, new Comparator<List<SSTableReader>>()
+        {
+            public int compare(List<SSTableReader> o1, List<SSTableReader> o2)
+            {
+                long n = avgSize(o1) - avgSize(o2);
+                if (n < 0)
+                    return -1;
+                if (n > 0)
+                    return 1;
+                return 0;
+            }
+
+            private long avgSize(List<SSTableReader> sstables)
+            {
+                long n = 0;
+                for (SSTableReader sstable : sstables)
+                    n += sstable.bytesOnDisk();
+                return n / sstables.size();
+            }
+        });
+        return new CompactionTask(cfs, smallestBucket, gcBefore);
+    }

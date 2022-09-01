@@ -1,0 +1,46 @@
+private void handleStateNormal(InetAddress endpoint, String[] pieces)
+    {
+        assert pieces.length >= 2;
+        Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
+
+        if (logger_.isDebugEnabled())
+            logger_.debug("Node " + endpoint + " state normal, token " + token);
+
+        if (tokenMetadata_.isMember(endpoint))
+            logger_.info("Node " + endpoint + " state jump to normal");
+
+        // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
+        InetAddress currentOwner = tokenMetadata_.getEndpoint(token);
+        if (currentOwner == null)
+        {
+            logger_.debug("New node " + endpoint + " at token " + token);
+            tokenMetadata_.updateNormalToken(token, endpoint);
+            if (!isClientMode)
+                SystemTable.updateToken(endpoint, token);
+        }
+        else if (endpoint.equals(currentOwner))
+        {
+            // set state back to normal, since the node may have tried to leave, but failed and is now back up
+            // no need to persist, token/ip did not change
+            tokenMetadata_.updateNormalToken(token, endpoint);
+        }
+        else if (Gossiper.instance.compareEndpointStartup(endpoint, currentOwner) > 0)
+        {
+            logger_.info(String.format("Nodes %s and %s have the same token %s.  %s is the new owner",
+                                       endpoint, currentOwner, token, endpoint));
+            tokenMetadata_.updateNormalToken(token, endpoint);
+            Gossiper.instance.removeEndpoint(currentOwner);
+            if (!isClientMode)
+                SystemTable.updateToken(endpoint, token);
+        }
+        else
+        {
+            logger_.info(String.format("Nodes %s and %s have the same token %s.  Ignoring %s",
+                                       endpoint, currentOwner, token, endpoint));
+        }
+
+        if (tokenMetadata_.isMoving(endpoint)) // if endpoint was moving to a new token
+            tokenMetadata_.removeFromMoving(endpoint);
+
+        PendingRangeCalculatorService.instance.update();
+    }

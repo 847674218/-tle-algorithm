@@ -1,0 +1,479 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\service\MigrationManager.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ * &lt;p/&gt;
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * &lt;p/&gt;
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataInputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOError</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Callable</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutionException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Future</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collection</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>UUID</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>RuntimeMXBean</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>Stage</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>StageManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>KSMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryPath</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FastByteArrayInputStream</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FastByteArrayOutputStream</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>IAsyncCallback</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>Message</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>UUIDGen</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>WrappedRunnable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>ArrayUtils</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>MigrationManager</name> <super><implements>implements <name>IEndpointStateChangeSubscriber</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>MigrationManager</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// try that many times to send migration request to the node before giving up</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>MIGRATION_REQUEST_RETRIES</name> <init>= <expr>3</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>ByteBuffer</name></type> <name>LAST_MIGRATION_KEY</name> <init>= <expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"Last Migration"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>RuntimeMXBean</name></type> <name>runtimeMXBean</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getRuntimeMXBean</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>MIGRATION_DELAY_IN_MS</name> <init>= <expr>60000</expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onJoin</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>epState</name></decl></param>)</parameter_list>
+    <block>{}</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onChange</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>ApplicationState</name></type> <name>state</name></decl></param>, <param><decl><type><name>VersionedValue</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>state</name> != <name><name>ApplicationState</name>.<name>SCHEMA</name></name> || <call><name><name>endpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name>maybeScheduleSchemaPull</name><argument_list>(<argument><expr><call><name><name>UUID</name>.<name>fromString</name></name><argument_list>(<argument><expr><name><name>value</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onAlive</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>state</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>VersionedValue</name></type> <name>value</name> <init>= <expr><call><name><name>state</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>SCHEMA</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>value</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name>maybeScheduleSchemaPull</name><argument_list>(<argument><expr><call><name><name>UUID</name>.<name>fromString</name></name><argument_list>(<argument><expr><name><name>value</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onDead</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>state</name></decl></param>)</parameter_list>
+    <block>{}</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onRestart</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>state</name></decl></param>)</parameter_list>
+    <block>{}</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onRemove</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{}</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * If versions differ this node sends request with local migration list to the endpoint
+     * and expecting to receive a list of migrations to apply locally.
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>maybeScheduleSchemaPull</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>UUID</name></type> <name>theirVersion</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// Can't request migrations from nodes with versions younger than 1.1.7</comment>
+        <if>if <condition>(<expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &lt; <name><name>MessagingService</name>.<name>VERSION_117</name></name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <comment type="line">// Don't request migrations from nodes with versions that are &gt;= 1.2</comment>
+        <if>if <condition>(<expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &gt;= <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>theirVersion</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <if>if <condition>(<expr><call><name><name>Schema</name>.<name>emptyVersion</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>Schema</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> || <call><name><name>runtimeMXBean</name>.<name>getUptime</name></name><argument_list>()</argument_list></call> &lt; <name>MIGRATION_DELAY_IN_MS</name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// If we think we may be bootstrapping or have recently started, submit MigrationTask immediately</comment>
+            <expr_stmt><expr><call><name>submitMigrationTask</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <comment type="line">// Include a delay to make sure we have a chance to apply any changes being</comment>
+            <comment type="line">// pushed out simultaneously. See CASSANDRA-5025</comment>
+            <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+            <block>{
+                <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+                <block>{
+                    <comment type="line">// grab the latest version of the schema since it may have changed again since the initial scheduling</comment>
+                    <decl_stmt><decl><type><name>VersionedValue</name></type> <name>value</name> <init>= <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getEndpointStateForEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>getApplicationState</name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>SCHEMA</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>UUID</name></type> <name>currentVersion</name> <init>= <expr><call><name><name>UUID</name>.<name>fromString</name></name><argument_list>(<argument><expr><name><name>value</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>currentVersion</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <return>return;</return></then></if>
+
+                    <expr_stmt><expr><call><name>submitMigrationTask</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></function>
+            }</block></class></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>StorageService</name>.<name>optionalTasks</name>.<name>schedule</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr><name>MIGRATION_DELAY_IN_MS</name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>submitMigrationTask</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="block">/*
+         * Do not de-ref the future because that causes distributed deadlock (CASSANDRA-3832) because we are
+         * running in the gossip stage.
+         */</comment>
+        <expr_stmt><expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>MIGRATION</name></name></expr></argument>)</argument_list></call>.<call><name>submit</name><argument_list>(<argument><expr>new <call><name>MigrationTask</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>isReadyForBootstrap</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>MIGRATION</name></name></expr></argument>)</argument_list></call>.<call><name>getActiveCount</name><argument_list>()</argument_list></call> == 0</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>announceNewKeyspace</name><parameter_list>(<param><decl><type><name>KSMetaData</name></type> <name>ksm</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ksm</name>.<name>validate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableDefinition</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Cannot add already existing keyspace '%s'."</expr></argument>, <argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Create new Keyspace: %s"</expr></argument>, <argument><expr><name>ksm</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>announce</name><argument_list>(<argument><expr><call><name><name>ksm</name>.<name>toSchema</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>announceNewColumnFamily</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>cfm</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>cfm</name>.<name>validate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>KSMetaData</name></type> <name>ksm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableDefinition</name></name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>ksm</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Cannot add column family '%s' to non existing keyspace '%s'."</expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then>
+        <else>else <if>if <condition>(<expr><call><name><name>ksm</name>.<name>cfMetaData</name></name><argument_list>()</argument_list></call>.<call><name>containsKey</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Cannot add already existing column family '%s' to keyspace '%s'."</expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if></else></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Create new ColumnFamily: %s"</expr></argument>, <argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>announce</name><argument_list>(<argument><expr><call><name><name>cfm</name>.<name>toSchema</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>announceKeyspaceUpdate</name><parameter_list>(<param><decl><type><name>KSMetaData</name></type> <name>ksm</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ksm</name>.<name>validate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>KSMetaData</name></type> <name>oldKsm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getKSMetaData</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>oldKsm</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Cannot update non existing keyspace '%s'."</expr></argument>, <argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Update Keyspace '%s' From %s To %s"</expr></argument>, <argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>, <argument><expr><name>oldKsm</name></expr></argument>, <argument><expr><name>ksm</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>announce</name><argument_list>(<argument><expr><call><name><name>oldKsm</name>.<name>toSchemaUpdate</name></name><argument_list>(<argument><expr><name>ksm</name></expr></argument>, <argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>announceColumnFamilyUpdate</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>cfm</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>cfm</name>.<name>validate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>CFMetaData</name></type> <name>oldCfm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>oldCfm</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Cannot update non existing column family '%s' in keyspace '%s'."</expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Update ColumnFamily '%s/%s' From %s To %s"</expr></argument>, <argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>oldCfm</name></expr></argument>, <argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>announce</name><argument_list>(<argument><expr><call><name><name>oldCfm</name>.<name>toSchemaUpdate</name></name><argument_list>(<argument><expr><name>cfm</name></expr></argument>, <argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>announceKeyspaceDrop</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ksName</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>KSMetaData</name></type> <name>oldKsm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getKSMetaData</name></name><argument_list>(<argument><expr><name>ksName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>oldKsm</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Cannot drop non existing keyspace '%s'."</expr></argument>, <argument><expr><name>ksName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Drop Keyspace '%s'"</expr></argument>, <argument><expr><name><name>oldKsm</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>announce</name><argument_list>(<argument><expr><call><name><name>oldKsm</name>.<name>dropFromSchema</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>announceColumnFamilyDrop</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ksName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>CFMetaData</name></type> <name>oldCfm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><name>ksName</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>oldCfm</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Cannot drop non existing column family '%s' in keyspace '%s'."</expr></argument>, <argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>ksName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Drop ColumnFamily '%s/%s'"</expr></argument>, <argument><expr><name><name>oldCfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>oldCfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>announce</name><argument_list>(<argument><expr><call><name><name>oldCfm</name>.<name>dropFromSchema</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * actively announce a new version to active hosts via rpc
+     * @param schema The schema mutation to be applied
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>announce</name><parameter_list>(<param><decl><type><name>RowMutation</name></type> <name>schema</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>waitOnFuture</name></name><argument_list>(<argument><expr><call><name>announce</name><argument_list>(<argument><expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>schema</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>pushSchemaMutation</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>RowMutation</name></argument>&gt;</argument_list></name></type> <name>schema</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>Message</name></type> <name>msg</name> <init>= <expr><call><name>makeMigrationMessage</name><argument_list>(<argument><expr><name>schema</name></expr></argument>, <argument><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendOneWay</name><argument_list>(<argument><expr><name>msg</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>ex</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>ex</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="line">// Returns a future on the local application of the schema</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>announce</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>RowMutation</name></argument>&gt;</argument_list></name></type> <name>schema</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>f</name> <init>= <expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>MIGRATION</name></name></expr></argument>)</argument_list></call>.<call><name>submit</name><argument_list>(<argument><expr>new <class><super><name>WrappedRunnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>protected</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+            <block>{
+                <expr_stmt><expr><call><name><name>DefsTable</name>.<name>mergeSchema</name></name><argument_list>(<argument><expr><name>schema</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getLiveMembers</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>endpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if> <comment type="line">// we've delt with localhost already</comment>
+
+            <comment type="line">// don't send migrations to the nodes with the versions older than &lt; 1.1</comment>
+            <if>if <condition>(<expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &lt; <name><name>MessagingService</name>.<name>VERSION_11</name></name></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <expr_stmt><expr><call><name>pushSchemaMutation</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>schema</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>f</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Announce my version passively over gossip.
+     * Used to notify nodes as they arrive in the cluster.
+     *
+     * @param version The schema version to announce
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>passiveAnnounce</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>addLocalApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>SCHEMA</name></name></expr></argument>, <argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>valueFactory</name>.<name>schema</name></name><argument_list>(<argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Gossiping my schema version " + <name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Serialize given row mutations into raw bytes and make a migration message
+     * (other half of transformation is in DefinitionsUpdateResponseVerbHandler.)
+     *
+     * @param schema The row mutations to send to remote nodes
+     * @param version The version to use for message
+     *
+     * @return Serialized migration containing schema mutations
+     *
+     * @throws IOException on failed serialization
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>Message</name></type> <name>makeMigrationMessage</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>RowMutation</name></argument>&gt;</argument_list></name></type> <name>schema</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr>new <call><name>Message</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>StorageService</name>.<name>Verb</name>.<name>DEFINITIONS_UPDATE</name></name></expr></argument>, <argument><expr><call><name>serializeSchema</name><argument_list>(<argument><expr><name>schema</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Serialize given row mutations into raw bytes
+     *
+     * @param schema The row mutations to serialize
+     * @param version The version of the message service to use for serialization
+     *
+     * @return serialized mutations
+     *
+     * @throws IOException on failed serialization
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>byte</name><index>[]</index></type> <name>serializeSchema</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>RowMutation</name></argument>&gt;</argument_list></name></type> <name>schema</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>FastByteArrayOutputStream</name></type> <name>bout</name> <init>= <expr>new <call><name>FastByteArrayOutputStream</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>DataOutputStream</name></type> <name>dout</name> <init>= <expr>new <call><name>DataOutputStream</name><argument_list>(<argument><expr><name>bout</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>dout</name>.<name>writeInt</name></name><argument_list>(<argument><expr><call><name><name>schema</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <for>for (<init><decl><type><name>RowMutation</name></type> <name>mutation</name> <range>: <expr><name>schema</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>RowMutation</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><name>mutation</name></expr></argument>, <argument><expr><name>dout</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <expr_stmt><expr><call><name><name>dout</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <return>return <expr><call><name><name>bout</name>.<name>toByteArray</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Deserialize migration message considering data compatibility starting from version 1.1
+     *
+     * @param data The data of the message from coordinator which hold schema mutations to apply
+     * @param version The version of the message
+     *
+     * @return The collection of the row mutations to apply on the node (aka schema)
+     *
+     * @throws IOException if message is of incompatible version or data is corrupted
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>RowMutation</name></argument>&gt;</argument_list></name></type> <name>deserializeMigrationMessage</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>data</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>RowMutation</name></argument>&gt;</argument_list></name></type> <name>schema</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>RowMutation</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>DataInputStream</name></type> <name>in</name> <init>= <expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr>new <call><name>FastByteArrayInputStream</name><argument_list>(<argument><expr><name>data</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>count</name> <init>= <expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>count</name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><call><name><name>schema</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>RowMutation</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr><name>in</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <return>return <expr><name>schema</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Clear all locally stored schema information and reset schema to initial state.
+     * Called by user (via JMX) who wants to get rid of schema disagreement.
+     *
+     * @throws IOException if schema tables truncation fails
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>resetLocalSchema</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Starting local schema reset..."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Truncating schema tables..."</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <comment type="line">// truncate schema tables</comment>
+            <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>waitOnFutures</name></name><argument_list>(<argument><expr>new <class><super><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>(<argument><expr>3</expr></argument>)</argument_list>
+            <block>{<block>{
+                <expr_stmt><expr><call><name><name>SystemTable</name>.<name>schemaCFS</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_KEYSPACES_CF</name></name></expr></argument>)</argument_list></call>.<call><name>truncate</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>SystemTable</name>.<name>schemaCFS</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNFAMILIES_CF</name></name></expr></argument>)</argument_list></call>.<call><name>truncate</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>SystemTable</name>.<name>schemaCFS</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNS_CF</name></name></expr></argument>)</argument_list></call>.<call><name>truncate</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>}</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Clearing local schema keyspace definitions..."</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>liveEndpoints</name> <init>= <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getLiveMembers</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>liveEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// force migration is there are nodes around, first of all</comment>
+            <comment type="line">// check if there are nodes with versions &gt;= 1.1.7 to request migrations from,</comment>
+            <comment type="line">// because migration format of the nodes with versions &lt; 1.1 is incompatible with older versions</comment>
+            <comment type="line">// and due to broken timestamps in versions prior to 1.1.7</comment>
+            <for>for (<init><decl><type><name>InetAddress</name></type> <name>node</name> <range>: <expr><name>liveEndpoints</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>(<argument><expr><name>node</name></expr></argument>)</argument_list></call> &gt;= <name><name>MessagingService</name>.<name>VERSION_117</name></name></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Requesting schema from " + <name>node</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                    <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>waitOnFuture</name></name><argument_list>(<argument><expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>MIGRATION</name></name></expr></argument>)</argument_list></call>.<call><name>submit</name><argument_list>(<argument><expr>new <call><name>MigrationTask</name><argument_list>(<argument><expr><name>node</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                }</block></then></if>
+            }</block></for>
+
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Local schema reset is complete."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Used only in case node has old style migration schema (newly updated)
+     * @return the UUID identifying version of the last applied migration
+     */</comment>
+    <function><type><annotation>@<name>Deprecated</name></annotation>
+    <specifier>public</specifier> <specifier>static</specifier> <name>UUID</name></type> <name>getLastMigrationId</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>dkey</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>decorateKey</name><argument_list>(<argument><expr><name>LAST_MIGRATION_KEY</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Table</name></type> <name>defs</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfStore</name> <init>= <expr><call><name><name>defs</name>.<name>getColumnFamilyStore</name></name><argument_list>(<argument><expr><name><name>DefsTable</name>.<name>OLD_SCHEMA_CF</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>QueryFilter</name></type> <name>filter</name> <init>= <expr><call><name><name>QueryFilter</name>.<name>getNamesFilter</name></name><argument_list>(<argument><expr><name>dkey</name></expr></argument>, <argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name><name>DefsTable</name>.<name>OLD_SCHEMA_CF</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>LAST_MIGRATION_KEY</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>cfStore</name>.<name>getColumnFamily</name></name><argument_list>(<argument><expr><name>filter</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>cf</name> == null || <call><name><name>cf</name>.<name>getColumnNames</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then>
+        <else>else
+            <return>return <expr><call><name><name>UUIDGen</name>.<name>getUUID</name></name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>LAST_MIGRATION_KEY</name></expr></argument>)</argument_list></call>.<call><name>value</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return></else></if>
+    }</block></function>
+
+    <class><specifier>static</specifier> class <name>MigrationTask</name> <super><extends>extends <name>WrappedRunnable</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>endpoint</name></decl>;</decl_stmt>
+
+        <constructor><name>MigrationTask</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>endpoint</name></name> = <name>endpoint</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>Message</name></type> <name>message</name> <init>= <expr>new <call><name>Message</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                          <argument><expr><name><name>StorageService</name>.<name>Verb</name>.<name>MIGRATION_REQUEST</name></name></expr></argument>,
+                                          <argument><expr><name><name>ArrayUtils</name>.<name>EMPTY_BYTE_ARRAY</name></name></expr></argument>,
+                                          <argument><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr>!<call><name><name>FailureDetector</name>.<name>instance</name>.<name>isAlive</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Can't send migration request: node {} is down."</expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+
+            <decl_stmt><decl><type><name>IAsyncCallback</name></type> <name>cb</name> <init>= <expr>new <class><super><name>IAsyncCallback</name></super><argument_list>()</argument_list>
+            <block>{
+                <function><type><specifier>public</specifier> <name>void</name></type> <name>response</name><parameter_list>(<param><decl><type><name>Message</name></type> <name>message</name></decl></param>)</parameter_list>
+                <block>{
+                    <try>try
+                    <block>{
+                        <expr_stmt><expr><call><name><name>DefsTable</name>.<name>mergeRemoteSchema</name></name><argument_list>(<argument><expr><call><name><name>message</name>.<name>getMessageBody</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>message</name>.<name>getVersion</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block>
+                    <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"IOException merging remote schema"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></catch>
+                    <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Configuration exception merging remote schema"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></catch></try>
+                }</block></function>
+
+                <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isLatencyForSnitch</name><parameter_list>()</parameter_list>
+                <block>{
+                    <return>return <expr>false</expr>;</return>
+                }</block></function>
+            }</block></class></expr></init></decl>;</decl_stmt>
+
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendRR</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>cb</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

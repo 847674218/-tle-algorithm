@@ -1,0 +1,81 @@
+private int importSorted(String jsonFile, ColumnFamily columnFamily, String ssTablePath,
+            IPartitioner<?> partitioner) throws IOException
+    {
+        int importedKeys = 0; // already imported keys count
+        long start = System.currentTimeMillis();
+
+        JsonParser parser = getParser(jsonFile);
+
+        if (keyCountToImport == null)
+        {
+            keyCountToImport = 0;
+            System.out.println("Counting keys to import, please wait... (NOTE: to skip this use -n <num_keys>)");
+
+            parser.nextToken(); // START_ARRAY
+            while (parser.nextToken() != null)
+            {
+                parser.skipChildren();
+                if (parser.getCurrentToken() == JsonToken.END_ARRAY)
+                    break;
+
+                keyCountToImport++;
+            }
+        }
+
+        System.out.printf("Importing %s keys...%n", keyCountToImport);
+
+        parser = getParser(jsonFile); // renewing parser
+        SSTableWriter writer = new SSTableWriter(ssTablePath, keyCountToImport);
+
+        int lineNumber = 1;
+        DecoratedKey prevStoredKey = null;
+
+        parser.nextToken(); // START_ARRAY
+        while (parser.nextToken() != null)
+        {
+            String key = parser.getCurrentName();
+            Map<?, ?> row = parser.readValueAs(new TypeReference<Map<?, ?>>(){});
+            DecoratedKey currentKey = partitioner.decorateKey(hexToBytes((String) row.get("key")));
+
+            if (row.containsKey("metadata"))
+                parseMeta((Map<?, ?>) row.get("metadata"), columnFamily);
+
+
+            if (columnFamily.getType() == ColumnFamilyType.Super)
+                addToSuperCF((Map<?, ?>)row.get("columns"), columnFamily);
+            else
+                addToStandardCF((List<?>)row.get("columns"), columnFamily);
+
+            if (prevStoredKey != null && prevStoredKey.compareTo(currentKey) != -1)
+            {
+                System.err
+                        .printf("Line %d: Key %s is greater than previous, collection is not sorted properly. Aborting import. You might need to delete SSTables manually.%n",
+                                lineNumber, key);
+                return -1;
+            }
+
+            // saving decorated key
+            writer.append(currentKey, columnFamily);
+            columnFamily.clear();
+
+            prevStoredKey = currentKey;
+            importedKeys++;
+            lineNumber++;
+
+            long current = System.currentTimeMillis();
+
+            if (current - start >= 5000) // 5 secs.
+            {
+                System.out.printf("Currently imported %d keys.%n", importedKeys);
+                start = current;
+            }
+
+            if (keyCountToImport == importedKeys)
+                break;
+
+        }
+
+        writer.closeAndOpenReader();
+
+        return importedKeys;
+    }

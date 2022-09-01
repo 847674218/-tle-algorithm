@@ -1,0 +1,357 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\compaction\Scrubber.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>RandomAccessReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>IntervalTree</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>OutputHandler</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>Scrubber</name> <super><implements>implements <name>Closeable</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>cfs</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>SSTableReader</name></type> <name>sstable</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>File</name></type> <name>destination</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>CompactionController</name></type> <name>controller</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>isCommutative</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>expectedBloomFilterSize</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>RandomAccessReader</name></type> <name>dataFile</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>RandomAccessReader</name></type> <name>indexFile</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ScrubInfo</name></type> <name>scrubInfo</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>rowsRead</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>SSTableWriter</name></type> <name>writer</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>SSTableReader</name></type> <name>newSstable</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>SSTableReader</name></type> <name>newInOrderSstable</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>goodRows</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>badRows</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>emptyRows</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>OutputHandler</name></type> <name>outputHandler</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name>AbstractCompactedRow</name></argument>&gt;</argument_list></name></type> <name>acrComparator</name> <init>= <expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>AbstractCompactedRow</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+    <block>{
+         <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>AbstractCompactedRow</name></type> <name>r1</name></decl></param>, <param><decl><type><name>AbstractCompactedRow</name></type> <name>r2</name></decl></param>)</parameter_list>
+         <block>{
+             <return>return <expr><call><name><name>r1</name>.<name>key</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>r2</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>;</return>
+         }</block></function>
+    }</block></class></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>AbstractCompactedRow</name></argument>&gt;</argument_list></name></type> <name>outOfOrderRows</name> <init>= <expr>new <call><name><name>TreeSet</name><argument_list>&lt;<argument><name>AbstractCompactedRow</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>acrComparator</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>Scrubber</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>sstable</name></expr></argument>, <argument><expr>new <call><name><name>OutputHandler</name>.<name>LogOutput</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>Scrubber</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>OutputHandler</name></type> <name>outputHandler</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isOffline</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>cfs</name></name> = <name>cfs</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>sstable</name></name> = <name>sstable</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>outputHandler</name></name> = <name>outputHandler</name></expr>;</expr_stmt>
+
+        <comment type="line">// Calculate the expected compacted filesize</comment>
+        <expr_stmt><expr><name><name>this</name>.<name>destination</name></name> = <call><name><name>cfs</name>.<name>directories</name>.<name>getDirectoryForNewSSTables</name></name><argument_list>(<argument><expr><call><name><name>sstable</name>.<name>onDiskLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>destination</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"disk full"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>toScrub</name> <init>= <expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// If we run scrub offline, we should never purge tombstone, as we cannot know if other sstable have data that the tombstone deletes.</comment>
+        <expr_stmt><expr><name><name>this</name>.<name>controller</name></name> = <name>isOffline</name>
+                        ? new <call><name>ScrubController</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call>
+                        : new <call><name>CompactionController</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>CompactionManager</name>.<name>getDefaultGcBefore</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>isCommutative</name></name> = <call><name><name>cfs</name>.<name>metadata</name>.<name>getDefaultValidator</name></name><argument_list>()</argument_list></call>.<call><name>isCommutative</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>expectedBloomFilterSize</name></name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getIndexInterval</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call>(<name>int</name>)<argument_list>(<argument><expr><call><name><name>SSTableReader</name>.<name>getApproximateKeyCount</name></name><argument_list>(<argument><expr><name>toScrub</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// loop through each row, deserializing to check for damage.</comment>
+        <comment type="line">// we'll also loop through the index at the same time, using the position from the index to recover if the</comment>
+        <comment type="line">// row header (key or data size) is corrupt. (This means our position in the index file will be one row</comment>
+        <comment type="line">// "ahead" of the data file.)</comment>
+        <expr_stmt><expr><name><name>this</name>.<name>dataFile</name></name> = <call><name><name>sstable</name>.<name>openDataReader</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>indexFile</name></name> = <call><name><name>RandomAccessReader</name>.<name>open</name></name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>sstable</name>.<name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>PRIMARY_INDEX</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>scrubInfo</name></name> = new <call><name>ScrubInfo</name><argument_list>(<argument><expr><name>dataFile</name></expr></argument>, <argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>scrub</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>outputHandler</name>.<name>output</name></name><argument_list>(<argument><expr>"Scrubbing " + <name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>nextIndexKey</name> <init>= <expr><call><name><name>ByteBufferUtil</name>.<name>readWithShortLength</name></name><argument_list>(<argument><expr><name>indexFile</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <block>{
+                <comment type="line">// throw away variable so we don't have a side effect in the assert</comment>
+                <decl_stmt><decl><type><name>long</name></type> <name>firstRowPositionFromIndex</name> <init>= <expr><call><name><name>indexFile</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <assert>assert <expr><name>firstRowPositionFromIndex</name> == 0 : <name>firstRowPositionFromIndex</name></expr>;</assert>
+            }</block>
+
+            <comment type="line">// TODO errors when creating the writer may leave empty temp files.</comment>
+            <expr_stmt><expr><name>writer</name> = <call><name><name>CompactionManager</name>.<name>maybeCreateWriter</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>destination</name></expr></argument>, <argument><expr><name>expectedBloomFilterSize</name></expr></argument>, <argument><expr>null</expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>AbstractCompactedRow</name></type> <name>prevRow</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+            <while>while <condition>(<expr>!<call><name><name>dataFile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>scrubInfo</name>.<name>isStopRequested</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>CompactionInterruptedException</name><argument_list>(<argument><expr><call><name><name>scrubInfo</name>.<name>getCompactionInfo</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                <decl_stmt><decl><type><name>long</name></type> <name>rowStart</name> <init>= <expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>outputHandler</name>.<name>debug</name></name><argument_list>(<argument><expr>"Reading row at " + <name>rowStart</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>key</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>dataSize</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>key</name> = <call><name><name>SSTableReader</name>.<name>decodeKey</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>partitioner</name></name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>readWithShortLength</name></name><argument_list>(<argument><expr><name>dataFile</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>dataSize</name> = <name><name>sstable</name>.<name>descriptor</name>.<name>hasIntRowSize</name></name> ? <call><name><name>dataFile</name>.<name>readInt</name></name><argument_list>()</argument_list></call> : <call><name><name>dataFile</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>outputHandler</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"row %s is %s bytes"</expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>dataSize</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>th</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name>throwIfFatal</name><argument_list>(<argument><expr><name>th</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <comment type="line">// check for null key below</comment>
+                }</block></catch></try>
+
+                <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>currentIndexKey</name> <init>= <expr><name>nextIndexKey</name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>nextRowPositionFromIndex</name></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>nextIndexKey</name> = <call><name><name>indexFile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call> ? null : <call><name><name>ByteBufferUtil</name>.<name>readWithShortLength</name></name><argument_list>(<argument><expr><name>indexFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>nextRowPositionFromIndex</name> = <call><name><name>indexFile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call> ? <call><name><name>dataFile</name>.<name>length</name></name><argument_list>()</argument_list></call> : <call><name><name>indexFile</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>th</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr>"Error reading index file"</expr></argument>, <argument><expr><name>th</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>nextIndexKey</name> = null</expr>;</expr_stmt>
+                    <expr_stmt><expr><name>nextRowPositionFromIndex</name> = <call><name><name>dataFile</name>.<name>length</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></catch></try>
+
+                <decl_stmt><decl><type><name>long</name></type> <name>dataStart</name> <init>= <expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>dataStartFromIndex</name> <init>= <expr><name>currentIndexKey</name> == null
+                                        ? -1
+                                        : <name>rowStart</name> + 2 + <call><name><name>currentIndexKey</name>.<name>remaining</name></name><argument_list>()</argument_list></call> + (<name><name>sstable</name>.<name>descriptor</name>.<name>hasIntRowSize</name></name> ? 4 : 8)</expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>dataSizeFromIndex</name> <init>= <expr><name>nextRowPositionFromIndex</name> - <name>dataStartFromIndex</name></expr></init></decl>;</decl_stmt>
+                <assert>assert <expr><name>currentIndexKey</name> != null || <call><name><name>indexFile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call></expr>;</assert>
+                <if>if <condition>(<expr><name>currentIndexKey</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>outputHandler</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Index doublecheck: row %s is %s bytes"</expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name>currentIndexKey</name></expr></argument>)</argument_list></call></expr></argument>,  <argument><expr><name>dataSizeFromIndex</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <expr_stmt><expr><call><name><name>writer</name>.<name>mark</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <try>try
+                <block>{
+                    <if>if <condition>(<expr><name>key</name> == null</expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Unable to read row key from data file"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                    <if>if <condition>(<expr><name>dataSize</name> &gt; <call><name><name>dataFile</name>.<name>length</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Impossible row size " + <name>dataSize</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                    <decl_stmt><decl><type><name>SSTableIdentityIterator</name></type> <name>row</name> <init>= <expr>new <call><name>SSTableIdentityIterator</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>dataFile</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>dataStart</name></expr></argument>, <argument><expr><name>dataSize</name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>AbstractCompactedRow</name></type> <name>compactedRow</name> <init>= <expr><call><name><name>controller</name>.<name>getCompactedRow</name></name><argument_list>(<argument><expr><name>row</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><call><name><name>compactedRow</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><name>emptyRows</name>++</expr>;</expr_stmt>
+                    }</block></then>
+                    <else>else
+                    <block>{
+                        <if>if <condition>(<expr><name>prevRow</name> != null &amp;&amp; <call><name><name>acrComparator</name>.<name>compare</name></name><argument_list>(<argument><expr><name>prevRow</name></expr></argument>, <argument><expr><name>compactedRow</name></expr></argument>)</argument_list></call> &gt;= 0</expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>outOfOrderRows</name>.<name>add</name></name><argument_list>(<argument><expr><name>compactedRow</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Out of order row detected (%s found after %s)"</expr></argument>, <argument><expr><name><name>compactedRow</name>.<name>key</name></name></expr></argument>, <argument><expr><name><name>prevRow</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <continue>continue;</continue>
+                        }</block></then></if>
+
+                        <expr_stmt><expr><call><name><name>writer</name>.<name>append</name></name><argument_list>(<argument><expr><name>compactedRow</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>prevRow</name> = <name>compactedRow</name></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>goodRows</name>++</expr>;</expr_stmt>
+                    }</block></else></if>
+                    <if>if <condition>(<expr>!<call><name><name>key</name>.<name>key</name>.<name>equals</name></name><argument_list>(<argument><expr><name>currentIndexKey</name></expr></argument>)</argument_list></call> || <name>dataStart</name> != <name>dataStartFromIndex</name></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr>"Index file contained a different key or row size; using key from data file"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>th</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name>throwIfFatal</name><argument_list>(<argument><expr><name>th</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr>"Non-fatal error reading row (stacktrace follows)"</expr></argument>, <argument><expr><name>th</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>writer</name>.<name>resetAndTruncate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+                    <if>if <condition>(<expr><name>currentIndexKey</name> != null
+                        &amp;&amp; (<name>key</name> == null || !<call><name><name>key</name>.<name>key</name>.<name>equals</name></name><argument_list>(<argument><expr><name>currentIndexKey</name></expr></argument>)</argument_list></call> || <name>dataStart</name> != <name>dataStartFromIndex</name> || <name>dataSize</name> != <name>dataSizeFromIndex</name>)</expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>outputHandler</name>.<name>output</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Retrying from row index; data is %s bytes starting at %s"</expr></argument>,
+                                                  <argument><expr><name>dataSizeFromIndex</name></expr></argument>, <argument><expr><name>dataStartFromIndex</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>key</name> = <call><name><name>SSTableReader</name>.<name>decodeKey</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>partitioner</name></name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>, <argument><expr><name>currentIndexKey</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <try>try
+                        <block>{
+                            <decl_stmt><decl><type><name>SSTableIdentityIterator</name></type> <name>row</name> <init>= <expr>new <call><name>SSTableIdentityIterator</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>dataFile</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>dataStartFromIndex</name></expr></argument>, <argument><expr><name>dataSizeFromIndex</name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                            <decl_stmt><decl><type><name>AbstractCompactedRow</name></type> <name>compactedRow</name> <init>= <expr><call><name><name>controller</name>.<name>getCompactedRow</name></name><argument_list>(<argument><expr><name>row</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                            <if>if <condition>(<expr><call><name><name>compactedRow</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                            <block>{
+                                <expr_stmt><expr><name>emptyRows</name>++</expr>;</expr_stmt>
+                            }</block></then>
+                            <else>else
+                            <block>{
+                                <if>if <condition>(<expr><name>prevRow</name> != null &amp;&amp; <call><name><name>acrComparator</name>.<name>compare</name></name><argument_list>(<argument><expr><name>prevRow</name></expr></argument>, <argument><expr><name>compactedRow</name></expr></argument>)</argument_list></call> &gt;= 0</expr>)</condition><then>
+                                <block>{
+                                    <expr_stmt><expr><call><name><name>outOfOrderRows</name>.<name>add</name></name><argument_list>(<argument><expr><name>compactedRow</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                                    <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Out of order row detected (%s found after %s)"</expr></argument>, <argument><expr><name><name>compactedRow</name>.<name>key</name></name></expr></argument>, <argument><expr><name><name>prevRow</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                                    <continue>continue;</continue>
+                                }</block></then></if>
+                                <expr_stmt><expr><call><name><name>writer</name>.<name>append</name></name><argument_list>(<argument><expr><name>compactedRow</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                                <expr_stmt><expr><name>prevRow</name> = <name>compactedRow</name></expr>;</expr_stmt>
+                                <expr_stmt><expr><name>goodRows</name>++</expr>;</expr_stmt>
+                            }</block></else></if>
+                        }</block>
+                        <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>th2</name></decl></param>)</parameter_list>
+                        <block>{
+                            <expr_stmt><expr><call><name>throwIfFatal</name><argument_list>(<argument><expr><name>th2</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <comment type="line">// Skipping rows is dangerous for counters (see CASSANDRA-2759)</comment>
+                            <if>if <condition>(<expr><name>isCommutative</name></expr>)</condition><then>
+                                <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>th2</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                            <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr>"Retry failed too. Skipping to next row (retry's stacktrace follows)"</expr></argument>, <argument><expr><name>th2</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name><name>writer</name>.<name>resetAndTruncate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name><name>dataFile</name>.<name>seek</name></name><argument_list>(<argument><expr><name>nextRowPositionFromIndex</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><name>badRows</name>++</expr>;</expr_stmt>
+                        }</block></catch></try>
+                    }</block></then>
+                    <else>else
+                    <block>{
+                        <comment type="line">// Skipping rows is dangerous for counters (see CASSANDRA-2759)</comment>
+                        <if>if <condition>(<expr><name>isCommutative</name></expr>)</condition><then>
+                            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>th</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                        <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr>"Row at " + <name>dataStart</name> + " is unreadable; skipping to next"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <if>if <condition>(<expr><name>currentIndexKey</name> != null</expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>dataFile</name>.<name>seek</name></name><argument_list>(<argument><expr><name>nextRowPositionFromIndex</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                        <expr_stmt><expr><name>badRows</name>++</expr>;</expr_stmt>
+                    }</block></else></if>
+                }</block></catch></try>
+                <if>if <condition>(<expr>(<name>rowsRead</name>++ % 1000) == 0</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>controller</name>.<name>mayThrottle</name></name><argument_list>(<argument><expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></while>
+
+            <if>if <condition>(<expr><call><name><name>writer</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+                <expr_stmt><expr><name>newSstable</name> = <call><name><name>writer</name>.<name>closeAndOpenReader</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>maxDataAge</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>writer</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>writer</name>.<name>abort</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            <throw>throw <expr><call><name><name>FBUtilities</name>.<name>unchecked</name></name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <if>if <condition>(<expr>!<call><name><name>outOfOrderRows</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>SSTableWriter</name></type> <name>inOrderWriter</name> <init>= <expr><call><name><name>CompactionManager</name>.<name>maybeCreateWriter</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>destination</name></expr></argument>, <argument><expr><name>expectedBloomFilterSize</name></expr></argument>, <argument><expr>null</expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>AbstractCompactedRow</name></type> <name>row</name> <range>: <expr><name>outOfOrderRows</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>inOrderWriter</name>.<name>append</name></name><argument_list>(<argument><expr><name>row</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><name>newInOrderSstable</name> = <call><name><name>inOrderWriter</name>.<name>closeAndOpenReader</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>maxDataAge</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%d out of order rows found while scrubbing %s; Those have been written (in order) to a new sstable (%s)"</expr></argument>, <argument><expr><call><name><name>outOfOrderRows</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>newInOrderSstable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><name>newSstable</name> == null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name>badRows</name> &gt; 0</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr>"No valid rows found while scrubbing " + <name>sstable</name> + "; it is marked for deletion now. If you want to attempt manual recovery, you can find a copy in the pre-scrub snapshot"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name><name>outputHandler</name>.<name>output</name></name><argument_list>(<argument><expr>"Scrub of " + <name>sstable</name> + " complete; looks like all " + <name>emptyRows</name> + " rows were tombstoned"</expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name><name>outputHandler</name>.<name>output</name></name><argument_list>(<argument><expr>"Scrub of " + <name>sstable</name> + " complete: " + <name>goodRows</name> + " rows in new sstable and " + <name>emptyRows</name> + " empty (tombstoned) rows dropped"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>badRows</name> &gt; 0</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>outputHandler</name>.<name>warn</name></name><argument_list>(<argument><expr>"Unable to recover " + <name>badRows</name> + " rows that were skipped.  You can attempt manual recovery from the pre-scrub snapshot.  You can also run nodetool repair to transfer the data from a healthy replica, if any"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>SSTableReader</name></type> <name>getNewSSTable</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>newSstable</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>SSTableReader</name></type> <name>getNewInOrderSSTable</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>newInOrderSstable</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>throwIfFatal</name><parameter_list>(<param><decl><type><name>Throwable</name></type> <name>th</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>th</name> instanceof <name>Error</name> &amp;&amp; !(<name>th</name> instanceof <name>AssertionError</name> || <name>th</name> instanceof <name>IOError</name>)</expr>)</condition><then>
+            <throw>throw <expr>(<name>Error</name>) <name>th</name></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>dataFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>indexFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>CompactionInfo</name>.<name>Holder</name></name></type> <name>getScrubInfo</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>scrubInfo</name></expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>ScrubInfo</name> <super><extends>extends <name><name>CompactionInfo</name>.<name>Holder</name></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>RandomAccessReader</name></type> <name>dataFile</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>SSTableReader</name></type> <name>sstable</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>ScrubInfo</name><parameter_list>(<param><decl><type><name>RandomAccessReader</name></type> <name>dataFile</name></decl></param>, <param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>dataFile</name></name> = <name>dataFile</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>sstable</name></name> = <name>sstable</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>CompactionInfo</name></type> <name>getCompactionInfo</name><parameter_list>()</parameter_list>
+        <block>{
+            <try>try
+            <block>{
+                <return>return <expr>new <call><name>CompactionInfo</name><argument_list>(<argument><expr><name><name>sstable</name>.<name>metadata</name></name></expr></argument>,
+                                          <argument><expr><name><name>OperationType</name>.<name>SCRUB</name></name></expr></argument>,
+                                          <argument><expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                          <argument><expr><call><name><name>dataFile</name>.<name>length</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>()</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>ScrubController</name> <super><extends>extends <name>CompactionController</name></extends></super>
+    <block>{
+        <constructor><specifier>public</specifier> <name>ScrubController</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>, <argument><expr>true</expr></argument>, <argument><expr>new <call><name><name>IntervalTree</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>Collections</name>.</name>&lt;<name>Interval</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>boolean</name></type> <name>shouldPurge</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>false</expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,42 @@
+private ColumnFamily getThroughCache(UUID cfId, QueryFilter filter)
+    {
+        assert isRowCacheEnabled()
+               : String.format("Row cache is not enabled on column family [" + getColumnFamilyName() + "]");
+
+        RowCacheKey key = new RowCacheKey(cfId, filter.key);
+
+        // attempt a sentinel-read-cache sequence.  if a write invalidates our sentinel, we'll return our
+        // (now potentially obsolete) data, but won't cache it. see CASSANDRA-3862
+        IRowCacheEntry cached = CacheService.instance.rowCache.get(key);
+        if (cached != null)
+        {
+            if (cached instanceof RowCacheSentinel)
+            {
+                // Some other read is trying to cache the value, just do a normal non-caching read
+                Tracing.trace("Row cache miss (race)");
+                return getTopLevelColumns(filter, Integer.MIN_VALUE, false);
+            }
+            Tracing.trace("Row cache hit");
+            return (ColumnFamily) cached;
+        }
+
+        Tracing.trace("Row cache miss");
+        RowCacheSentinel sentinel = new RowCacheSentinel();
+        boolean sentinelSuccess = CacheService.instance.rowCache.putIfAbsent(key, sentinel);
+
+        try
+        {
+            ColumnFamily data = getTopLevelColumns(QueryFilter.getIdentityFilter(filter.key, new QueryPath(columnFamily)),
+                                                   Integer.MIN_VALUE,
+                                                   true);
+            if (sentinelSuccess && data != null)
+                CacheService.instance.rowCache.replace(key, sentinel, data);
+
+            return data;
+        }
+        finally
+        {
+            if (sentinelSuccess && data == null)
+                CacheService.instance.rowCache.remove(key);
+        }
+    }

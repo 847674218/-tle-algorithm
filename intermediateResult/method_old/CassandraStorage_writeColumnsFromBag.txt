@@ -1,0 +1,52 @@
+private void writeColumnsFromBag(ByteBuffer key, DefaultDataBag bag) throws IOException
+    {
+        List<Mutation> mutationList = new ArrayList<Mutation>();
+        for (Tuple pair : bag)
+        {
+            Mutation mutation = new Mutation();
+            if (DataType.findType(pair.get(1)) == DataType.BAG) // supercolumn
+            {
+                SuperColumn sc = new SuperColumn();
+                sc.setName(objToBB(pair.get(0)));
+                List<org.apache.cassandra.thrift.Column> columns = new ArrayList<org.apache.cassandra.thrift.Column>();
+                for (Tuple subcol : (DefaultDataBag) pair.get(1))
+                {
+                    org.apache.cassandra.thrift.Column column = new org.apache.cassandra.thrift.Column();
+                    column.setName(objToBB(subcol.get(0)));
+                    column.setValue(objToBB(subcol.get(1)));
+                    column.setTimestamp(FBUtilities.timestampMicros());
+                    columns.add(column);
+                }
+                if (columns.isEmpty())
+                {
+                    if (allow_deletes)
+                    {
+                        mutation.deletion = new Deletion();
+                        mutation.deletion.super_column = objToBB(pair.get(0));
+                        mutation.deletion.setTimestamp(FBUtilities.timestampMicros());
+                    }
+                    else
+                        throw new IOException("SuperColumn deletion attempted with empty bag, but deletes are disabled, set " +
+                            PIG_ALLOW_DELETES + "=true in environment or allow_deletes=true in URL to enable");
+                }
+                else
+                {
+                    sc.columns = columns;
+                    mutation.column_or_supercolumn = new ColumnOrSuperColumn();
+                    mutation.column_or_supercolumn.super_column = sc;
+                }
+            }
+            else
+                mutation = mutationFromTuple(pair);
+            mutationList.add(mutation);
+            // for wide rows, we need to limit the amount of mutations we write at once
+            if (mutationList.size() >= 10) // arbitrary, CFOF will re-batch this up, and BOF won't care
+            {
+                writeMutations(key, mutationList);
+                mutationList.clear();
+            }
+        }
+        // write the last batch
+        if (mutationList.size() > 0)
+            writeMutations(key, mutationList);
+    }

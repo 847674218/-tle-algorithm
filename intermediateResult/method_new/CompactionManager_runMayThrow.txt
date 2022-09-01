@@ -1,0 +1,58 @@
+protected void runMayThrow() throws IOException
+            {
+                compactionLock.readLock().lock();
+                try
+                {
+                    // look up the sstables now that we're on the compaction executor, so we don't try to re-compact
+                    // something that was already being compacted earlier.
+                    Collection<SSTableReader> sstables = new ArrayList<SSTableReader>(dataFiles.size());
+                    for (Descriptor desc : dataFiles)
+                    {
+                        // inefficient but not in a performance sensitive path
+                        SSTableReader sstable = lookupSSTable(cfs, desc);
+                        if (sstable == null)
+                        {
+                            logger.info("Will not compact {}: it is not an active sstable", desc);
+                        }
+                        else
+                        {
+                            sstables.add(sstable);
+                        }
+                    }
+
+                    try
+                    {
+                        if (sstables.isEmpty())
+                        {
+                            logger.info("No file to compact for user defined compaction");
+                        }
+                        // attempt to schedule the set
+                        else if (cfs.getDataTracker().markCompacting(sstables))
+                        {
+                            // success: perform the compaction
+                            try
+                            {
+                                AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
+                                AbstractCompactionTask task = strategy.getUserDefinedTask(sstables, gcBefore);
+                                task.execute(metrics);
+                            }
+                            finally
+                            {
+                                cfs.getDataTracker().unmarkCompacting(sstables);
+                            }
+                        }
+                        else
+                        {
+                            logger.info("SSTables for user defined compaction are already being compacted.");
+                        }
+                    }
+                    finally
+                    {
+                        SSTableReader.releaseReferences(sstables);
+                    }
+                }
+                finally
+                {
+                    compactionLock.readLock().unlock();
+                }
+            }

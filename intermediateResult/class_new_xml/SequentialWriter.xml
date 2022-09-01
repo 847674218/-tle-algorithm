@@ -1,0 +1,447 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\io\util\SequentialWriter.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>ClosedChannelException</name></name>;</import>
+<import>import <name><name>java</name>.<name>security</name>.<name>MessageDigest</name></name>;</import>
+<import>import <name><name>java</name>.<name>security</name>.<name>NoSuchAlgorithmException</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSReadError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSWriteError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>CLibrary</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>SequentialWriter</name> <super><extends>extends <name>OutputStream</name></extends></super>
+<block>{
+    <comment type="line">// isDirty - true if this.buffer contains any un-synced bytes</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>boolean</name></type> <name>isDirty</name> <init>= <expr>false</expr></init>, <name>syncNeeded</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// absolute path to the given file</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>filePath</name></decl>;</decl_stmt>
+
+    <comment type="line">// so we can use the write(int) path w/o tons of new byte[] allocations</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>byte</name><index>[]</index></type> <name>singleByteBuffer</name> <init>= <expr>new <name><name>byte</name><index>[<expr>1</expr>]</index></name></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>byte</name><index>[]</index></type> <name>buffer</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>skipIOCache</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>fd</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>directoryFD</name></decl>;</decl_stmt>
+    <comment type="line">// directory should be synced only after first file sync, in other words, only once per file</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>directorySynced</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>long</name></type> <name>current</name> <init>= <expr>0</expr></init>, <name>bufferOffset</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>int</name></type> <name>validBufferBytes</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>RandomAccessFile</name></type> <name>out</name></decl>;</decl_stmt>
+
+    <comment type="line">// used if skip I/O cache was enabled</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>ioCacheStartOffset</name> <init>= <expr>0</expr></init>, <name>bytesSinceCacheFlush</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// whether to do trickling fsync() to avoid sudden bursts of dirty buffer flushing by kernel causing read</comment>
+    <comment type="line">// latency spikes</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>trickleFsync</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>trickleFsyncByteInterval</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>bytesSinceTrickleFsync</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>DataOutputStream</name></type> <name>stream</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>MessageDigest</name></type> <name>digest</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>SequentialWriter</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>, <param><decl><type><name>int</name></type> <name>bufferSize</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>out</name> = new <call><name>RandomAccessFile</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr>"rw"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>FileNotFoundException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><name>filePath</name> = <call><name><name>file</name>.<name>getAbsolutePath</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name>buffer</name> = new <name><name>byte</name><index>[<expr><name>bufferSize</name></expr>]</index></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>skipIOCache</name></name> = <name>skipIOCache</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>trickleFsync</name></name> = <call><name><name>DatabaseDescriptor</name>.<name>getTrickleFsync</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>trickleFsyncByteInterval</name></name> = <call><name><name>DatabaseDescriptor</name>.<name>getTrickleFsyncIntervalInKb</name></name><argument_list>()</argument_list></call> * 1024</expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>fd</name> = <call><name><name>CLibrary</name>.<name>getfd</name></name><argument_list>(<argument><expr><call><name><name>out</name>.<name>getFD</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw> <comment type="line">// shouldn't happen</comment>
+        }</block></catch></try>
+
+        <expr_stmt><expr><name>directoryFD</name> = <call><name><name>CLibrary</name>.<name>tryOpenDirectory</name></name><argument_list>(<argument><expr><call><name><name>file</name>.<name>getParent</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>stream</name> = new <call><name>DataOutputStream</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>SequentialWriter</name></type> <name>open</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>open</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name><name>RandomAccessReader</name>.<name>DEFAULT_BUFFER_SIZE</name></name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>SequentialWriter</name></type> <name>open</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>open</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name><name>RandomAccessReader</name>.<name>DEFAULT_BUFFER_SIZE</name></name></expr></argument>, <argument><expr><name>skipIOCache</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>SequentialWriter</name></type> <name>open</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>, <param><decl><type><name>int</name></type> <name>bufferSize</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>SequentialWriter</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name>bufferSize</name></expr></argument>, <argument><expr><name>skipIOCache</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>write</name><parameter_list>(<param><decl><type><name>int</name></type> <name>value</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ClosedChannelException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name><name>singleByteBuffer</name><index>[<expr>0</expr>]</index></name> = (<name>byte</name>) <name>value</name></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>write</name><argument_list>(<argument><expr><name>singleByteBuffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>write</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>buffer</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ClosedChannelException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>write</name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name><name>buffer</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>write</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>data</name></decl></param>, <param><decl><type><name>int</name></type> <name>offset</name></decl></param>, <param><decl><type><name>int</name></type> <name>length</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ClosedChannelException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>buffer</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ClosedChannelException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <while>while <condition>(<expr><name>length</name> &gt; 0</expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr><call><name>writeAtMost</name><argument_list>(<argument><expr><name>data</name></expr></argument>, <argument><expr><name>offset</name></expr></argument>, <argument><expr><name>length</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>offset</name> += <name>n</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>length</name> -= <name>n</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>isDirty</name> = true</expr>;</expr_stmt>
+            <expr_stmt><expr><name>syncNeeded</name> = true</expr>;</expr_stmt>
+        }</block></while>
+    }</block></function>
+
+    <comment type="block">/*
+     * Write at most "length" bytes from "b" starting at position "offset", and
+     * return the number of bytes written. caller is responsible for setting
+     * isDirty.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>int</name></type> <name>writeAtMost</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>data</name></decl></param>, <param><decl><type><name>int</name></type> <name>offset</name></decl></param>, <param><decl><type><name>int</name></type> <name>length</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>current</name> &gt;= <name>bufferOffset</name> + <name><name>buffer</name>.<name>length</name></name></expr>)</condition><then>
+            <expr_stmt><expr><call><name>reBuffer</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <assert>assert <expr><name>current</name> &lt; <name>bufferOffset</name> + <name><name>buffer</name>.<name>length</name></name>
+                : <call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"File (%s) offset %d, buffer offset %d."</expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>current</name></expr></argument>, <argument><expr><name>bufferOffset</name></expr></argument>)</argument_list></call></expr>;</assert>
+
+
+        <decl_stmt><decl><type><name>int</name></type> <name>toCopy</name> <init>= <expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>length</name></expr></argument>, <argument><expr><name><name>buffer</name>.<name>length</name></name> - <call><name>bufferCursor</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// copy bytes from external buffer</comment>
+        <expr_stmt><expr><call><name><name>System</name>.<name>arraycopy</name></name><argument_list>(<argument><expr><name>data</name></expr></argument>, <argument><expr><name>offset</name></expr></argument>, <argument><expr><name>buffer</name></expr></argument>, <argument><expr><call><name>bufferCursor</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>toCopy</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <assert>assert <expr><name>current</name> &lt;= <name>bufferOffset</name> + <name><name>buffer</name>.<name>length</name></name>
+                : <call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"File (%s) offset %d, buffer offset %d."</expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>current</name></expr></argument>, <argument><expr><name>bufferOffset</name></expr></argument>)</argument_list></call></expr>;</assert>
+
+        <expr_stmt><expr><name>validBufferBytes</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>validBufferBytes</name></expr></argument>, <argument><expr><call><name>bufferCursor</name><argument_list>()</argument_list></call> + <name>toCopy</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>current</name> += <name>toCopy</name></expr>;</expr_stmt>
+
+        <return>return <expr><name>toCopy</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Synchronize file contents with disk.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>sync</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>syncInternal</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>syncDataOnlyInternal</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>out</name>.<name>getFD</name></name><argument_list>()</argument_list></call>.<call><name>sync</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>syncInternal</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>syncNeeded</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>flushInternal</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>syncDataOnlyInternal</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr>!<name>directorySynced</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>CLibrary</name>.<name>trySync</name></name><argument_list>(<argument><expr><name>directoryFD</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>directorySynced</name> = true</expr>;</expr_stmt>
+            }</block></then></if>
+
+            <expr_stmt><expr><name>syncNeeded</name> = false</expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * If buffer is dirty, flush it's contents to the operating system. Does not imply fsync().
+     *
+     * Currently, for implementation reasons, this also invalidates the buffer.
+     */</comment>
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>flush</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>flushInternal</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>flushInternal</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>isDirty</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>flushData</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>trickleFsync</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>bytesSinceTrickleFsync</name> += <name>validBufferBytes</name></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>bytesSinceTrickleFsync</name> &gt;= <name>trickleFsyncByteInterval</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name>syncDataOnlyInternal</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>bytesSinceTrickleFsync</name> = 0</expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></then></if>
+
+            <if>if <condition>(<expr><name>skipIOCache</name></expr>)</condition><then>
+            <block>{
+                <comment type="line">// we don't know when the data reaches disk since we aren't</comment>
+                <comment type="line">// calling flush</comment>
+                <comment type="line">// so we continue to clear pages we don't need from the first</comment>
+                <comment type="line">// offset we see</comment>
+                <comment type="line">// periodically we update this starting offset</comment>
+                <expr_stmt><expr><name>bytesSinceCacheFlush</name> += <name>validBufferBytes</name></expr>;</expr_stmt>
+
+                <if>if <condition>(<expr><name>bytesSinceCacheFlush</name> &gt;= <name><name>RandomAccessReader</name>.<name>CACHE_FLUSH_INTERVAL_IN_BYTES</name></name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>CLibrary</name>.<name>trySkipCache</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>fd</name></name></expr></argument>, <argument><expr><name>ioCacheStartOffset</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>ioCacheStartOffset</name> = <name>bufferOffset</name></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>bytesSinceCacheFlush</name> = 0</expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></then></if>
+
+            <comment type="line">// Remember that we wrote, so we don't write it again on next flush().</comment>
+            <expr_stmt><expr><call><name>resetBuffer</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><name>isDirty</name> = false</expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Override this method instead of overriding flush()
+     * @throws FSWriteError on any I/O error.
+     */</comment>
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>flushData</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>validBufferBytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <if>if <condition>(<expr><name>digest</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>digest</name>.<name>update</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>validBufferBytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getFilePointer</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>current</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Return the current file pointer of the underlying on-disk file.
+     * Note that since write works by buffering data, the value of this will increase by buffer
+     * size and not every write to the writer will modify this value.
+     * Furthermore, for compressed files, this value refers to compressed data, while the
+     * writer getFilePointer() refers to uncompressedFile
+     */</comment>
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getOnDiskFilePointer</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getFilePointer</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>length</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>current</name></expr></argument>, <argument><expr><call><name><name>out</name>.<name>length</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>bufferOffset</name> + <name>validBufferBytes</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSReadError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getPath</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>filePath</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>reBuffer</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>flushInternal</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>resetBuffer</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>resetBuffer</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>bufferOffset</name> = <name>current</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>validBufferBytes</name> = 0</expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>int</name></type> <name>bufferCursor</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call>(<name>int</name>) <argument_list>(<argument><expr><name>current</name> - <name>bufferOffset</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>FileMark</name></type> <name>mark</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>BufferedFileWriterMark</name><argument_list>(<argument><expr><name>current</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>resetAndTruncate</name><parameter_list>(<param><decl><type><name>FileMark</name></type> <name>mark</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>mark</name> instanceof <name>BufferedFileWriterMark</name></expr>;</assert>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>previous</name> <init>= <expr><name>current</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>current</name> = ((<name>BufferedFileWriterMark</name>) <name>mark</name>).<name>pointer</name></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>previous</name> - <name>current</name> &lt;= <name>validBufferBytes</name></expr>)</condition><then> <comment type="line">// current buffer</comment>
+        <block>{
+            <expr_stmt><expr><name>validBufferBytes</name> = <name>validBufferBytes</name> - (<call>(<name>int</name>) <argument_list>(<argument><expr><name>previous</name> - <name>current</name></expr></argument>)</argument_list></call>)</expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <comment type="line">// synchronize current buffer with disk</comment>
+        <comment type="line">// because we don't want any data loss</comment>
+        <expr_stmt><expr><call><name>syncInternal</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// truncate file to given position</comment>
+        <expr_stmt><expr><call><name>truncate</name><argument_list>(<argument><expr><name>current</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// reset channel position</comment>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>out</name>.<name>seek</name></name><argument_list>(<argument><expr><name>current</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSReadError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><call><name>resetBuffer</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>truncate</name><parameter_list>(<param><decl><type><name>long</name></type> <name>toSize</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>out</name>.<name>getChannel</name></name><argument_list>()</argument_list></call>.<call><name>truncate</name><argument_list>(<argument><expr><name>toSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>buffer</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if> <comment type="line">// already closed</comment>
+
+        <expr_stmt><expr><call><name>syncInternal</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name>buffer</name> = null</expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>skipIOCache</name> &amp;&amp; <name>bytesSinceCacheFlush</name> &gt; 0</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>CLibrary</name>.<name>trySkipCache</name></name><argument_list>(<argument><expr><name>fd</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>out</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><call><name><name>CLibrary</name>.<name>tryCloseFD</name></name><argument_list>(<argument><expr><name>directoryFD</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Turn on digest computation on this writer.
+     * This can only be called before any data is written to this write,
+     * otherwise an IllegalStateException is thrown.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setComputeDigest</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>current</name> != 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>digest</name> = <call><name><name>MessageDigest</name>.<name>getInstance</name></name><argument_list>(<argument><expr>"SHA-1"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>NoSuchAlgorithmException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// SHA-1 is standard in java 6</comment>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Return the digest associated to this file or null if no digest was
+     * created.
+     * This can only be called once the file is fully created, i.e. after
+     * close() has been called. Otherwise an IllegalStateException is thrown.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>byte</name><index>[]</index></type> <name>digest</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>buffer</name> != null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <return>return <expr><name>digest</name> == null ? null : <call><name><name>digest</name>.<name>digest</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Class to hold a mark to the position of the file
+     */</comment>
+    <class><specifier>protected</specifier> <specifier>static</specifier> class <name>BufferedFileWriterMark</name> <super><implements>implements <name>FileMark</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>final</specifier> <name>long</name></type> <name>pointer</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>BufferedFileWriterMark</name><parameter_list>(<param><decl><type><name>long</name></type> <name>pointer</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>pointer</name></name> = <name>pointer</name></expr>;</expr_stmt>
+        }</block></constructor>
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,29 @@
+public void stopSession()
+    {
+        TraceState state = this.state.get();
+        if (state == null) // inline isTracing to avoid implicit two calls to state.get()
+        {
+            logger.debug("request complete");
+        }
+        else
+        {
+            final int elapsed = state.elapsed();
+            final ByteBuffer sessionIdBytes = state.sessionIdBytes;
+
+            StageManager.getStage(Stage.TRACING).execute(new WrappedRunnable()
+            {
+                public void runMayThrow() throws Exception
+                {
+                    CFMetaData cfMeta = CFMetaData.TraceSessionsCf;
+                    ColumnFamily cf = ColumnFamily.create(cfMeta);
+                    addColumn(cf, buildName(cfMeta, bytes("duration")), elapsed);
+                    RowMutation mutation = new RowMutation(TRACE_KS, sessionIdBytes);
+                    mutation.add(cf);
+                    StorageProxy.mutate(Arrays.asList(mutation), ConsistencyLevel.ANY);
+                }
+            });
+
+            sessions.remove(state.sessionId);
+            this.state.set(null);
+        }
+    }

@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\io\sstable\Component.java"><comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>EnumSet</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Objects</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * SSTables are made up of multiple components in separate files. Components are
+ * identified by a type and an id, but required unique components (such as the Data
+ * and Index files) may have implicit ids assigned to them.
+ */</comment>
+<class><specifier>public</specifier> class <name>Component</name>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>char</name></type> <name>separator</name> <init>= <expr>'-'</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>final</specifier> <specifier>static</specifier> <name><name>EnumSet</name><argument_list>&lt;<argument><name>Type</name></argument>&gt;</argument_list></name></type> <name>TYPES</name> <init>= <expr><call><name><name>EnumSet</name>.<name>allOf</name></name><argument_list>(<argument><expr><name><name>Type</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <enum>enum <name>Type</name>
+    <block>{
+        <comment type="line">// the base data for an sstable: the remaining components can be regenerated</comment>
+        <comment type="line">// based on the data component</comment>
+        <decl><name>DATA</name><argument_list>(<argument><expr>"Data.db"</expr></argument>)</argument_list></decl>,
+        <comment type="line">// index of the row keys with pointers to their positions in the data file</comment>
+        <decl><name>PRIMARY_INDEX</name><argument_list>(<argument><expr>"Index.db"</expr></argument>)</argument_list></decl>,
+        <comment type="line">// serialized bloom filter for the row keys in the sstable</comment>
+        <decl><name>FILTER</name><argument_list>(<argument><expr>"Filter.db"</expr></argument>)</argument_list></decl>,
+        <comment type="line">// 0-length file that is created when an sstable is ready to be deleted</comment>
+        <comment type="line">// @deprecated: deletion of compacted file is based on the lineag information stored in the compacted sstabl</comment>
+        <comment type="line">// metadata. This ensure we can guarantee never using a sstable and some of its parents, even in case of failure.</comment>
+        <decl><name>COMPACTED_MARKER</name><argument_list>(<argument><expr>"Compacted"</expr></argument>)</argument_list></decl>,
+        <comment type="line">// file to hold information about uncompressed data length, chunk offsets etc.</comment>
+        <decl><name>COMPRESSION_INFO</name><argument_list>(<argument><expr>"CompressionInfo.db"</expr></argument>)</argument_list></decl>,
+        <comment type="line">// statistical metadata about the content of the sstable</comment>
+        <decl><name>STATS</name><argument_list>(<argument><expr>"Statistics.db"</expr></argument>)</argument_list></decl>,
+        <comment type="line">// holds sha1 sum of the data file (to be checked by sha1sum)</comment>
+        <decl><name>DIGEST</name><argument_list>(<argument><expr>"Digest.sha1"</expr></argument>)</argument_list></decl>;
+
+        <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>repr</name></decl>;</decl_stmt>
+        <constructor><name>Type</name><parameter_list>(<param><decl><type><name>String</name></type> <name>repr</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>repr</name></name> = <name>repr</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>static</specifier> <name>Type</name></type> <name>fromRepresentation</name><parameter_list>(<param><decl><type><name>String</name></type> <name>repr</name></decl></param>)</parameter_list>
+        <block>{
+            <for>for (<init><decl><type><name>Type</name></type> <name>type</name> <range>: <expr><name>TYPES</name></expr></range></decl></init>)
+                <if>if <condition>(<expr><call><name><name>repr</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>type</name>.<name>repr</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><name>type</name></expr>;</return></then></if></for>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Invalid SSTable component: '" + <name>repr</name> + "'"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></function>
+    }</block></enum>
+
+    <comment type="line">// singleton components for types that don't need ids</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>Component</name></type> <name>DATA</name> <init>= <expr>new <call><name>Component</name><argument_list>(<argument><expr><name><name>Type</name>.<name>DATA</name></name></expr></argument>, <argument><expr>-1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>Component</name></type> <name>PRIMARY_INDEX</name> <init>= <expr>new <call><name>Component</name><argument_list>(<argument><expr><name><name>Type</name>.<name>PRIMARY_INDEX</name></name></expr></argument>, <argument><expr>-1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>Component</name></type> <name>FILTER</name> <init>= <expr>new <call><name>Component</name><argument_list>(<argument><expr><name><name>Type</name>.<name>FILTER</name></name></expr></argument>, <argument><expr>-1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>Component</name></type> <name>COMPACTED_MARKER</name> <init>= <expr>new <call><name>Component</name><argument_list>(<argument><expr><name><name>Type</name>.<name>COMPACTED_MARKER</name></name></expr></argument>, <argument><expr>-1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>Component</name></type> <name>COMPRESSION_INFO</name> <init>= <expr>new <call><name>Component</name><argument_list>(<argument><expr><name><name>Type</name>.<name>COMPRESSION_INFO</name></name></expr></argument>, <argument><expr>-1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>Component</name></type> <name>STATS</name> <init>= <expr>new <call><name>Component</name><argument_list>(<argument><expr><name><name>Type</name>.<name>STATS</name></name></expr></argument>, <argument><expr>-1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>Component</name></type> <name>DIGEST</name> <init>= <expr>new <call><name>Component</name><argument_list>(<argument><expr><name><name>Type</name>.<name>DIGEST</name></name></expr></argument>, <argument><expr>-1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Type</name></type> <name>type</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>int</name></type> <name>id</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>int</name></type> <name>hashCode</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>Component</name><parameter_list>(<param><decl><type><name>Type</name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>type</name></expr></argument>, <argument><expr>-1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>Component</name><parameter_list>(<param><decl><type><name>Type</name></type> <name>type</name></decl></param>, <param><decl><type><name>int</name></type> <name>id</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>type</name></name> = <name>type</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>id</name></name> = <name>id</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>hashCode</name></name> = <call><name><name>Objects</name>.<name>hashCode</name></name><argument_list>(<argument><expr><name>type</name></expr></argument>, <argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * @return The unique (within an sstable) name for this component.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>name</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>type</name>.<name>repr</name></name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Filename of the form "&lt;ksname&gt;/&lt;cfname&gt;-[tmp-][&lt;version&gt;-]&lt;gen&gt;-&lt;component&gt;",
+     * @return A Descriptor for the SSTable, and a Component for this particular file.
+     * TODO move descriptor into Component field
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Pair</name><argument_list>&lt;<argument><name>Descriptor</name></argument>,<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>fromFilename</name><parameter_list>(<param><decl><type><name>File</name></type> <name>directory</name></decl></param>, <param><decl><type><name>String</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Descriptor</name></argument>,<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>path</name> <init>= <expr><call><name><name>Descriptor</name>.<name>fromFilename</name></name><argument_list>(<argument><expr><name>directory</name></expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// parse the component suffix</comment>
+        <decl_stmt><decl><type><name>Type</name></type> <name>type</name> <init>= <expr><call><name><name>Type</name>.<name>fromRepresentation</name></name><argument_list>(<argument><expr><name><name>path</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// build (or retrieve singleton for) the component object</comment>
+        <decl_stmt><decl><type><name>Component</name></type> <name>component</name></decl>;</decl_stmt>
+        <switch>switch<condition>(<expr><name>type</name></expr>)</condition>
+        <block>{
+            <case>case <expr><name>DATA</name></expr>:              <expr_stmt><expr><name>component</name> = <name><name>Component</name>.<name>DATA</name></name></expr>;</expr_stmt>             <break>break;</break>
+            </case><case>case <expr><name>PRIMARY_INDEX</name></expr>:     <expr_stmt><expr><name>component</name> = <name><name>Component</name>.<name>PRIMARY_INDEX</name></name></expr>;</expr_stmt>    <break>break;</break>
+            </case><case>case <expr><name>FILTER</name></expr>:            <expr_stmt><expr><name>component</name> = <name><name>Component</name>.<name>FILTER</name></name></expr>;</expr_stmt>           <break>break;</break>
+            </case><case>case <expr><name>COMPACTED_MARKER</name></expr>:  <expr_stmt><expr><name>component</name> = <name><name>Component</name>.<name>COMPACTED_MARKER</name></name></expr>;</expr_stmt> <break>break;</break>
+            </case><case>case <expr><name>COMPRESSION_INFO</name></expr>:  <expr_stmt><expr><name>component</name> = <name><name>Component</name>.<name>COMPRESSION_INFO</name></name></expr>;</expr_stmt> <break>break;</break>
+            </case><case>case <expr><name>STATS</name></expr>:             <expr_stmt><expr><name>component</name> = <name><name>Component</name>.<name>STATS</name></name></expr>;</expr_stmt>            <break>break;</break>
+            </case><case>case <expr><name>DIGEST</name></expr>:            <expr_stmt><expr><name>component</name> = <name><name>Component</name>.<name>DIGEST</name></name></expr>;</expr_stmt>           <break>break;</break>
+            </case><default>default:
+                 <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>()</argument_list></call></expr>;</throw>
+        </default>}</block></switch>
+
+        <return>return <expr>new <call><name><name>Pair</name><argument_list>&lt;<argument><name>Descriptor</name></argument>,<argument><name>Component</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>path</name>.<name>left</name></name></expr></argument>, <argument><expr><name>component</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>this</name>.<name>name</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>boolean</name></type> <name>equals</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>o</name> == <name>this</name></expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+        <if>if <condition>(<expr>!(<name>o</name> instanceof <name>Component</name>)</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+        <decl_stmt><decl><type><name>Component</name></type> <name>that</name> <init>= <expr>(<name>Component</name>)<name>o</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name><name>this</name>.<name>type</name></name> == <name><name>that</name>.<name>type</name></name> &amp;&amp; <name><name>this</name>.<name>id</name></name> == <name><name>that</name>.<name>id</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>int</name></type> <name>hashCode</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>hashCode</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

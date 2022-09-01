@@ -1,0 +1,45 @@
+private void handleStateRemoving(InetAddress endpoint, String[] pieces)
+    {
+        assert (pieces.length > 0);
+
+        if (endpoint.equals(FBUtilities.getBroadcastAddress()))
+        {
+            logger_.info("Received removeToken gossip about myself. Is this node rejoining after an explicit removetoken?");
+            try
+            {
+                drain();
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+            return;
+        }
+        if (tokenMetadata_.isMember(endpoint))
+        {
+            String state = pieces[0];
+            Token removeToken = tokenMetadata_.getToken(endpoint);
+
+            if (VersionedValue.REMOVED_TOKEN.equals(state))
+            {
+                excise(removeToken, endpoint, extractExpireTime(pieces));
+            }
+            else if (VersionedValue.REMOVING_TOKEN.equals(state))
+            {
+                if (logger_.isDebugEnabled())
+                    logger_.debug("Token " + removeToken + " removed manually (endpoint was " + endpoint + ")");
+
+                // Note that the endpoint is being removed
+                tokenMetadata_.addLeavingEndpoint(endpoint);
+                PendingRangeCalculatorService.instance.update();
+
+                // find the endpoint coordinating this removal that we need to notify when we're done
+                String[] coordinator = Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.REMOVAL_COORDINATOR).value.split(VersionedValue.DELIMITER_STR, -1);
+                Token coordtoken = getPartitioner().getTokenFactory().fromString(coordinator[1]);
+                // grab any data we are now responsible for and notify responsible node
+                restoreReplicaCount(endpoint, tokenMetadata_.getEndpoint(coordtoken));
+            }
+        }
+        else // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
+            Gossiper.instance.removeEndpoint(endpoint);
+    }

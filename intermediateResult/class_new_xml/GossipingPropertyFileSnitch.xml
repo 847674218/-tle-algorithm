@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\locator\GossipingPropertyFileSnitch.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>SystemTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>ApplicationState</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>EndpointState</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>Gossiper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>GossipingPropertyFileSnitch</name> <super><extends>extends <name>AbstractNetworkTopologySnitch</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>GossipingPropertyFileSnitch</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>PropertyFileSnitch</name></type> <name>psnitch</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>myDC</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>myRack</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>savedEndpoints</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>DEFAULT_DC</name> <init>= <expr>"UNKNOWN_DC"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>DEFAULT_RACK</name> <init>= <expr>"UNKNOWN_RACK"</expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>GossipingPropertyFileSnitch</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name>myDC</name> = <call><name><name>SnitchProperties</name>.<name>get</name></name><argument_list>(<argument><expr>"dc"</expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>myRack</name> = <call><name><name>SnitchProperties</name>.<name>get</name></name><argument_list>(<argument><expr>"rack"</expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>myDC</name> == null || <name>myRack</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"DC or rack not found in snitch properties"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><name>myDC</name> = <call><name><name>myDC</name>.<name>trim</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>myRack</name> = <call><name><name>myRack</name>.<name>trim</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>psnitch</name> = new <call><name>PropertyFileSnitch</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Loaded " + <name><name>PropertyFileSnitch</name>.<name>SNITCH_PROPERTIES_FILENAME</name></name> + " for compatibility"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Unable to load " + <name><name>PropertyFileSnitch</name>.<name>SNITCH_PROPERTIES_FILENAME</name></name> + "; compatibility mode disabled"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Return the data center for which an endpoint resides in
+     *
+     * @param endpoint the endpoint to process
+     * @return string of data center
+     */</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getDatacenter</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>endpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr><name>myDC</name></expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getEndpointStateForEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>epState</name> == null || <call><name><name>epState</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>DC</name></name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name>psnitch</name> == null</expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name>savedEndpoints</name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><name>savedEndpoints</name> = <call><name><name>SystemTable</name>.<name>loadDcRackInfo</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>savedEndpoints</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><call><name><name>savedEndpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr>"data_center"</expr></argument>)</argument_list></call></expr>;</return></then></if>
+                <return>return <expr><name>DEFAULT_DC</name></expr>;</return>
+            }</block></then>
+            <else>else
+                <return>return <expr><call><name><name>psnitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return></else></if>
+        }</block></then></if>
+        <return>return <expr><call><name><name>epState</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>DC</name></name></expr></argument>)</argument_list></call>.<name>value</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Return the rack for which an endpoint resides in
+     *
+     * @param endpoint the endpoint to process
+     * @return string of rack
+     */</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getRack</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>endpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr><name>myRack</name></expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getEndpointStateForEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>epState</name> == null || <call><name><name>epState</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>RACK</name></name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name>psnitch</name> == null</expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name>savedEndpoints</name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><name>savedEndpoints</name> = <call><name><name>SystemTable</name>.<name>loadDcRackInfo</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>savedEndpoints</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><call><name><name>savedEndpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr>"rack"</expr></argument>)</argument_list></call></expr>;</return></then></if>
+                <return>return <expr><name>DEFAULT_RACK</name></expr>;</return>
+            }</block></then>
+            <else>else
+                <return>return <expr><call><name><name>psnitch</name>.<name>getRack</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return></else></if>
+        }</block></then></if>
+        <return>return <expr><call><name><name>epState</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>RACK</name></name></expr></argument>)</argument_list></call>.<name>value</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

@@ -1,0 +1,88 @@
+private void executeSet(Tree statement)
+        throws TException, InvalidRequestException, UnavailableException, TimedOutException, NoSuchFieldException, InstantiationException, IllegalAccessException
+    {
+        if (!CliMain.isConnected() || !hasKeySpace())
+            return;
+
+        long startTime = System.nanoTime();
+        // ^(NODE_COLUMN_ACCESS <cf> <key> <column>)
+        Tree columnFamilySpec = statement.getChild(0);
+        Tree keyTree = columnFamilySpec.getChild(1); // could be a function or regular text
+
+        String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec, currentCfDefs());
+        CfDef cfDef = getCfDef(columnFamily);
+        int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
+        String value = CliUtils.unescapeSQLString(statement.getChild(1).getText());
+        Tree valueTree = statement.getChild(1);
+
+        byte[] superColumnName = null;
+        ByteBuffer columnName;
+
+        // table.cf['key']
+        if (columnSpecCnt == 0)
+        {
+            sessionState.err.println("No column name specified, (type 'help;' or '?' for help on syntax).");
+            return;
+        }
+        // table.cf['key']['column'] = 'value'
+        else if (columnSpecCnt == 1)
+        {
+            // get the column name
+            if (cfDef.column_type.equals("Super"))
+            {
+                sessionState.out.println("Column family " + columnFamily + " may only contain SuperColumns");
+                return;
+            }
+            columnName = getColumnName(columnFamily, columnFamilySpec.getChild(2));
+        }
+        // table.cf['key']['super_column']['column'] = 'value'
+        else
+        {
+            assert (columnSpecCnt == 2) : "serious parsing error (this is a bug).";
+
+            superColumnName = getColumnName(columnFamily, columnFamilySpec.getChild(2)).array();
+            columnName = getSubColumnName(columnFamily, columnFamilySpec.getChild(3));
+        }
+
+        ByteBuffer columnValueInBytes;
+
+        switch (valueTree.getType())
+        {
+        case CliParser.FUNCTION_CALL:
+            columnValueInBytes = convertValueByFunction(valueTree, cfDef, columnName, true);
+            break;
+        default:
+            columnValueInBytes = columnValueAsBytes(columnName, columnFamily, value);
+        }
+
+        ColumnParent parent = new ColumnParent(columnFamily);
+        if(superColumnName != null)
+            parent.setSuper_column(superColumnName);
+
+        Column columnToInsert = new Column(columnName).setValue(columnValueInBytes).setTimestamp(FBUtilities.timestampMicros());
+
+        // children count = 3 mean that we have ttl in arguments
+        if (statement.getChildCount() == 3)
+        {
+            String ttl = statement.getChild(2).getText();
+
+            try
+            {
+                columnToInsert.setTtl(Integer.parseInt(ttl));
+            }
+            catch (NumberFormatException e)
+            {
+                sessionState.err.println(String.format("TTL '%s' is invalid, should be a positive integer.", ttl));
+                return;
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        // do the insert
+        thriftClient.insert(getKeyAsBytes(columnFamily, keyTree), parent, columnToInsert, consistencyLevel);
+        sessionState.out.println("Value inserted.");
+        elapsedTime(startTime);
+    }

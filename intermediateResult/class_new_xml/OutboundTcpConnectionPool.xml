@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\net\OutboundTcpConnectionPool.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetSocketAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>Socket</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>SocketChannel</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>Stage</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Config</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>IEndpointSnitch</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>metrics</name>.<name>ConnectionMetrics</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>security</name>.<name>SSLFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>OutboundTcpConnectionPool</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>IEndpointSnitch</name></type> <name>snitch</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getEndpointSnitch</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <comment type="line">// pointer for the real Address.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>id</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>OutboundTcpConnection</name></type> <name>cmdCon</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>OutboundTcpConnection</name></type> <name>ackCon</name></decl>;</decl_stmt>
+    <comment type="line">// pointer to the reseted Address.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>InetAddress</name></type> <name>resetedEndpoint</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ConnectionMetrics</name></type> <name>metrics</name></decl>;</decl_stmt>
+
+    <constructor><name>OutboundTcpConnectionPool</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>remoteEp</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>id</name> = <name>remoteEp</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>cmdCon</name> = new <call><name>OutboundTcpConnection</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>cmdCon</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>ackCon</name> = new <call><name>OutboundTcpConnection</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>ackCon</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name>metrics</name> = new <call><name>ConnectionMetrics</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * returns the appropriate connection based on message type.
+     * returns null if a connection could not be established.
+     */</comment>
+    <function><type><name>OutboundTcpConnection</name></type> <name>getConnection</name><parameter_list>(<param><decl><type><name>MessageOut</name></type> <name>msg</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Stage</name></type> <name>stage</name> <init>= <expr><call><name><name>msg</name>.<name>getStage</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>stage</name> == <name><name>Stage</name>.<name>REQUEST_RESPONSE</name></name> || <name>stage</name> == <name><name>Stage</name>.<name>INTERNAL_RESPONSE</name></name> || <name>stage</name> == <name><name>Stage</name>.<name>GOSSIP</name></name>
+               ? <name>ackCon</name>
+               : <name>cmdCon</name></expr>;</return>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>reset</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>OutboundTcpConnection</name></type> <name>conn</name> <range>: <expr>new <name><name>OutboundTcpConnection</name><index>[]</index></name> <block>{ <expr><name>cmdCon</name></expr>, <expr><name>ackCon</name></expr> }</block></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>conn</name>.<name>closeSocket</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>resetToNewerVersion</name><parameter_list>(<param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>OutboundTcpConnection</name></type> <name>conn</name> <range>: <expr>new <name><name>OutboundTcpConnection</name><index>[]</index></name> <block>{ <expr><name>cmdCon</name></expr>, <expr><name>ackCon</name></expr> }</block></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name>version</name> &gt; <call><name><name>conn</name>.<name>getTargetVersion</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>conn</name>.<name>softCloseSocket</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * reconnect to @param remoteEP (after the current message backlog is exhausted).
+     * Used by Ec2MultiRegionSnitch to force nodes in the same region to communicate over their private IPs.
+     * @param remoteEP
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>reset</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>remoteEP</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>resetedEndpoint</name> = <name>remoteEP</name></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>OutboundTcpConnection</name></type> <name>conn</name> <range>: <expr>new <name><name>OutboundTcpConnection</name><index>[]</index></name> <block>{ <expr><name>cmdCon</name></expr>, <expr><name>ackCon</name></expr> }</block></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>conn</name>.<name>softCloseSocket</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+
+        <comment type="line">// release previous metrics and create new one with reset address</comment>
+        <expr_stmt><expr><call><name><name>metrics</name>.<name>release</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>metrics</name> = new <call><name>ConnectionMetrics</name><argument_list>(<argument><expr><name>resetedEndpoint</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getTimeouts</name><parameter_list>()</parameter_list>
+    <block>{
+       <return>return <expr><call><name><name>metrics</name>.<name>timeouts</name>.<name>count</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getRecentTimeouts</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>metrics</name>.<name>getRecentTimeout</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>incrementTimeout</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>metrics</name>.<name>timeouts</name>.<name>mark</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Socket</name></type> <name>newSocket</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// zero means 'bind on any available port.'</comment>
+        <if>if <condition>(<expr><call><name>isEncryptedChannel</name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>Config</name>.<name>getOutboundBindAny</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr><call><name><name>SSLFactory</name>.<name>getSocket</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getServerEncryptionOptions</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>endPoint</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getSSLStoragePort</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return></then>
+            <else>else
+                <return>return <expr><call><name><name>SSLFactory</name>.<name>getSocket</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getServerEncryptionOptions</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>endPoint</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getSSLStoragePort</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>FBUtilities</name>.<name>getLocalAddress</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</return></else></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <decl_stmt><decl><type><name>Socket</name></type> <name>socket</name> <init>= <expr><call><name><name>SocketChannel</name>.<name>open</name></name><argument_list>(<argument><expr>new <call><name>InetSocketAddress</name><argument_list>(<argument><expr><call><name>endPoint</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getStoragePort</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>socket</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>Config</name>.<name>getOutboundBindAny</name></name><argument_list>()</argument_list></call> &amp;&amp; !<call><name><name>socket</name>.<name>isBound</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>socket</name>.<name>bind</name></name><argument_list>(<argument><expr>new <call><name>InetSocketAddress</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getLocalAddress</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <return>return <expr><name>socket</name></expr>;</return>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><name>InetAddress</name></type> <name>endPoint</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>resetedEndpoint</name> == null ? <name>id</name> : <name>resetedEndpoint</name></expr>;</return>
+    }</block></function>
+
+    <function><type><name>boolean</name></type> <name>isEncryptedChannel</name><parameter_list>()</parameter_list>
+    <block>{
+        <switch>switch <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>getServerEncryptionOptions</name></name><argument_list>()</argument_list></call>.<name>internode_encryption</name></expr>)</condition>
+        <block>{
+            <case>case <expr><name>none</name></expr>:
+                <return>return <expr>false</expr>;</return> <comment type="line">// if nothing needs to be encrypted then return immediately.</comment>
+            </case><case>case <expr><name>all</name></expr>:
+                <break>break;</break>
+            </case><case>case <expr><name>dc</name></expr>:
+                <if>if <condition>(<expr><call><name><name>snitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><call><name><name>snitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return <expr>false</expr>;</return></then></if>
+                <break>break;</break>
+            </case><case>case <expr><name>rack</name></expr>:
+                <comment type="line">// for rack then check if the DC's are the same.</comment>
+                <if>if <condition>(<expr><call><name><name>snitch</name>.<name>getRack</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><call><name><name>snitch</name>.<name>getRack</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>
+                        &amp;&amp; <call><name><name>snitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><call><name><name>snitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return <expr>false</expr>;</return></then></if>
+                <break>break;</break>
+        </case>}</block></switch>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+   <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// these null guards are simply for tests</comment>
+        <if>if <condition>(<expr><name>ackCon</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ackCon</name>.<name>closeSocket</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><name>cmdCon</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>cmdCon</name>.<name>closeSocket</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><call><name><name>metrics</name>.<name>release</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+}</block></class>
+</unit>

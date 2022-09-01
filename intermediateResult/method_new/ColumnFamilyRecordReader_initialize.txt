@@ -1,0 +1,48 @@
+public void initialize(InputSplit split, TaskAttemptContext context) throws IOException
+    {
+        this.split = (ColumnFamilySplit) split;
+        Configuration conf = context.getConfiguration();
+        KeyRange jobRange = ConfigHelper.getInputKeyRange(conf);
+        filter = jobRange == null ? null : jobRange.row_filter;
+        predicate = ConfigHelper.getInputSlicePredicate(conf);
+        boolean widerows = ConfigHelper.getInputIsWide(conf);
+        isEmptyPredicate = isEmptyPredicate(predicate);
+        totalRowCount = (int) this.split.getLength();
+        batchSize = ConfigHelper.getRangeBatchSize(conf);
+        cfName = ConfigHelper.getInputColumnFamily(conf);
+        consistencyLevel = ConsistencyLevel.valueOf(ConfigHelper.getReadConsistencyLevel(conf));
+
+        keyspace = ConfigHelper.getInputKeyspace(conf);
+
+        try
+        {
+            // only need to connect once
+            if (socket != null && socket.isOpen())
+                return;
+
+            // create connection using thrift
+            String location = getLocation();
+            socket = new TSocket(location, ConfigHelper.getInputRpcPort(conf));
+            TTransport transport = ConfigHelper.getInputTransportFactory(conf).openTransport(socket);
+            TBinaryProtocol binaryProtocol = new TBinaryProtocol(transport);
+            client = new Cassandra.Client(binaryProtocol);
+
+            // log in
+            client.set_keyspace(keyspace);
+            if (ConfigHelper.getInputKeyspaceUserName(conf) != null)
+            {
+                Map<String, String> creds = new HashMap<String, String>();
+                creds.put(IAuthenticator.USERNAME_KEY, ConfigHelper.getInputKeyspaceUserName(conf));
+                creds.put(IAuthenticator.PASSWORD_KEY, ConfigHelper.getInputKeyspacePassword(conf));
+                AuthenticationRequest authRequest = new AuthenticationRequest(creds);
+                client.login(authRequest);
+            }
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+
+        iter = widerows ? new WideRowIterator() : new StaticRowIterator();
+        logger.debug("created {}", iter);
+    }

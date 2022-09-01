@@ -1,0 +1,317 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\utils\UUIDGen.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>security</name>.<name>MessageDigest</name></name>;</import>
+<import>import <name><name>java</name>.<name>security</name>.<name>NoSuchAlgorithmException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collection</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Enumeration</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashSet</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Set</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Random</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>UUID</name></name>;</import>
+
+
+<comment type="block" format="javadoc">/**
+ * The goods are here: www.ietf.org/rfc/rfc4122.txt.
+ */</comment>
+<class><specifier>public</specifier> class <name>UUIDGen</name>
+<block>{
+    <comment type="line">// A grand day! millis at 00:00:00.000 15 Oct 1582.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>START_EPOCH</name> <init>= <expr>-12219292800000L</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>clockSeqAndNode</name> <init>= <expr><call><name>makeClockSeqAndNode</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/*
+     * The min and max possible lsb for a UUID.
+     * Note that his is not 0 and all 1's because Cassandra TimeUUIDType
+     * compares the lsb parts as a signed byte array comparison. So the min
+     * value is 8 times -128 and the max is 8 times +127.
+     *
+     * Note that we ignore the uuid variant (namely, MIN_CLOCK_SEQ_AND_NODE
+     * have variant 2 as it should, but MAX_CLOCK_SEQ_AND_NODE have variant 0).
+     * I don't think that has any practical consequence and is more robust in
+     * case someone provides a UUID with a broken variant.
+     */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>MIN_CLOCK_SEQ_AND_NODE</name> <init>= <expr>0x8080808080808080L</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>MAX_CLOCK_SEQ_AND_NODE</name> <init>= <expr>0x7f7f7f7f7f7f7f7fL</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// placement of this singleton is important.  It needs to be instantiated *AFTER* the other statics.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>UUIDGen</name></type> <name>instance</name> <init>= <expr>new <call><name>UUIDGen</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>lastNanos</name></decl>;</decl_stmt>
+
+    <constructor><specifier>private</specifier> <name>UUIDGen</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// make sure someone didn't whack the clockSeqAndNode by changing the order of instantiation.</comment>
+        <if>if <condition>(<expr><name>clockSeqAndNode</name> == 0</expr>)</condition><then> <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"singleton instantiation is misplaced."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Creates a type 1 UUID (time-based UUID).
+     *
+     * @return a UUID instance
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>UUID</name></type> <name>getTimeUUID</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>UUID</name><argument_list>(<argument><expr><call><name><name>instance</name>.<name>createTimeSafe</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>clockSeqAndNode</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** creates a type 1 uuid from raw bytes. */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>UUID</name></type> <name>getUUID</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>raw</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>UUID</name><argument_list>(<argument><expr><call><name><name>raw</name>.<name>getLong</name></name><argument_list>(<argument><expr><call><name><name>raw</name>.<name>position</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>raw</name>.<name>getLong</name></name><argument_list>(<argument><expr><call><name><name>raw</name>.<name>position</name></name><argument_list>()</argument_list></call> + 8</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** decomposes a uuid into raw bytes. */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>byte</name><index>[]</index></type> <name>decompose</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>uuid</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>most</name> <init>= <expr><call><name><name>uuid</name>.<name>getMostSignificantBits</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>least</name> <init>= <expr><call><name><name>uuid</name>.<name>getLeastSignificantBits</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>b</name> <init>= <expr>new <name><name>byte</name><index>[<expr>16</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; 8</expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <expr_stmt><expr><name><name>b</name><index>[<expr><name>i</name></expr>]</index></name> = <call>(<name>byte</name>)<argument_list>(<argument><expr><name>most</name> &gt;&gt;&gt; ((7-<name>i</name>) * 8)</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>b</name><index>[<expr>8+<name>i</name></expr>]</index></name> = <call>(<name>byte</name>)<argument_list>(<argument><expr><name>least</name> &gt;&gt;&gt; ((7-<name>i</name>) * 8)</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>b</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns a 16 byte representation of a type 1 UUID (a time-based UUID),
+     * based on the current system time.
+     *
+     * @return a type 1 UUID represented as a byte[]
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>byte</name><index>[]</index></type> <name>getTimeUUIDBytes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>createTimeUUIDBytes</name><argument_list>(<argument><expr><call><name><name>instance</name>.<name>createTimeSafe</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns the smaller possible type 1 UUID having the provided timestamp.
+     *
+     * &lt;b&gt;Warning:&lt;/b&gt; this method should only be used for querying as this
+     * doesn't at all guarantee the uniqueness of the resulting UUID.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>UUID</name></type> <name>minTimeUUID</name><parameter_list>(<param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>UUID</name><argument_list>(<argument><expr><call><name>createTime</name><argument_list>(<argument><expr><call><name>fromUnixTimestamp</name><argument_list>(<argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>MIN_CLOCK_SEQ_AND_NODE</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns the biggest possible type 1 UUID having the provided timestamp.
+     *
+     * &lt;b&gt;Warning:&lt;/b&gt; this method should only be used for querying as this
+     * doesn't at all guarantee the uniqueness of the resulting UUID.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>UUID</name></type> <name>maxTimeUUID</name><parameter_list>(<param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// unix timestamp are milliseconds precision, uuid timestamp are 100's</comment>
+        <comment type="line">// nanoseconds precision. If we ask for the biggest uuid have unix</comment>
+        <comment type="line">// timestamp 1ms, then we should not extend 100's nanoseconds</comment>
+        <comment type="line">// precision by taking 10000, but rather 19999.</comment>
+        <decl_stmt><decl><type><name>long</name></type> <name>uuidTstamp</name> <init>= <expr><call><name>fromUnixTimestamp</name><argument_list>(<argument><expr><name>timestamp</name> + 1</expr></argument>)</argument_list></call> - 1</expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name>UUID</name><argument_list>(<argument><expr><call><name>createTime</name><argument_list>(<argument><expr><name>uuidTstamp</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>MAX_CLOCK_SEQ_AND_NODE</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>unixTimestamp</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>uuid</name></decl></param>)</parameter_list> <block>{
+        <if>if <condition>(<expr><call><name><name>uuid</name>.<name>version</name></name><argument_list>()</argument_list></call> != 1</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Can only retrieve the unix timestamp for version 1 uuid (provided version %d)"</expr></argument>, <argument><expr><call><name><name>uuid</name>.<name>version</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>timestamp</name> <init>= <expr><call><name><name>uuid</name>.<name>timestamp</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr>(<name>timestamp</name> / 10000) + <name>START_EPOCH</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>long</name></type> <name>fromUnixTimestamp</name><parameter_list>(<param><decl><type><name>long</name></type> <name>tstamp</name></decl></param>)</parameter_list> <block>{
+        <return>return <expr>(<name>tstamp</name> - <name>START_EPOCH</name>) * 10000</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Converts a milliseconds-since-epoch timestamp into the 16 byte representation
+     * of a type 1 UUID (a time-based UUID).
+     *
+     * &lt;p&gt;&lt;i&gt;&lt;b&gt;Deprecated:&lt;/b&gt; This method goes again the principle of a time
+     * UUID and should not be used. For queries based on timestamp, minTimeUUID() and
+     * maxTimeUUID() can be used but this method has questionable usefulness. This is
+     * only kept because CQL2 uses it (see TimeUUID.fromStringCQL2) and we
+     * don't want to break compatibility.&lt;/i&gt;&lt;/p&gt;
+     *
+     * &lt;p&gt;&lt;i&gt;&lt;b&gt;Warning:&lt;/b&gt; This method is not guaranteed to return unique UUIDs; Multiple
+     * invocations using identical timestamps will result in identical UUIDs.&lt;/i&gt;&lt;/p&gt;
+     *
+     * @param timeMillis
+     * @return a type 1 UUID represented as a byte[]
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>byte</name><index>[]</index></type> <name>getTimeUUIDBytes</name><parameter_list>(<param><decl><type><name>long</name></type> <name>timeMillis</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>createTimeUUIDBytes</name><argument_list>(<argument><expr><call><name><name>instance</name>.<name>createTimeUnsafe</name></name><argument_list>(<argument><expr><name>timeMillis</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Converts a 100-nanoseconds precision timestamp into the 16 byte representation
+     * of a type 1 UUID (a time-based UUID).
+     *
+     * To specify a 100-nanoseconds precision timestamp, one should provide a milliseconds timestamp and
+     * a number 0 &lt;= n &lt; 10000 such that n*100 is the number of nanoseconds within that millisecond.
+     *
+     * &lt;p&gt;&lt;i&gt;&lt;b&gt;Warning:&lt;/b&gt; This method is not guaranteed to return unique UUIDs; Multiple
+     * invocations using identical timestamps will result in identical UUIDs.&lt;/i&gt;&lt;/p&gt;
+     *
+     * @return a type 1 UUID represented as a byte[]
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>byte</name><index>[]</index></type> <name>getTimeUUIDBytes</name><parameter_list>(<param><decl><type><name>long</name></type> <name>timeMillis</name></decl></param>, <param><decl><type><name>int</name></type> <name>nanos</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>nanos</name> &gt;= 10000</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr><call><name>createTimeUUIDBytes</name><argument_list>(<argument><expr><call><name><name>instance</name>.<name>createTimeUnsafe</name></name><argument_list>(<argument><expr><name>timeMillis</name></expr></argument>, <argument><expr><name>nanos</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>byte</name><index>[]</index></type> <name>createTimeUUIDBytes</name><parameter_list>(<param><decl><type><name>long</name></type> <name>msb</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>lsb</name> <init>= <expr><name>clockSeqAndNode</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>uuidBytes</name> <init>= <expr>new <name><name>byte</name><index>[<expr>16</expr>]</index></name></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; 8</expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><name><name>uuidBytes</name><index>[<expr><name>i</name></expr>]</index></name> = <call>(<name>byte</name>) <argument_list>(<argument><expr><name>msb</name> &gt;&gt;&gt; 8 * (7 - <name>i</name>)</expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>8</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; 16</expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><name><name>uuidBytes</name><index>[<expr><name>i</name></expr>]</index></name> = <call>(<name>byte</name>) <argument_list>(<argument><expr><name>lsb</name> &gt;&gt;&gt; 8 * (7 - <name>i</name>)</expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <return>return <expr><name>uuidBytes</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns a milliseconds-since-epoch value for a type-1 UUID.
+     *
+     * @param uuid a type-1 (time-based) UUID
+     * @return the number of milliseconds since the unix epoch
+     * @throws IllegalArgumentException if the UUID is not version 1
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>getAdjustedTimestamp</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>uuid</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>uuid</name>.<name>version</name></name><argument_list>()</argument_list></call> != 1</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"incompatible with uuid version: "+<call><name><name>uuid</name>.<name>version</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr>(<call><name><name>uuid</name>.<name>timestamp</name></name><argument_list>()</argument_list></call> / 10000) + <name>START_EPOCH</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>long</name></type> <name>makeClockSeqAndNode</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>clock</name> <init>= <expr>new <call><name>Random</name><argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>nextLong</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>lsb</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>lsb</name> |= 0x8000000000000000L</expr>;</expr_stmt>                 <comment type="line">// variant (2 bits)</comment>
+        <expr_stmt><expr><name>lsb</name> |= (<name>clock</name> &amp; 0x0000000000003FFFL) &lt;&lt; 48</expr>;</expr_stmt> <comment type="line">// clock sequence (14 bits)</comment>
+        <expr_stmt><expr><name>lsb</name> |= <call><name>makeNode</name><argument_list>()</argument_list></call></expr>;</expr_stmt>                          <comment type="line">// 6 bytes</comment>
+        <return>return <expr><name>lsb</name></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// needs to return two different values for the same when.</comment>
+    <comment type="line">// we can generate at most 10k UUIDs per ms.</comment>
+    <function><type><specifier>private</specifier> <specifier>synchronized</specifier> <name>long</name></type> <name>createTimeSafe</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>nanosSince</name> <init>= <expr>(<call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>START_EPOCH</name>) * 10000</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>nanosSince</name> &gt; <name>lastNanos</name></expr>)</condition><then>
+            <expr_stmt><expr><name>lastNanos</name> = <name>nanosSince</name></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><name>nanosSince</name> = ++<name>lastNanos</name></expr>;</expr_stmt></else></if>
+
+        <return>return <expr><call><name>createTime</name><argument_list>(<argument><expr><name>nanosSince</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>long</name></type> <name>createTimeUnsafe</name><parameter_list>(<param><decl><type><name>long</name></type> <name>when</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>createTimeUnsafe</name><argument_list>(<argument><expr><name>when</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>long</name></type> <name>createTimeUnsafe</name><parameter_list>(<param><decl><type><name>long</name></type> <name>when</name></decl></param>, <param><decl><type><name>int</name></type> <name>nanos</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>nanosSince</name> <init>= <expr>((<name>when</name> - <name>START_EPOCH</name>) * 10000) + <name>nanos</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name>createTime</name><argument_list>(<argument><expr><name>nanosSince</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>long</name></type> <name>createTime</name><parameter_list>(<param><decl><type><name>long</name></type> <name>nanosSince</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>msb</name> <init>= <expr>0L</expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>msb</name> |= (0x00000000ffffffffL &amp; <name>nanosSince</name>) &lt;&lt; 32</expr>;</expr_stmt>
+        <expr_stmt><expr><name>msb</name> |= (0x0000ffff00000000L &amp; <name>nanosSince</name>) &gt;&gt;&gt; 16</expr>;</expr_stmt>
+        <expr_stmt><expr><name>msb</name> |= (0xffff000000000000L &amp; <name>nanosSince</name>) &gt;&gt;&gt; 48</expr>;</expr_stmt>
+        <expr_stmt><expr><name>msb</name> |= 0x0000000000001000L</expr>;</expr_stmt> <comment type="line">// sets the version to 1.</comment>
+        <return>return <expr><name>msb</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>long</name></type> <name>makeNode</name><parameter_list>()</parameter_list>
+    <block>{
+       <comment type="block">/*
+        * We don't have access to the MAC address but need to generate a node part
+        * that identify this host as uniquely as possible.
+        * The spec says that one option is to take as many source that identify
+        * this node as possible and hash them together. That's what we do here by
+        * gathering all the ip of this host.
+        * Note that FBUtilities.getBroadcastAddress() should be enough to uniquely
+        * identify the node *in the cluster* but it triggers DatabaseDescriptor
+        * instanciation and the UUID generator is used in Stress for instance,
+        * where we don't want to require the yaml.
+        */</comment>
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>localAddresses</name> <init>= <expr><call><name><name>FBUtilities</name>.<name>getAllLocalAddresses</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>localAddresses</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Cannot generate the node component of the UUID because cannot retrieve any IP addresses."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <comment type="line">// ideally, we'd use the MAC address, but java doesn't expose that.</comment>
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>hash</name> <init>= <expr><call><name>hash</name><argument_list>(<argument><expr><name>localAddresses</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>node</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr>6</expr></argument>, <argument><expr><name><name>hash</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><name>node</name> |= (0x00000000000000ff &amp; (<name>long</name>)<name><name>hash</name><index>[<expr><name>i</name></expr>]</index></name>) &lt;&lt; (5-<name>i</name>)*8</expr>;</expr_stmt></for>
+        <assert>assert <expr>(0xff00000000000000L &amp; <name>node</name>) == 0</expr>;</assert>
+
+        <comment type="line">// Since we don't use the mac address, the spec says that multicast</comment>
+        <comment type="line">// bit (least significant bit of the first octet of the node ID) must be 1.</comment>
+        <return>return <expr><name>node</name> | 0x0000010000000000L</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>byte</name><index>[]</index></type> <name>hash</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>data</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>MessageDigest</name></type> <name>messageDigest</name> <init>= <expr><call><name><name>MessageDigest</name>.<name>getInstance</name></name><argument_list>(<argument><expr>"MD5"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for(<init><decl><type><name>InetAddress</name></type> <name>addr</name> <range>: <expr><name>data</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>messageDigest</name>.<name>update</name></name><argument_list>(<argument><expr><call><name><name>addr</name>.<name>getAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+            <return>return <expr><call><name><name>messageDigest</name>.<name>digest</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>NoSuchAlgorithmException</name></type> <name>nsae</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"MD5 digest algorithm is not available"</expr></argument>, <argument><expr><name>nsae</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+}</block></class>
+
+<comment type="line">// for the curious, here is how I generated START_EPOCH</comment>
+<comment type="line">//        Calendar c = Calendar.getInstance(TimeZone.getTimeZone("GMT-0"));</comment>
+<comment type="line">//        c.set(Calendar.YEAR, 1582);</comment>
+<comment type="line">//        c.set(Calendar.MONTH, Calendar.OCTOBER);</comment>
+<comment type="line">//        c.set(Calendar.DAY_OF_MONTH, 15);</comment>
+<comment type="line">//        c.set(Calendar.HOUR_OF_DAY, 0);</comment>
+<comment type="line">//        c.set(Calendar.MINUTE, 0);</comment>
+<comment type="line">//        c.set(Calendar.SECOND, 0);</comment>
+<comment type="line">//        c.set(Calendar.MILLISECOND, 0);</comment>
+<comment type="line">//        long START_EPOCH = c.getTimeInMillis();</comment>
+</unit>

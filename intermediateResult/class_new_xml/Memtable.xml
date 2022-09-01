@@ -1,0 +1,512 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\Memtable.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicLong</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Function</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Throwables</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>JMXEnabledThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>StageManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>SecondaryIndexManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>DiskAwareRunnable</name></name>;</import>
+<import>import <name><name>org</name>.<name>cliffc</name>.<name>high_scale_lib</name>.<name>NonBlockingHashSet</name></name>;</import>
+<import>import <name><name>org</name>.<name>github</name>.<name>jamm</name>.<name>MemoryMeter</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>DebuggableThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>NamedThreadFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>OnDiskAtomIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>SimpleAbstractColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>commitlog</name>.<name>ReplayPosition</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>AbstractColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>NamesQueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>SliceQueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableMetadata</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableWriter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>SlabAllocator</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>Memtable</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>Memtable</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/*
+     * switchMemtable puts Memtable.getSortedContents on the writer executor.  When the write is complete,
+     * we turn the writer into an SSTableReader and add it to ssTables where it is available for reads.
+     *
+     * There are two other things that switchMemtable does.
+     * First, it puts the Memtable into memtablesPendingFlush, where it stays until the flush is complete
+     * and it's been added as an SSTableReader to ssTables_.  Second, it adds an entry to commitLogUpdater
+     * that waits for the flush to complete, then calls onMemtableFlush.  This allows multiple flushes
+     * to happen simultaneously on multicore systems, while still calling onMF in the correct order,
+     * which is necessary for replay in case of a restart since CommitLog assumes that when onMF is
+     * called, all data up to the given context has been persisted to SSTables.
+     */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>ExecutorService</name></type> <name>flushWriter</name>
+            <init>= <expr>new <call><name>JMXEnabledThreadPoolExecutor</name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getFlushWriters</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                               <argument><expr><name><name>StageManager</name>.<name>KEEPALIVE</name></name></expr></argument>,
+                                               <argument><expr><name><name>TimeUnit</name>.<name>SECONDS</name></name></expr></argument>,
+                                               <argument><expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>Runnable</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getFlushQueueSize</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+                                               <argument><expr>new <call><name>NamedThreadFactory</name><argument_list>(<argument><expr>"FlushWriter"</expr></argument>)</argument_list></call></expr></argument>,
+                                               <argument><expr>"internal"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// size in memory can never be less than serialized size</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>double</name></type> <name>MIN_SANE_LIVE_RATIO</name> <init>= <expr>1.0</expr></init></decl>;</decl_stmt>
+    <comment type="line">// max liveratio seen w/ 1-byte columns on a 64-bit jvm was 19. If it gets higher than 64 something is probably broken.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>double</name></type> <name>MAX_SANE_LIVE_RATIO</name> <init>= <expr>64.0</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// we want to limit the amount of concurrently running and/or queued meterings, because counting is slow (can be</comment>
+    <comment type="line">// minutes, for a large memtable and a busy server). so we could keep memtables</comment>
+    <comment type="line">// alive after they're flushed and would otherwise be GC'd. the approach we take is to bound the number of</comment>
+    <comment type="line">// outstanding/running meterings to a maximum of one per CFS using this set; the executor's queue is unbounded but</comment>
+    <comment type="line">// will implicitly be bounded by the number of CFS:s.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>meteringInProgress</name> <init>= <expr>new <call><name><name>NonBlockingHashSet</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>ExecutorService</name></type> <name>meterExecutor</name> <init>= <expr>new <class><super><name>DebuggableThreadPoolExecutor</name></super><argument_list>(<argument><expr>1</expr></argument>,
+                                                                                          <argument><expr>1</expr></argument>,
+                                                                                          <argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>,
+                                                                                          <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>,
+                                                                                          <argument><expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>Runnable</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                                          <argument><expr>new <call><name>NamedThreadFactory</name><argument_list>(<argument><expr>"MemoryMeter"</expr></argument>)</argument_list></call></expr></argument>)</argument_list>
+    <block>{
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>protected</specifier> <name>void</name></type> <name>afterExecute</name><parameter_list>(<param><decl><type><name>Runnable</name></type> <name>r</name></decl></param>, <param><decl><type><name>Throwable</name></type> <name>t</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>super</name>.<name>afterExecute</name></name><argument_list>(<argument><expr><name>r</name></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>DebuggableThreadPoolExecutor</name>.<name>logExceptionsAfterExecute</name></name><argument_list>(<argument><expr><name>r</name></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>MemoryMeter</name></type> <name>meter</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>volatile</specifier> <specifier>static</specifier> <name>Memtable</name></type> <name>activelyMeasuring</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>AtomicLong</name></type> <name>currentSize</name> <init>= <expr>new <call><name>AtomicLong</name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>AtomicLong</name></type> <name>currentOperations</name> <init>= <expr>new <call><name>AtomicLong</name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// We index the memtable by RowPosition only for the purpose of being able</comment>
+    <comment type="line">// to select key range using Token.KeyBound. However put() ensures that we</comment>
+    <comment type="line">// actually only store DecoratedKey.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentNavigableMap</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>columnFamilies</name> <init>= <expr>new <call><name><name>ConcurrentSkipListMap</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>cfs</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>creationTime</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>SlabAllocator</name></type> <name>allocator</name> <init>= <expr>new <call><name>SlabAllocator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <comment type="line">// We really only need one column by allocator but one by memtable is not a big waste and avoids needing allocators to know about CFS</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Function</name><argument_list>&lt;<argument><name>IColumn</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>localCopyFunction</name> <init>= <expr>new <class><super><name><name>Function</name><argument_list>&lt;<argument><name>IColumn</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+    <block>{
+        <function><type><specifier>public</specifier> <name>IColumn</name></type> <name>apply</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>c</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>c</name>.<name>localCopy</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>allocator</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function><empty_stmt>;</empty_stmt>
+    }</block></class></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// Record the comparator of the CFS at the creation of the memtable. This</comment>
+    <comment type="line">// is only used when a user update the CF comparator, to know if the</comment>
+    <comment type="line">// memtable was created with the new or old comparator.</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>AbstractType</name></type> <name>initialComparator</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>Memtable</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>cfs</name></name> = <name>cfs</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>creationTime</name></name> = <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>initialComparator</name></name> = <name><name>cfs</name>.<name>metadata</name>.<name>comparator</name></name></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name><name>Callable</name><argument_list>&lt;<argument><name><name>Set</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>provider</name> <init>= <expr>new <class><super><name><name>Callable</name><argument_list>&lt;<argument><name><name>Set</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name></type> <name>call</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+            <block>{
+                <comment type="line">// avoid counting this once for each row</comment>
+                <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name></type> <name>set</name> <init>= <expr><call><name><name>Collections</name>.<name>newSetFromMap</name></name><argument_list>(<argument><expr>new <call><name><name>IdentityHashMap</name><argument_list>&lt;<argument><name>Object</name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>set</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>Memtable</name>.<name>this</name>.<name>cfs</name>.<name>metadata</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><name>set</name></expr>;</return>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>meter</name> = new <call><name>MemoryMeter</name><argument_list>()</argument_list></call>.<call><name>omitSharedBufferOverhead</name><argument_list>()</argument_list></call>.<call><name>withTrackerProvider</name><argument_list>(<argument><expr><name>provider</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getLiveSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call>(<name>long</name>) <argument_list>(<argument><expr><call><name><name>currentSize</name>.<name>get</name></name><argument_list>()</argument_list></call> * <name><name>cfs</name>.<name>liveRatio</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getSerializedSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>currentSize</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getOperations</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>currentOperations</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Should only be called by ColumnFamilyStore.apply.  NOT a public API.
+     * (CFS handles locking to avoid submitting an op
+     *  to a flushing memtable.  Any other way is unsafe.)
+    */</comment>
+    <function><type><name>void</name></type> <name>put</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>columnFamily</name></decl></param>, <param><decl><type><name><name>SecondaryIndexManager</name>.<name>Updater</name></name></type> <name>indexer</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>resolve</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>columnFamily</name></expr></argument>, <argument><expr><name>indexer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateLiveRatio</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>RuntimeException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>MemoryMeter</name>.<name>isInitialized</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <comment type="line">// hack for openjdk.  we log a warning about this in the startup script too.</comment>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"MemoryMeter uninitialized (jamm not specified as java agent); assuming liveRatio of 10.0.  Usually this means cassandra-env.sh disabled jamm because you are using a buggy JRE; upgrade to the Sun JRE instead"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>cfs</name>.<name>liveRatio</name></name> = 10.0</expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <if>if <condition>(<expr>!<call><name><name>meteringInProgress</name>.<name>add</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Metering already pending or active for {}; skipping liveRatio update"</expr></argument>, <argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>activelyMeasuring</name> = <name><name>Memtable</name>.<name>this</name></name></expr>;</expr_stmt>
+
+                    <decl_stmt><decl><type><name>long</name></type> <name>start</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <comment type="line">// ConcurrentSkipListMap has cycles, so measureDeep will have to track a reference to EACH object it visits.</comment>
+                    <comment type="line">// So to reduce the memory overhead of doing a measurement, we break it up to row-at-a-time.</comment>
+                    <decl_stmt><decl><type><name>long</name></type> <name>deepSize</name> <init>= <expr><call><name><name>meter</name>.<name>measure</name></name><argument_list>(<argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>int</name></type> <name>objects</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                    <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>columnFamilies</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <block>{
+                        <expr_stmt><expr><name>deepSize</name> += <call><name><name>meter</name>.<name>measureDeep</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> + <call><name><name>meter</name>.<name>measureDeep</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>objects</name> += <call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getColumnCount</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    }</block></for>
+                    <decl_stmt><decl><type><name>double</name></type> <name>newRatio</name> <init>= <expr>(<name>double</name>) <name>deepSize</name> / <call><name><name>currentSize</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <if>if <condition>(<expr><name>newRatio</name> &lt; <name>MIN_SANE_LIVE_RATIO</name></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"setting live ratio to minimum of {} instead of {}"</expr></argument>, <argument><expr><name>MIN_SANE_LIVE_RATIO</name></expr></argument>, <argument><expr><name>newRatio</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>newRatio</name> = <name>MIN_SANE_LIVE_RATIO</name></expr>;</expr_stmt>
+                    }</block></then></if>
+                    <if>if <condition>(<expr><name>newRatio</name> &gt; <name>MAX_SANE_LIVE_RATIO</name></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"setting live ratio to maximum of {} instead of {}"</expr></argument>, <argument><expr><name>MAX_SANE_LIVE_RATIO</name></expr></argument>, <argument><expr><name>newRatio</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>newRatio</name> = <name>MAX_SANE_LIVE_RATIO</name></expr>;</expr_stmt>
+                    }</block></then></if>
+
+                    <comment type="line">// we want to be very conservative about our estimate, since the penalty for guessing low is OOM</comment>
+                    <comment type="line">// death.  thus, higher estimates are believed immediately; lower ones are averaged w/ the old</comment>
+                    <if>if <condition>(<expr><name>newRatio</name> &gt; <name><name>cfs</name>.<name>liveRatio</name></name></expr>)</condition><then>
+                        <expr_stmt><expr><name><name>cfs</name>.<name>liveRatio</name></name> = <name>newRatio</name></expr>;</expr_stmt></then>
+                    <else>else
+                        <expr_stmt><expr><name><name>cfs</name>.<name>liveRatio</name></name> = (<name><name>cfs</name>.<name>liveRatio</name></name> + <name>newRatio</name>) / 2.0</expr>;</expr_stmt></else></if>
+
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"{} liveRatio is {} (just-counted was {}).  calculation took {}ms for {} columns"</expr></argument>,
+                                <argument><expr>new <name><name>Object</name><index>[]</index></name><block>{ <expr><name>cfs</name></expr>, <expr><name><name>cfs</name>.<name>liveRatio</name></name></expr>, <expr><name>newRatio</name></expr>, <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>start</name></expr>, <expr><name>objects</name></expr> }</block></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>activelyMeasuring</name> = null</expr>;</expr_stmt>
+                }</block>
+                <finally>finally
+                <block>{
+                    <expr_stmt><expr><call><name><name>meteringInProgress</name>.<name>remove</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></finally></try>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>meterExecutor</name>.<name>submit</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>resolve</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name><name>SecondaryIndexManager</name>.<name>Updater</name></name></type> <name>indexer</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>previous</name> <init>= <expr><call><name><name>columnFamilies</name>.<name>get</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>previous</name> == null</expr>)</condition><then>
+        <block>{
+            <comment type="line">// AtomicSortedColumns doesn't work for super columns (see #3821)</comment>
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>empty</name> <init>= <expr><call><name><name>cf</name>.<name>cloneMeShallow</name></name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>isSuper</name></name><argument_list>()</argument_list></call> ? <call><name><name>ThreadSafeSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call> : <call><name><name>AtomicSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// We'll add the columns later. This avoids wasting works if we get beaten in the putIfAbsent</comment>
+            <expr_stmt><expr><name>previous</name> = <call><name><name>columnFamilies</name>.<name>putIfAbsent</name></name><argument_list>(<argument><expr>new <call><name>DecoratedKey</name><argument_list>(<argument><expr><name><name>key</name>.<name>token</name></name></expr></argument>, <argument><expr><call><name><name>allocator</name>.<name>clone</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>empty</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>previous</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>previous</name> = <name>empty</name></expr>;</expr_stmt></then></if>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>sizeDelta</name> <init>= <expr><call><name><name>previous</name>.<name>addAllWithSizeDelta</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>allocator</name></expr></argument>, <argument><expr><name>localCopyFunction</name></expr></argument>, <argument><expr><name>indexer</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>currentSize</name>.<name>addAndGet</name></name><argument_list>(<argument><expr><name>sizeDelta</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>currentOperations</name>.<name>addAndGet</name></name><argument_list>(<argument><expr>(<call><name><name>cf</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call> == 0)
+                                    ? <call><name><name>cf</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call> ? 1 : 0
+                                    : <call><name><name>cf</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="line">// for debugging</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>contents</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>builder</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>builder</name>.<name>append</name></name><argument_list>(<argument><expr>"{"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>columnFamilies</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>builder</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>": "</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <expr_stmt><expr><call><name><name>builder</name>.<name>append</name></name><argument_list>(<argument><expr>"}"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>builder</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>flushAndSignal</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>CountDownLatch</name></type> <name>latch</name></decl></param>, <param><decl><type><specifier>final</specifier> <name><name>Future</name><argument_list>&lt;<argument><name>ReplayPosition</name></argument>&gt;</argument_list></name></type> <name>context</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>flushWriter</name>.<name>execute</name></name><argument_list>(<argument><expr>new <call><name>FlushRunnable</name><argument_list>(<argument><expr><name>latch</name></expr></argument>, <argument><expr><name>context</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Memtable-%s@%s(%s/%s serialized/live bytes, %s ops)"</expr></argument>,
+                             <argument><expr><call><name><name>cfs</name>.<name>getColumnFamilyName</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>hashCode</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>currentSize</name></expr></argument>, <argument><expr><call><name>getLiveSize</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>currentOperations</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @param startWith Include data in the result from and including this key and to the end of the memtable
+     * @return An iterator of entries with the data from the start key
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>getEntryIterator</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>RowPosition</name></type> <name>startWith</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>RowPosition</name></type> <name>stopAt</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <class><super><name><name>Iterator</name><argument_list>&lt;<argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name><name>stopAt</name>.<name>isMinimum</name></name><argument_list>()</argument_list></call>
+                                                                        ? <call><name><name>columnFamilies</name>.<name>tailMap</name></name><argument_list>(<argument><expr><name>startWith</name></expr></argument>)</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call>
+                                                                        : <call><name><name>columnFamilies</name>.<name>subMap</name></name><argument_list>(<argument><expr><name>startWith</name></expr></argument>, <argument><expr>true</expr></argument>, <argument><expr><name>stopAt</name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>next</name><parameter_list>()</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <init>= <expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <comment type="line">// Actual stored key should be true DecoratedKey</comment>
+                <assert>assert <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call> instanceof <name>DecoratedKey</name></expr>;</assert>
+                <return>return <expr><call>(<name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name>)<argument_list>(<argument><expr><name>Object</name></expr></argument>)</argument_list></call><name>entry</name></expr>;</return> <comment type="line">// yes, it's ugly</comment>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>iter</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isClean</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>columnFamilies</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * obtain an iterator of columns in this memtable in the specified order starting from a given column.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>OnDiskAtomIterator</name></type> <name>getSliceIterator</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>SliceQueryFilter</name></type> <name>filter</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>cf</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>filteredIter</name> <init>= <expr><name><name>filter</name>.<name>reversed</name></name> ? <call><name><name>cf</name>.<name>reverseIterator</name></name><argument_list>(<argument><expr><name><name>filter</name>.<name>slices</name></name></expr></argument>)</argument_list></call> : <call><name><name>cf</name>.<name>iterator</name></name><argument_list>(<argument><expr><name><name>filter</name>.<name>slices</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <return>return <expr>new <class><super><name>AbstractColumnIterator</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getColumnFamily</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><name>cf</name></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>getKey</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><name>key</name></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>filteredIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>OnDiskAtom</name></type> <name>next</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>filteredIter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>OnDiskAtomIterator</name></type> <name>getNamesIterator</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>NamesQueryFilter</name></type> <name>filter</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>cf</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>boolean</name></type> <name>isStandard</name> <init>= <expr>!<call><name><name>cf</name>.<name>isSuper</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <return>return <expr>new <class><super><name>SimpleAbstractColumnIterator</name></super><argument_list>()</argument_list>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name><name>filter</name>.<name>columns</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getColumnFamily</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><name>cf</name></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>getKey</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr><name>key</name></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>protected</specifier> <name>OnDiskAtom</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+            <block>{
+                <while>while <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+                <block>{
+                    <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>current</name> <init>= <expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>cf</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>current</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>column</name> != null</expr>)</condition><then>
+                        <comment type="line">// clone supercolumns so caller can freely removeDeleted or otherwise mutate it</comment>
+                        <return>return <expr><name>isStandard</name> ? <name>column</name> : ((<name>SuperColumn</name>)<name>column</name>).<call><name>cloneMe</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+                }</block></while>
+                <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getColumnFamily</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>columnFamilies</name>.<name>get</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>clearUnsafe</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>columnFamilies</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>creationTime</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>creationTime</name></expr>;</return>
+    }</block></function>
+
+    <class>class <name>FlushRunnable</name> <super><extends>extends <name>DiskAwareRunnable</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>CountDownLatch</name></type> <name>latch</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Future</name><argument_list>&lt;<argument><name>ReplayPosition</name></argument>&gt;</argument_list></name></type> <name>context</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>estimatedSize</name></decl>;</decl_stmt>
+
+        <constructor><name>FlushRunnable</name><parameter_list>(<param><decl><type><name>CountDownLatch</name></type> <name>latch</name></decl></param>, <param><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>ReplayPosition</name></argument>&gt;</argument_list></name></type> <name>context</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>latch</name></name> = <name>latch</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>context</name></name> = <name>context</name></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>long</name></type> <name>keySize</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>RowPosition</name></type> <name>key</name> <range>: <expr><call><name><name>columnFamilies</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <comment type="line">//  make sure we don't write non-sensical keys</comment>
+                <assert>assert <expr><name>key</name> instanceof <name>DecoratedKey</name></expr>;</assert>
+                <expr_stmt><expr><name>keySize</name> += ((<name>DecoratedKey</name>)<name>key</name>).<call><name><name>key</name>.<name>remaining</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <expr_stmt><expr><name>estimatedSize</name> = <call>(<name>long</name>) <argument_list>(<argument><expr>(<name>keySize</name> <comment type="line">// index entries</comment>
+                                    + <name>keySize</name> <comment type="line">// keys in data file</comment>
+                                    + <call><name><name>currentSize</name>.<name>get</name></name><argument_list>()</argument_list></call>) <comment type="line">// data</comment>
+                                    * 1.2</expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// bloom filter and row index overhead</comment>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>getExpectedWriteSize</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>estimatedSize</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>void</name></type> <name>runWith</name><parameter_list>(<param><decl><type><name>File</name></type> <name>dataDirectory</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+        <block>{
+            <assert>assert <expr><name>dataDirectory</name> != null : "Flush task is not bound to any disk"</expr>;</assert>
+
+            <decl_stmt><decl><type><name>SSTableReader</name></type> <name>sstable</name> <init>= <expr><call><name>writeSortedContents</name><argument_list>(<argument><expr><name>context</name></expr></argument>, <argument><expr><name>dataDirectory</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>cfs</name>.<name>replaceFlushed</name></name><argument_list>(<argument><expr><name><name>Memtable</name>.<name>this</name></name></expr></argument>, <argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>latch</name>.<name>countDown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>SSTableReader</name></type> <name>writeSortedContents</name><parameter_list>(<param><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>ReplayPosition</name></argument>&gt;</argument_list></name></type> <name>context</name></decl></param>, <param><decl><type><name>File</name></type> <name>dataDirectory</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Writing " + <call><name><name>Memtable</name>.<name>this</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>SSTableReader</name></type> <name>ssTable</name></decl>;</decl_stmt>
+            <comment type="line">// errors when creating the writer that may leave empty temp files.</comment>
+            <decl_stmt><decl><type><name>SSTableWriter</name></type> <name>writer</name> <init>= <expr><call><name>createFlushWriter</name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>getTempSSTablePath</name></name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>directories</name>.<name>getLocationForDisk</name></name><argument_list>(<argument><expr><name>dataDirectory</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <comment type="line">// (we can't clear out the map as-we-go to free up memory,</comment>
+                <comment type="line">//  since the memtable is being used for queries in the "pending flush" category)</comment>
+                <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>columnFamilies</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><call><name><name>cf</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <comment type="line">// When every node is up, there's no reason to write batchlog data out to sstables</comment>
+                        <comment type="line">// (which in turn incurs cost like compaction) since the BL write + delete cancel each other out,</comment>
+                        <comment type="line">// and BL data is strictly local, so we don't need to preserve tombstones for repair.</comment>
+                        <comment type="line">// If we have a data row + row level tombstone, then writing it is effectively an expensive no-op so we skip it.</comment>
+                        <comment type="line">// See CASSANDRA-4667.</comment>
+                        <if>if <condition>(<expr><call><name><name>cfs</name>.<name>columnFamily</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>BATCHLOG_CF</name></name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>cfs</name>.<name>table</name>.<name>name</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_KS</name></name></expr></argument>)</argument_list></call> &amp;&amp; !<call><name><name>cf</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                            <continue>continue;</continue></then></if>
+
+                        <comment type="line">// Pedantically, you could purge column level tombstones that are past GcGRace when writing to the SSTable.</comment>
+                        <comment type="line">// But it can result in unexpected behaviour where deletes never make it to disk,</comment>
+                        <comment type="line">// as they are lost and so cannot override existing column values. So we only remove deleted columns if there</comment>
+                        <comment type="line">// is a CF level tombstone to ensure the delete makes it into an SSTable.</comment>
+                        <expr_stmt><expr><call><name><name>ColumnFamilyStore</name>.<name>removeDeletedColumnsOnly</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MIN_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                    <expr_stmt><expr><call><name><name>writer</name>.<name>append</name></name><argument_list>(<argument><expr>(<name>DecoratedKey</name>)<call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+
+                <if>if <condition>(<expr><call><name><name>writer</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>ssTable</name> = <call><name><name>writer</name>.<name>closeAndOpenReader</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Completed flushing %s (%d bytes) for commitlog position %s"</expr></argument>,
+                                              <argument><expr><call><name><name>ssTable</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>ssTable</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>length</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>context</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><call><name><name>writer</name>.<name>abort</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>ssTable</name> = null</expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Completed flushing; nothing needed to be retained.  Commitlog position was {}"</expr></argument>,
+                                <argument><expr><call><name><name>context</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+                <return>return <expr><name>ssTable</name></expr>;</return>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>writer</name>.<name>abort</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <throw>throw <expr><call><name><name>Throwables</name>.<name>propagate</name></name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>SSTableWriter</name></type> <name>createFlushWriter</name><parameter_list>(<param><decl><type><name>String</name></type> <name>filename</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name><name>SSTableMetadata</name>.<name>Collector</name></name></type> <name>sstableMetadataCollector</name> <init>= <expr><call><name><name>SSTableMetadata</name>.<name>createCollector</name></name><argument_list>()</argument_list></call>.<call><name>replayPosition</name><argument_list>(<argument><expr><call><name><name>context</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>new <call><name>SSTableWriter</name><argument_list>(<argument><expr><name>filename</name></expr></argument>,
+                                     <argument><expr><call><name><name>columnFamilies</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                     <argument><expr><name><name>cfs</name>.<name>metadata</name></name></expr></argument>,
+                                     <argument><expr><name><name>cfs</name>.<name>partitioner</name></name></expr></argument>,
+                                     <argument><expr><name>sstableMetadataCollector</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

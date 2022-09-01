@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\streaming\StreamOut.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOError</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Future</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>Descriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * This class handles streaming data from one node to another.
+ *
+ * The source node [the Out side] is always in charge of the streaming session.  Streams may
+ * be initiated either directly by the source via the methods in this class,
+ * or on demand from the target (via StreamRequest).
+ *
+ * Files to stream are grouped into sessions, which can have callbacks associated
+ * with them so that (for instance) we can mark a new node a full member of the
+ * cluster after all the data it needs has been streamed.
+ *
+ * The source begins a session by sending
+ * a Message with the stream bit flag in the Header turned on.  Part of that Message
+ * will include a StreamHeader that includes the files that will be streamed as part
+ * of that session, as well as the first file-to-be-streamed. (Combining session list
+ * and first file like this is inconvenient, but not as inconvenient as the old
+ * three-part send-file-list, wait-for-ack, start-first-file dance.)
+ *
+ * This is done over a separate TCP connection to avoid blocking ordinary intra-node
+ * traffic during the stream.  So there is no Handler for the main stream of data --
+ * when a connection sets the Stream bit, IncomingTcpConnection knows what to expect
+ * without any further Messages.
+ *
+ * After each file, the target node [the In side] will send a StreamReply indicating success
+ * (FILE_FINISHED) or failure (FILE_RETRY).
+ *
+ * When all files have been successfully transferred and integrated the target will
+ * send an additional SESSION_FINISHED reply and the session is complete.
+ *
+ * For Stream requests (for bootstrap), one subtlety is that we always have to
+ * create at least one stream reply, even if the list of files is empty, otherwise the
+ * target has no way to know that it can stop waiting for an answer.
+ *
+ */</comment>
+<class><specifier>public</specifier> class <name>StreamOut</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>StreamOut</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Stream the given ranges to the target endpoint from each CF in the given keyspace.
+    */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>transferRanges</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>target</name></decl></param>, <param><decl><type><name>Table</name></type> <name>table</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl></param>, <param><decl><type><name>IStreamCallback</name></type> <name>callback</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StreamOutSession</name></type> <name>session</name> <init>= <expr><call><name><name>StreamOutSession</name>.<name>create</name></name><argument_list>(<argument><expr><name><name>table</name>.<name>name</name></name></expr></argument>, <argument><expr><name>target</name></expr></argument>, <argument><expr><name>callback</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>transferRanges</name><argument_list>(<argument><expr><name>session</name></expr></argument>, <argument><expr><call><name><name>table</name>.<name>getColumnFamilyStores</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>ranges</name></expr></argument>, <argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Flushes matching column families from the given keyspace, or all columnFamilies
+     * if the cf list is empty.
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>flushSSTables</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>stores</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Flushing memtables for {}..."</expr></argument>, <argument><expr><name>stores</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>flushes</name></decl>;</decl_stmt>
+        <expr_stmt><expr><name>flushes</name> = new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfstore</name> <range>: <expr><name>stores</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>flush</name> <init>= <expr><call><name><name>cfstore</name>.<name>forceFlush</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>flush</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>flushes</name>.<name>add</name></name><argument_list>(<argument><expr><name>flush</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>waitOnFutures</name></name><argument_list>(<argument><expr><name>flushes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Stream the given ranges to the target endpoint from each of the given CFs.
+    */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>transferRanges</name><parameter_list>(<param><decl><type><name>StreamOutSession</name></type> <name>session</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>cfses</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><call><name><name>ranges</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Beginning transfer to {}"</expr></argument>, <argument><expr><call><name><name>session</name>.<name>getHost</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Ranges are {}"</expr></argument>, <argument><expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><name>ranges</name></expr></argument>, <argument><expr>","</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>flushSSTables</name><argument_list>(<argument><expr><name>cfses</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name> <init>= <expr><call><name><name>Collections</name>.<name>emptyList</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfStore</name> <range>: <expr><name>cfses</name></expr></range></decl></init>)
+                <expr_stmt><expr><name>sstables</name> = <call><name><name>Iterables</name>.<name>concat</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>, <argument><expr><call><name><name>cfStore</name>.<name>markCurrentSSTablesReferenced</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><call><name>transferSSTables</name><argument_list>(<argument><expr><name>session</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>ranges</name></expr></argument>, <argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Low-level transfer of matching portions of a group of sstables from a single table to the target endpoint.
+     * You should probably call transferRanges instead. This moreover assumes that references have been acquired on the sstables.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>transferSSTables</name><parameter_list>(<param><decl><type><name>StreamOutSession</name></type> <name>session</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>type</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></type> <name>pending</name> <init>= <expr><call><name>createPendingFiles</name><argument_list>(<argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>ranges</name></expr></argument>, <argument><expr><name>type</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// Even if the list of pending files is empty, we need to initiate the transfer otherwise</comment>
+        <comment type="line">// the remote end will hang in cases where this was a requested transfer.</comment>
+        <expr_stmt><expr><call><name><name>session</name>.<name>addFilesToStream</name></name><argument_list>(<argument><expr><name>pending</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>session</name>.<name>begin</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="line">// called prior to sending anything.</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>List</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></type> <name>createPendingFiles</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></type> <name>pending</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>Descriptor</name></type> <name>desc</name> <init>= <expr><name><name>sstable</name>.<name>descriptor</name></name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>,<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>sections</name> <init>= <expr><call><name><name>sstable</name>.<name>getPositionsForRanges</name></name><argument_list>(<argument><expr><name>ranges</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>sections</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <comment type="line">// A reference was acquired on the sstable and we won't stream it</comment>
+                <expr_stmt><expr><call><name><name>sstable</name>.<name>releaseReference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <continue>continue;</continue>
+            }</block></then></if>
+            <expr_stmt><expr><call><name><name>pending</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>PendingFile</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>desc</name></expr></argument>, <argument><expr><name><name>SSTable</name>.<name>COMPONENT_DATA</name></name></expr></argument>, <argument><expr><name>sections</name></expr></argument>, <argument><expr><name>type</name></expr></argument>, <argument><expr><call><name><name>sstable</name>.<name>estimatedKeysForRanges</name></name><argument_list>(<argument><expr><name>ranges</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Stream context metadata {}, {} sstables."</expr></argument>, <argument><expr><name>pending</name></expr></argument>, <argument><expr><call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>pending</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

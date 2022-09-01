@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\scheduler\WeightedQueue.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>scheduler</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>SynchronousQueue</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeoutException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>MBeanServer</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>ObjectName</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>metrics</name>.<name>LatencyMetrics</name></name>;</import>
+
+<class>class <name>WeightedQueue</name> <super><implements>implements <name>WeightedQueueMBean</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>LatencyMetrics</name></type> <name>metric</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>String</name></type> <name>key</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>int</name></type> <name>weight</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>SynchronousQueue</name><argument_list>&lt;<argument><name>Entry</name></argument>&gt;</argument_list></name></type> <name>queue</name></decl>;</decl_stmt>
+    <constructor><specifier>public</specifier> <name>WeightedQueue</name><parameter_list>(<param><decl><type><name>String</name></type> <name>key</name></decl></param>, <param><decl><type><name>int</name></type> <name>weight</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>key</name></name> = <name>key</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>weight</name></name> = <name>weight</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>queue</name></name> = new <call><name><name>SynchronousQueue</name><argument_list>&lt;<argument><name>Entry</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>metric</name></name> =  new <call><name>LatencyMetrics</name><argument_list>(<argument><expr>"org.apache.cassandra.metrics"</expr></argument>, <argument><expr>"scheduler"</expr></argument>, <argument><expr>"WeightedQueue"</expr></argument>, <argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>register</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// expose monitoring data</comment>
+        <decl_stmt><decl><type><name>MBeanServer</name></type> <name>mbs</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>mbs</name>.<name>registerMBean</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr>"org.apache.cassandra.scheduler:type=WeightedQueue,queue=" + <name>key</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>put</name><parameter_list>(<param><decl><type><name>Thread</name></type> <name>t</name></decl></param>, <param><decl><type><name>long</name></type> <name>timeoutMS</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InterruptedException</name></expr></argument>, <argument><expr><name>TimeoutException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>queue</name>.<name>offer</name></name><argument_list>(<argument><expr>new <call><name><name>WeightedQueue</name>.<name>Entry</name></name><argument_list>(<argument><expr><name>t</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timeoutMS</name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>TimeoutException</name><argument_list>(<argument><expr>"Failed to acquire request scheduler slot for '" + <name>key</name> + "'"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Thread</name></type> <name>poll</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Entry</name></type> <name>e</name> <init>= <expr><call><name><name>queue</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>e</name> == null</expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+        <expr_stmt><expr><call><name><name>metric</name>.<name>addNano</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>nanoTime</name></name><argument_list>()</argument_list></call> - <name><name>e</name>.<name>creationTime</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name><name>e</name>.<name>thread</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>"RoundRobinScheduler.WeightedQueue(key=" + <name>key</name> + " weight=" + <name>weight</name> + ")"</expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> class <name>Entry</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>long</name></type> <name>creationTime</name> <init>= <expr><call><name><name>System</name>.<name>nanoTime</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Thread</name></type> <name>thread</name></decl>;</decl_stmt>
+        <constructor><specifier>public</specifier> <name>Entry</name><parameter_list>(<param><decl><type><name>Thread</name></type> <name>thread</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>thread</name></name> = <name>thread</name></expr>;</expr_stmt>
+        }</block></constructor>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/** MBean related methods */</comment>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getOperations</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>metric</name>.<name>latency</name>.<name>count</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getTotalLatencyMicros</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>metric</name>.<name>totalLatency</name>.<name>count</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>double</name></type> <name>getRecentLatencyMicros</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>metric</name>.<name>getRecentLatency</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name><index>[]</index></type> <name>getTotalLatencyHistogramMicros</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>metric</name>.<name>totalLatencyHistogram</name>.<name>getBuckets</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name><index>[]</index></type> <name>getRecentLatencyHistogramMicros</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>metric</name>.<name>recentLatencyHistogram</name>.<name>getBuckets</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

@@ -1,0 +1,364 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\marshal\DynamicCompositeType.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>charset</name>.<name>CharacterCodingException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>SyntaxException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+
+<comment type="block">/*
+ * The encoding of a DynamicCompositeType column name should be:
+ *   &lt;component&gt;&lt;component&gt;&lt;component&gt; ...
+ * where &lt;component&gt; is:
+ *   &lt;comparator part&gt;&lt;value&gt;&lt;'end-of-component' byte&gt;
+ * where:
+ *   - &lt;comparator part&gt;: either the comparator full name, or a declared
+ *     aliases. This is at least 2 bytes (those 2 bytes are called header in
+ *     the following). If the first bit of the header is 1, then this
+ *     comparator part is an alias, otherwise it's a comparator full name:
+ *       - aliases: the actual alias is the 2nd byte of header taken as a
+ *         character. The whole &lt;comparator part&gt; is thus 2 byte long.
+ *       - comparator full name: the header is the length of the remaining
+ *         part. The remaining part is the UTF-8 encoded comparator class
+ *         name.
+ *   - &lt;value&gt;: the component value bytes preceded by 2 byte containing the
+ *     size of value (see CompositeType).
+ *   - 'end-of-component' byte is defined as in CompositeType
+ */</comment>
+<class><specifier>public</specifier> class <name>DynamicCompositeType</name> <super><extends>extends <name>AbstractCompositeType</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>aliases</name></decl>;</decl_stmt>
+
+    <comment type="line">// interning instances</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name><name>Map</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>, <argument><name>DynamicCompositeType</name></argument>&gt;</argument_list></name></type> <name>instances</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name><name>Map</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>, <argument><name>DynamicCompositeType</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <specifier>synchronized</specifier> <name>DynamicCompositeType</name></type> <name>getInstance</name><parameter_list>(<param><decl><type><name>TypeParser</name></type> <name>parser</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument>, <argument><expr><name>SyntaxException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>getInstance</name><argument_list>(<argument><expr><call><name><name>parser</name>.<name>getAliasParameters</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <specifier>synchronized</specifier> <name>DynamicCompositeType</name></type> <name>getInstance</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>aliases</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>DynamicCompositeType</name></type> <name>dct</name> <init>= <expr><call><name><name>instances</name>.<name>get</name></name><argument_list>(<argument><expr><name>aliases</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>dct</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>dct</name> = new <call><name>DynamicCompositeType</name><argument_list>(<argument><expr><name>aliases</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>instances</name>.<name>put</name></name><argument_list>(<argument><expr><name>aliases</name></expr></argument>, <argument><expr><name>dct</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <return>return <expr><name>dct</name></expr>;</return>
+    }</block></function>
+
+    <constructor><specifier>private</specifier> <name>DynamicCompositeType</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>aliases</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>aliases</name></name> = <name>aliases</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getComparator</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>header</name> <init>= <expr><call><name>getShortLength</name><argument_list>(<argument><expr><name>bb</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>(<name>header</name> &amp; 0x8000) == 0</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>name</name> <init>= <expr><call><name><name>ByteBufferUtil</name>.<name>string</name></name><argument_list>(<argument><expr><call><name>getBytes</name><argument_list>(<argument><expr><name>bb</name></expr></argument>, <argument><expr><name>header</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <return>return <expr><call><name><name>TypeParser</name>.<name>parse</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></then>
+            <else>else
+            <block>{
+                <return>return <expr><call><name><name>aliases</name>.<name>get</name></name><argument_list>(<argument><expr><call>(<name>byte</name>)<argument_list>(<argument><expr><name>header</name> &amp; 0xFF</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></else></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>CharacterCodingException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>SyntaxException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getComparator</name><argument_list>(<argument><expr><name>bb</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb1</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb2</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comp1</name> <init>= <expr><call><name>getComparator</name><argument_list>(<argument><expr><name>bb1</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comp2</name> <init>= <expr><call><name>getComparator</name><argument_list>(<argument><expr><name>bb2</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// Fast test if the comparator uses singleton instances</comment>
+        <if>if <condition>(<expr><name>comp1</name> != <name>comp2</name></expr>)</condition><then>
+        <block>{
+            <comment type="block">/*
+             * We compare component of different types by comparing the
+             * comparator class names. We start with the simple classname
+             * first because that will be faster in almost all cases, but
+             * fallback on the full name if necessary
+             */</comment>
+            <decl_stmt><decl><type><name>int</name></type> <name>cmp</name> <init>= <expr><call><name><name>comp1</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call>.<call><name>compareTo</name><argument_list>(<argument><expr><call><name><name>comp2</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>cmp</name> != 0</expr>)</condition><then>
+                <return>return <expr><name>cmp</name> &lt; 0 ? <name><name>FixedValueComparator</name>.<name>alwaysLesserThan</name></name> : <name><name>FixedValueComparator</name>.<name>alwaysGreaterThan</name></name></expr>;</return></then></if>
+
+            <expr_stmt><expr><name>cmp</name> = <call><name><name>comp1</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getName</name><argument_list>()</argument_list></call>.<call><name>compareTo</name><argument_list>(<argument><expr><call><name><name>comp2</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>cmp</name> != 0</expr>)</condition><then>
+                <return>return <expr><name>cmp</name> &lt; 0 ? <name><name>FixedValueComparator</name>.<name>alwaysLesserThan</name></name> : <name><name>FixedValueComparator</name>.<name>alwaysGreaterThan</name></name></expr>;</return></then></if>
+
+            <comment type="line">// if cmp == 0, we're actually having the same type, but one that</comment>
+            <comment type="line">// did not have a singleton instance. It's ok (though inefficient).</comment>
+        }</block></then></if>
+        <return>return <expr><name>comp1</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getAndAppendComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>, <param><decl><type><name>StringBuilder</name></type> <name>sb</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>header</name> <init>= <expr><call><name>getShortLength</name><argument_list>(<argument><expr><name>bb</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>(<name>header</name> &amp; 0x8000) == 0</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>name</name> <init>= <expr><call><name><name>ByteBufferUtil</name>.<name>string</name></name><argument_list>(<argument><expr><call><name>getBytes</name><argument_list>(<argument><expr><name>bb</name></expr></argument>, <argument><expr><name>header</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"@"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><call><name><name>TypeParser</name>.<name>parse</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call>(<name>char</name>)<argument_list>(<argument><expr><name>header</name> &amp; 0xFF</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"@"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><call><name><name>aliases</name>.<name>get</name></name><argument_list>(<argument><expr><call>(<name>byte</name>)<argument_list>(<argument><expr><name>header</name> &amp; 0xFF</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></else></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>CharacterCodingException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>SyntaxException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>ParsedComparator</name></type> <name>parseComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>String</name></type> <name>part</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>DynamicParsedComparator</name><argument_list>(<argument><expr><name>part</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>validateComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>MarshalException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>bb</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &lt; 2</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>MarshalException</name><argument_list>(<argument><expr>"Not enough bytes to header of the comparator part of component " + <name>i</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <decl_stmt><decl><type><name>int</name></type> <name>header</name> <init>= <expr><call><name>getShortLength</name><argument_list>(<argument><expr><name>bb</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>(<name>header</name> &amp; 0x8000) == 0</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>bb</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &lt; <name>header</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>MarshalException</name><argument_list>(<argument><expr>"Not enough bytes to read comparator name of component " + <name>i</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>value</name> <init>= <expr><call><name>getBytes</name><argument_list>(<argument><expr><name>bb</name></expr></argument>, <argument><expr><name>header</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>comparator</name> = <call><name><name>TypeParser</name>.<name>parse</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>string</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <comment type="line">// we'll deal with this below since comparator == null</comment>
+            }</block></catch></try>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name>comparator</name> = <call><name><name>aliases</name>.<name>get</name></name><argument_list>(<argument><expr><call>(<name>byte</name>)<argument_list>(<argument><expr><name>header</name> &amp; 0xFF</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <if>if <condition>(<expr><name>comparator</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>MarshalException</name><argument_list>(<argument><expr>"Cannot find comparator for component " + <name>i</name></expr></argument>)</argument_list></call></expr>;</throw></then>
+        <else>else
+            <return>return <expr><name>comparator</name></expr>;</return></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>decompose</name><parameter_list>(<param><decl><type><name>Object</name>...</type> <name>objects</name></decl></param>)</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>boolean</name></type> <name>isCompatibleWith</name><parameter_list>(<param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>previous</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>this</name> == <name>previous</name></expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+
+        <if>if <condition>(<expr>!(<name>previous</name> instanceof <name>DynamicCompositeType</name>)</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <comment type="line">// Adding new aliases is fine (but removing is not)</comment>
+        <comment type="line">// Note that modifying the type for an alias to a compatible type is</comment>
+        <comment type="line">// *not* fine since this would deal correctly with mixed aliased/not</comment>
+        <comment type="line">// aliased component.</comment>
+        <decl_stmt><decl><type><name>DynamicCompositeType</name></type> <name>cp</name> <init>= <expr>(<name>DynamicCompositeType</name>)<name>previous</name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>aliases</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; <call><name><name>cp</name>.<name>aliases</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>cp</name>.<name>aliases</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>tprev</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>tnew</name> <init>= <expr><call><name><name>aliases</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>tnew</name> == null || <name>tnew</name> != <name>tprev</name></expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+        }</block></for>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> class <name>DynamicParsedComparator</name> <super><implements>implements <name>ParsedComparator</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>boolean</name></type> <name>isAlias</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>comparatorName</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>remainingPart</name></decl>;</decl_stmt>
+
+        <constructor><name>DynamicParsedComparator</name><parameter_list>(<param><decl><type><name>String</name></type> <name>part</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>splits</name> <init>= <expr><call><name><name>part</name>.<name>split</name></name><argument_list>(<argument><expr>"@"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name><name>splits</name>.<name>length</name></name> != 2</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"Invalid component representation: " + <name>part</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <expr_stmt><expr><name>comparatorName</name> = <name><name>splits</name><index>[<expr>0</expr>]</index></name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>remainingPart</name> = <name><name>splits</name><index>[<expr>1</expr>]</index></name></expr>;</expr_stmt>
+
+            <try>try
+            <block>{
+                <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>t</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>comparatorName</name>.<name>length</name></name><argument_list>()</argument_list></call> == 1</expr>)</condition><then>
+                <block>{
+                    <comment type="line">// try for an alias</comment>
+                    <comment type="line">// Note: the char to byte cast is theorically bogus for unicode character. I take full</comment>
+                    <comment type="line">// responsibility if someone get hit by this (without making it on purpose)</comment>
+                    <expr_stmt><expr><name>t</name> = <call><name><name>aliases</name>.<name>get</name></name><argument_list>(<argument><expr>(<name>byte</name>)<call><name><name>comparatorName</name>.<name>charAt</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+                <expr_stmt><expr><name>isAlias</name> = <name>t</name> != null</expr>;</expr_stmt>
+                <if>if <condition>(<expr>!<name>isAlias</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>t</name> = <call><name><name>TypeParser</name>.<name>parse</name></name><argument_list>(<argument><expr><name>comparatorName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+                <expr_stmt><expr><name>type</name> = <name>t</name></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>SyntaxException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getAbstractType</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>type</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>String</name></type> <name>getRemainingPart</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>remainingPart</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>getComparatorSerializedSize</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>isAlias</name> ? 2 : 2 + <call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr><name>comparatorName</name></expr></argument>)</argument_list></call>.<call><name>remaining</name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serializeComparator</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>header</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>isAlias</name></expr>)</condition><then>
+                <expr_stmt><expr><name>header</name> = 0x8000 | (((<name>byte</name>)<call><name><name>comparatorName</name>.<name>charAt</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>) &amp; 0xFF)</expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><name>header</name> = <call><name><name>comparatorName</name>.<name>length</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></else></if>
+            <expr_stmt><expr><call><name>putShortLength</name><argument_list>(<argument><expr><name>bb</name></expr></argument>, <argument><expr><name>header</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr>!<name>isAlias</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>bb</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr><name>comparatorName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></function>
+    }</block></class>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getName</name><argument_list>()</argument_list></call> + <call><name><name>TypeParser</name>.<name>stringifyAliasesParameters</name></name><argument_list>(<argument><expr><name>aliases</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     * A comparator that always sorts it's first argument before the second
+     * one.
+     */</comment>
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>FixedValueComparator</name> <super><extends>extends <name><name>AbstractType</name><argument_list>&lt;<argument><name>Void</name></argument>&gt;</argument_list></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>FixedValueComparator</name></type> <name>alwaysLesserThan</name> <init>= <expr>new <call><name>FixedValueComparator</name><argument_list>(<argument><expr>-1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>FixedValueComparator</name></type> <name>alwaysGreaterThan</name> <init>= <expr>new <call><name>FixedValueComparator</name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>cmp</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>FixedValueComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>cmp</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>cmp</name></name> = <name>cmp</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>v1</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>v2</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><name>cmp</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>Void</name></type> <name>compose</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>bytes</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>decompose</name><parameter_list>(<param><decl><type><name>Void</name></type> <name>value</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>String</name></type> <name>getString</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>bytes</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>fromString</name><parameter_list>(<param><decl><type><name>String</name></type> <name>str</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>validate</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>bytes</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

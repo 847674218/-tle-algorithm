@@ -1,0 +1,113 @@
+public static void main(String args[]) throws IOException
+    {
+        // process command line arguments
+        CliOptions cliOptions = new CliOptions();
+        cliOptions.processArgs(sessionState, args);
+
+        // connect to cassandra server if host argument specified.
+        if (sessionState.hostName != null)
+        {
+            try
+            {
+                connect(sessionState.hostName, sessionState.thriftPort);
+            }
+            catch (RuntimeException e)
+            {
+                sessionState.err.println(e.getMessage());
+            }
+        }
+
+        if ( cliClient == null )
+        {
+            // Connection parameter was either invalid or not present.
+            // User must connect explicitly using the "connect" CLI statement.
+            cliClient = new CliClient(sessionState, null);
+        }
+
+        // load statements from file and process them
+        if (sessionState.inFileMode())
+        {
+            FileReader fileReader;
+
+            try
+            {
+                fileReader = new FileReader(sessionState.filename);
+            }
+            catch (IOException e)
+            {
+                sessionState.err.println(e.getMessage());
+                return;
+            }
+
+            evaluateFileStatements(new BufferedReader(fileReader));
+            return;
+        }
+
+        ConsoleReader reader = new ConsoleReader();
+
+        if (!sessionState.batch)
+        {
+            reader.addCompletor(completer);
+            reader.setBellEnabled(false);
+
+            String historyFile = System.getProperty("user.home") + File.separator + HISTORYFILE;
+
+            try
+            {
+                History history = new History(new File(historyFile));
+                reader.setHistory(history);
+            }
+            catch (IOException exp)
+            {
+                sessionState.err.printf("Unable to open %s for writing %n", historyFile);
+            }
+        }
+        else if (!sessionState.verbose) // if in batch mode but no verbose flag
+        {
+            sessionState.out.close();
+        }
+
+        cliClient.printBanner();
+
+        String prompt;
+        String line = "";
+        String currentStatement = "";
+        boolean inCompoundStatement = false;
+
+        while (line != null)
+        {
+            prompt = (inCompoundStatement) ? "...\t" : getPrompt(cliClient);
+
+            try
+            {
+                line = reader.readLine(prompt);
+            }
+            catch (IOException e)
+            {
+                // retry on I/O Exception
+            }
+
+            if (line == null)
+                return;
+
+            line = line.trim();
+
+            // skipping empty and comment lines
+            if (line.isEmpty() || line.startsWith("--"))
+                continue;
+
+            currentStatement += line;
+
+            if (line.endsWith(";") || line.equals("?"))
+            {
+                processStatementInteractive(currentStatement);
+                currentStatement = "";
+                inCompoundStatement = false;
+            }
+            else
+            {
+                currentStatement += " "; // ready for new line
+                inCompoundStatement = true;
+            }
+        }
+    }

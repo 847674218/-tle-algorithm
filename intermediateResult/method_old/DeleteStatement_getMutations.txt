@@ -1,0 +1,40 @@
+public List<IMutation> getMutations(ClientState clientState, List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        // Check key
+        List<Term> keys = processedKeys.get(cfDef.key.name);
+        if (keys == null || keys.isEmpty())
+            throw new InvalidRequestException(String.format("Missing mandatory PRIMARY KEY part %s", cfDef.key.name));
+
+        ColumnNameBuilder builder = cfDef.getColumnNameBuilder();
+        CFDefinition.Name firstEmpty = null;
+        for (CFDefinition.Name name : cfDef.columns.values())
+        {
+            List<Term> values = processedKeys.get(name.name);
+            if (values == null || values.isEmpty())
+            {
+                firstEmpty = name;
+                // For composites, we must either have all component or none
+                if (cfDef.isComposite && builder.componentCount() != 0)
+                    throw new InvalidRequestException(String.format("Missing mandatory PRIMARY KEY part %s", name));
+            }
+            else if (firstEmpty != null)
+            {
+                throw new InvalidRequestException(String.format("Missing PRIMARY KEY part %s since %s is set", firstEmpty, name));
+            }
+            else
+            {
+                assert values.size() == 1; // We only allow IN for keys so far
+                builder.add(values.get(0), Relation.Type.EQ, variables);
+            }
+        }
+
+        List<IMutation> rowMutations = new ArrayList<IMutation>(keys.size());
+
+        for (Term key : keys)
+        {
+            ByteBuffer rawKey = key.getByteBuffer(cfDef.key.type, variables);
+            rowMutations.add(mutationForKey(cfDef, clientState, rawKey, builder, variables));
+        }
+
+        return rowMutations;
+    }

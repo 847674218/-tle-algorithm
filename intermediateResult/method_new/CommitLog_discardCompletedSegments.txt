@@ -1,0 +1,61 @@
+public void discardCompletedSegments(final UUID cfId, final ReplayPosition context)
+    {
+        Callable task = new Callable()
+        {
+            public Object call()
+            {
+                logger.debug("discard completed log segments for {}, column family {}", context, cfId);
+
+                // Go thru the active segment files, which are ordered oldest to newest, marking the
+                // flushed CF as clean, until we reach the segment file containing the ReplayPosition passed
+                // in the arguments. Any segments that become unused after they are marked clean will be
+                // recycled or discarded.
+                for (Iterator<CommitLogSegment> iter = allocator.getActiveSegments().iterator(); iter.hasNext();)
+                {
+                    CommitLogSegment segment = iter.next();
+                    segment.markClean(cfId, context);
+
+                    // If the segment is no longer needed, and we have another spare segment in the hopper
+                    // (to keep the last segment from getting discarded), pursue either recycling or deleting
+                    // this segment file.
+                    if (iter.hasNext())
+                    {
+                        if (segment.isUnused())
+                        {
+                            logger.debug("Commit log segment {} is unused", segment);
+                            allocator.recycleSegment(segment);
+                        }
+                        else
+                        {
+                            logger.debug("Not safe to delete commit log segment {}; dirty is {}",
+                                         segment, segment.dirtyString());
+                        }
+                    }
+                    else
+                    {
+                        logger.debug("Not deleting active commitlog segment {}", segment);
+                    }
+
+                    // Don't mark or try to delete any newer segments once we've reached the one containing the
+                    // position of the flush.
+                    if (segment.contains(context))
+                        break;
+                }
+
+                return null;
+            }
+        };
+
+        try
+        {
+            executor.submit(task).get();
+        }
+        catch (InterruptedException e)
+        {
+            throw new RuntimeException(e);
+        }
+        catch (ExecutionException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }

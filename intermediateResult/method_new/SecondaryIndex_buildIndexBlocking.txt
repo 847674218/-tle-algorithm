@@ -1,0 +1,31 @@
+protected void buildIndexBlocking()
+    {
+        logger.info(String.format("Submitting index build of %s for data in %s",
+                getIndexName(), StringUtils.join(baseCfs.getSSTables(), ", ")));
+
+        Collection<SSTableReader> sstables = baseCfs.markCurrentSSTablesReferenced();
+        SecondaryIndexBuilder builder = new SecondaryIndexBuilder(baseCfs,
+                                                                  Collections.singleton(getIndexName()),
+                                                                  new ReducingKeyIterator(sstables));
+        Future<?> future = CompactionManager.instance.submitIndexBuild(builder);
+        try
+        {
+            future.get();
+            forceBlockingFlush();
+
+            setIndexBuilt();
+        }
+        catch (InterruptedException e)
+        {
+            throw new AssertionError(e);
+        }
+        catch (ExecutionException e)
+        {
+            throw new RuntimeException(e);
+        }
+        finally
+        {
+            SSTableReader.releaseReferences(sstables);
+        }
+        logger.info("Index build of " + getIndexName() + " complete");
+    }

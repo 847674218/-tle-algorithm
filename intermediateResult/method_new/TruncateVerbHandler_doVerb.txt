@@ -1,0 +1,23 @@
+public void doVerb(MessageIn<Truncation> message, String id)
+    {
+        Truncation t = message.payload;
+        Tracing.trace("Applying truncation of {}.{}", t.keyspace, t.columnFamily);
+        try
+        {
+            ColumnFamilyStore cfs = Table.open(t.keyspace).getColumnFamilyStore(t.columnFamily);
+            cfs.truncate().get();
+        }
+        catch (Exception e)
+        {
+            logger.error("Error in truncation", e);
+            respondError(t, message);
+
+            if (FSError.findNested(e) != null)
+                throw FSError.findNested(e);
+        }
+        Tracing.trace("Enqueuing response to truncate operation to {}", message.from);
+
+        TruncateResponse response = new TruncateResponse(t.keyspace, t.columnFamily, true);
+        logger.trace("{} applied.  Enqueuing response to {}@{} ", new Object[]{ t, id, message.from });
+        MessagingService.instance().sendReply(response.createMessage(), id, message.from);
+    }

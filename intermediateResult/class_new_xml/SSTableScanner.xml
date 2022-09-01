@@ -1,0 +1,274 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\io\sstable\SSTableScanner.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Arrays</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Iterator</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DecoratedKey</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowIndexEntry</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowPosition</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>IColumnIteratorFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>LazyColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>OnDiskAtomIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>ICompactionScanner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>RandomAccessReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>SSTableScanner</name> <super><implements>implements <name>ICompactionScanner</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>RandomAccessReader</name></type> <name>dfile</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>RandomAccessReader</name></type> <name>ifile</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>SSTableReader</name></type> <name>sstable</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>OnDiskAtomIterator</name></type> <name>row</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>boolean</name></type> <name>exhausted</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>OnDiskAtomIterator</name></argument>&gt;</argument_list></name></type> <name>iterator</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>QueryFilter</name></type> <name>filter</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * @param sstable SSTable to scan.
+     */</comment>
+    <constructor><name>SSTableScanner</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>skipCache</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>dfile</name></name> = <call><name><name>sstable</name>.<name>openDataReader</name></name><argument_list>(<argument><expr><name>skipCache</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>ifile</name></name> = <call><name><name>sstable</name>.<name>openIndexReader</name></name><argument_list>(<argument><expr><name>skipCache</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>sstable</name></name> = <name>sstable</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>filter</name></name> = null</expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * @param sstable SSTable to scan.
+     * @param filter filter to use when scanning the columns
+     */</comment>
+    <constructor><name>SSTableScanner</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>QueryFilter</name></type> <name>filter</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>dfile</name></name> = <call><name><name>sstable</name>.<name>openDataReader</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>ifile</name></name> = <call><name><name>sstable</name>.<name>openIndexReader</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>sstable</name></name> = <name>sstable</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>filter</name></name> = <name>filter</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>close</name></name><argument_list>(<argument><expr><name>dfile</name></expr></argument>, <argument><expr><name>ifile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>seekTo</name><parameter_list>(<param><decl><type><name>RowPosition</name></type> <name>seekKey</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>long</name></type> <name>indexPosition</name> <init>= <expr><call><name><name>sstable</name>.<name>getIndexScanPosition</name></name><argument_list>(<argument><expr><name>seekKey</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// -1 means the key is before everything in the sstable. So just start from the beginning.</comment>
+            <if>if <condition>(<expr><name>indexPosition</name> == -1</expr>)</condition><then>
+                <expr_stmt><expr><name>indexPosition</name> = 0</expr>;</expr_stmt></then></if>
+
+            <expr_stmt><expr><call><name><name>ifile</name>.<name>seek</name></name><argument_list>(<argument><expr><name>indexPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <while>while <condition>(<expr>!<call><name><name>ifile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>startPosition</name> <init>= <expr><call><name><name>ifile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>indexDecoratedKey</name> <init>= <expr><call><name><name>sstable</name>.<name>decodeKey</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>readWithShortLength</name></name><argument_list>(<argument><expr><name>ifile</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>comparison</name> <init>= <expr><call><name><name>indexDecoratedKey</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name>seekKey</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>comparison</name> &gt;= 0</expr>)</condition><then>
+                <block>{
+                    <comment type="line">// Found, just read the dataPosition and seek into index and data files</comment>
+                    <decl_stmt><decl><type><name>long</name></type> <name>dataPosition</name> <init>= <expr><call><name><name>ifile</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>ifile</name>.<name>seek</name></name><argument_list>(<argument><expr><name>startPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>dfile</name>.<name>seek</name></name><argument_list>(<argument><expr><name>dataPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>row</name> = null</expr>;</expr_stmt>
+                    <return>return;</return>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><call><name><name>RowIndexEntry</name>.<name>serializer</name>.<name>skip</name></name><argument_list>(<argument><expr><name>ifile</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></while>
+            <expr_stmt><expr><name>exhausted</name> = true</expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>sstable</name>.<name>markSuspect</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name><name>ifile</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getLengthInBytes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>dfile</name>.<name>length</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getCurrentPosition</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>dfile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getBackingFiles</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>sstable</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>iterator</name> == null</expr>)</condition><then>
+            <expr_stmt><expr><name>iterator</name> = <name>exhausted</name> ? <call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr>new <name><name>OnDiskAtomIterator</name><index>[<expr>0</expr>]</index></name></expr></argument>)</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call> : <call><name>createIterator</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        <return>return <expr><call><name><name>iterator</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>OnDiskAtomIterator</name></type> <name>next</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>iterator</name> == null</expr>)</condition><then>
+            <expr_stmt><expr><name>iterator</name> = <name>exhausted</name> ? <call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr>new <name><name>OnDiskAtomIterator</name><index>[<expr>0</expr>]</index></name></expr></argument>)</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call> : <call><name>createIterator</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        <return>return <expr><call><name><name>iterator</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>()</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>OnDiskAtomIterator</name></argument>&gt;</argument_list></name></type> <name>createIterator</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>filter</name> == null ? new <call><name>KeyScanningIterator</name><argument_list>()</argument_list></call> : new <call><name>FilteredKeyScanningIterator</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <class><specifier>protected</specifier> class <name>KeyScanningIterator</name> <super><implements>implements <name><name>Iterator</name><argument_list>&lt;<argument><name>OnDiskAtomIterator</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>protected</specifier> <name>long</name></type> <name>finishedAt</name></decl>;</decl_stmt>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>row</name> == null</expr>)</condition><then>
+                <return>return <expr>!<call><name><name>dfile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+            <return>return <expr><name>finishedAt</name> &lt; <call><name><name>dfile</name>.<name>length</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>OnDiskAtomIterator</name></type> <name>next</name><parameter_list>()</parameter_list>
+        <block>{
+            <try>try
+            <block>{
+                <if>if <condition>(<expr><name>row</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>dfile</name>.<name>seek</name></name><argument_list>(<argument><expr><name>finishedAt</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <assert>assert <expr>!<call><name><name>dfile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call></expr>;</assert>
+
+                <comment type="line">// Read data header</comment>
+                <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>key</name> <init>= <expr><call><name><name>sstable</name>.<name>decodeKey</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>readWithShortLength</name></name><argument_list>(<argument><expr><name>dfile</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>dataSize</name> <init>= <expr><call><name><name>SSTableReader</name>.<name>readRowSize</name></name><argument_list>(<argument><expr><name>dfile</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>dataStart</name> <init>= <expr><call><name><name>dfile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>finishedAt</name> = <name>dataStart</name> + <name>dataSize</name></expr>;</expr_stmt>
+
+                <expr_stmt><expr><name>row</name> = new <call><name>SSTableIdentityIterator</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>dfile</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>dataStart</name></expr></argument>, <argument><expr><name>dataSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><name>row</name></expr>;</return>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>sstable</name>.<name>markSuspect</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name><name>dfile</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>()</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call> + "(" + "finishedAt:" + <name>finishedAt</name> + ")"</expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>protected</specifier> class <name>FilteredKeyScanningIterator</name> <super><implements>implements <name><name>Iterator</name><argument_list>&lt;<argument><name>OnDiskAtomIterator</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>protected</specifier> <name>DecoratedKey</name></type> <name>nextKey</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>protected</specifier> <name>RowIndexEntry</name></type> <name>nextEntry</name></decl>;</decl_stmt>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>row</name> == null</expr>)</condition><then>
+                <return>return <expr>!<call><name><name>ifile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+            <return>return <expr><name>nextKey</name> != null</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>OnDiskAtomIterator</name></type> <name>next</name><parameter_list>()</parameter_list>
+        <block>{
+            <try>try
+            <block>{
+                <decl_stmt><decl><type><specifier>final</specifier> <name>DecoratedKey</name></type> <name>currentKey</name></decl>;</decl_stmt>
+                <decl_stmt><decl><type><specifier>final</specifier> <name>RowIndexEntry</name></type> <name>currentEntry</name></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><name>row</name> == null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>currentKey</name> = <call><name><name>sstable</name>.<name>decodeKey</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>readWithShortLength</name></name><argument_list>(<argument><expr><name>ifile</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>currentEntry</name> = <call><name><name>RowIndexEntry</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>ifile</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><name>currentKey</name> = <name>nextKey</name></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>currentEntry</name> = <name>nextEntry</name></expr>;</expr_stmt>
+                }</block></else></if>
+
+                <if>if <condition>(<expr><call><name><name>ifile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>nextKey</name> = null</expr>;</expr_stmt>
+                    <expr_stmt><expr><name>nextEntry</name> = null</expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><name>nextKey</name> = <call><name><name>sstable</name>.<name>decodeKey</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>readWithShortLength</name></name><argument_list>(<argument><expr><name>ifile</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>nextEntry</name> = <call><name><name>RowIndexEntry</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>ifile</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+
+                <assert>assert <expr>!<call><name><name>dfile</name>.<name>isEOF</name></name><argument_list>()</argument_list></call></expr>;</assert>
+                <return>return <expr><name>row</name> = new <call><name>LazyColumnIterator</name><argument_list>(<argument><expr><name>currentKey</name></expr></argument>, <argument><expr>new <class><super><name>IColumnIteratorFactory</name></super><argument_list>()</argument_list>
+                <block>{
+                    <function><type><specifier>public</specifier> <name>OnDiskAtomIterator</name></type> <name>create</name><parameter_list>()</parameter_list>
+                    <block>{
+                        <return>return <expr><call><name><name>filter</name>.<name>getSSTableColumnIterator</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>dfile</name></expr></argument>, <argument><expr><name>currentKey</name></expr></argument>, <argument><expr><name>currentEntry</name></expr></argument>)</argument_list></call></expr>;</return>
+                    }</block></function>
+                }</block></class></expr></argument>)</argument_list></call></expr>;</return>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>sstable</name>.<name>markSuspect</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name><name>ifile</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>()</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+    }</block></class>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call> + "(" +
+               "dfile=" + <name>dfile</name> +
+               " ifile=" + <name>ifile</name> +
+               " sstable=" + <name>sstable</name> +
+               " exhausted=" + <name>exhausted</name> +
+               ")"</expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

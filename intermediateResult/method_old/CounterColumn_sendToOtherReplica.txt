@@ -1,0 +1,22 @@
+private static void sendToOtherReplica(DecoratedKey key, ColumnFamily cf) throws UnavailableException, TimeoutException, IOException
+    {
+        RowMutation rm = new RowMutation(cf.metadata().ksName, key.key);
+        rm.add(cf);
+
+        final InetAddress local = FBUtilities.getBroadcastAddress();
+        String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(local);
+
+        StorageProxy.performWrite(rm, ConsistencyLevel.ANY, localDataCenter, new StorageProxy.WritePerformer()
+        {
+            public void apply(IMutation mutation, Collection<InetAddress> targets, IWriteResponseHandler responseHandler, String localDataCenter, ConsistencyLevel consistency_level) throws IOException, TimeoutException
+            {
+                // We should only send to the remote replica, not the local one
+                targets.remove(local);
+                // Fake local response to be a good lad but we won't wait on the responseHandler
+                responseHandler.response(null);
+                StorageProxy.sendToHintedEndpoints((RowMutation) mutation, targets, responseHandler, localDataCenter, consistency_level);
+            }
+        }, null);
+
+        // we don't wait for answers
+    }

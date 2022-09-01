@@ -1,0 +1,26 @@
+public List<ICompactionScanner> getScanners(Collection<SSTableReader> sstables, Range<Token> range) throws IOException
+    {
+        Multimap<Integer, SSTableReader> byLevel = ArrayListMultimap.create();
+        for (SSTableReader sstable : sstables)
+            byLevel.get(manifest.levelOf(sstable)).add(sstable);
+
+        List<ICompactionScanner> scanners = new ArrayList<ICompactionScanner>(sstables.size());
+        for (Integer level : byLevel.keySet())
+        {
+            // level can be -1 when sstables are added to DataTracker but not to LeveledManifest
+            // since we don't know which level those sstable belong yet, we simply do the same as L0 sstables.
+            if (level <= 0)
+            {
+                // L0 makes no guarantees about overlapping-ness.  Just create a direct scanner for each
+                for (SSTableReader sstable : byLevel.get(level))
+                    scanners.add(sstable.getDirectScanner(range));
+            }
+            else
+            {
+                // Create a LeveledScanner that only opens one sstable at a time, in sorted order
+                scanners.add(new LeveledScanner(byLevel.get(level), range));
+            }
+        }
+
+        return scanners;
+    }

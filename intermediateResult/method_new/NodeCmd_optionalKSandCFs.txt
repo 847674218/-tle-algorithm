@@ -1,0 +1,51 @@
+private static void optionalKSandCFs(NodeCommand nc, ToolCommandLine cmd, String[] cmdArgs, NodeProbe probe) throws InterruptedException, IOException
+    {
+        // if there is one additional arg, it's the keyspace; more are columnfamilies
+        List<String> keyspaces = cmdArgs.length == 0 ? probe.getKeyspaces() : Arrays.asList(cmdArgs[0]);
+        for (String keyspace : keyspaces)
+        {
+            if (!probe.getKeyspaces().contains(keyspace))
+            {
+                System.err.println("Keyspace [" + keyspace + "] does not exist.");
+                System.exit(1);
+            }
+        }
+
+        // second loop so we're less likely to die halfway through due to invalid keyspace
+        for (String keyspace : keyspaces)
+        {
+            String[] columnFamilies = cmdArgs.length <= 1 ? new String[0] : Arrays.copyOfRange(cmdArgs, 1, cmdArgs.length);
+            switch (nc)
+            {
+                case REPAIR  :
+                    boolean snapshot = cmd.hasOption(SNAPSHOT_REPAIR_OPT.left);
+                    boolean localDC = cmd.hasOption(LOCAL_DC_REPAIR_OPT.left);
+                    boolean primaryRange = cmd.hasOption(PRIMARY_RANGE_OPT.left);
+                    probe.forceRepairAsync(System.out, keyspace, snapshot, localDC, primaryRange, columnFamilies);
+                    break;
+                case FLUSH   :
+                    try { probe.forceTableFlush(keyspace, columnFamilies); }
+                    catch (ExecutionException ee) { err(ee, "Error occured during flushing"); }
+                    break;
+                case COMPACT :
+                    try { probe.forceTableCompaction(keyspace, columnFamilies); }
+                    catch (ExecutionException ee) { err(ee, "Error occured during compaction"); }
+                    break;
+                case CLEANUP :
+                    if (keyspace.equals(Table.SYSTEM_KS)) { break; } // Skip cleanup on system cfs.
+                    try { probe.forceTableCleanup(keyspace, columnFamilies); }
+                    catch (ExecutionException ee) { err(ee, "Error occured during cleanup"); }
+                    break;
+                case SCRUB :
+                    try { probe.scrub(keyspace, columnFamilies); }
+                    catch (ExecutionException ee) { err(ee, "Error occured while scrubbing keyspace " + keyspace); }
+                    break;
+                case UPGRADESSTABLES :
+                    try { probe.upgradeSSTables(keyspace, columnFamilies); }
+                    catch (ExecutionException ee) { err(ee, "Error occured while upgrading the sstables for keyspace " + keyspace); }
+                    break;
+                default:
+                    throw new RuntimeException("Unreachable code.");
+            }
+        }
+    }

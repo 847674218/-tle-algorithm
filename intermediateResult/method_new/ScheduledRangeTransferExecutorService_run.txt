@@ -1,0 +1,36 @@
+public void run()
+    {
+        UntypedResultSet res = processInternal("SELECT * FROM system." + SystemTable.RANGE_XFERS_CF);
+
+        if (res.size() < 1)
+        {
+            LOG.debug("No queued ranges to transfer");
+            return;
+        }
+
+        if (!isReady())
+            return;
+
+        UntypedResultSet.Row row = res.iterator().next();
+
+        Date requestedAt = row.getTimestamp("requested_at");
+        ByteBuffer tokenBytes = row.getBytes("token_bytes");
+        Token token = StorageService.getPartitioner().getTokenFactory().fromByteArray(tokenBytes);
+
+        LOG.info("Initiating transfer of {} (scheduled at {})", token, requestedAt.toString());
+        try
+        {
+            StorageService.instance.relocateTokens(Collections.singleton(token));
+        }
+        catch (Exception e)
+        {
+            LOG.error("Error removing {}: {}", token, e);
+        }
+        finally
+        {
+            LOG.debug("Removing queued entry for transfer of {}", token);
+            processInternal(String.format("DELETE FROM system.%s WHERE token_bytes = '%s'",
+                                          SystemTable.RANGE_XFERS_CF,
+                                          ByteBufferUtil.bytesToHex(tokenBytes)));
+        }
+    }

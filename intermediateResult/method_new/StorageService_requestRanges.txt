@@ -1,0 +1,47 @@
+private CountDownLatch requestRanges(final Map<String, Multimap<InetAddress, Range<Token>>> ranges)
+    {
+        final CountDownLatch latch = new CountDownLatch(ranges.keySet().size());
+        for (Map.Entry<String, Multimap<InetAddress, Range<Token>>> entry : ranges.entrySet())
+        {
+            Multimap<InetAddress, Range<Token>> endpointWithRanges = entry.getValue();
+
+            if (endpointWithRanges.isEmpty())
+            {
+                latch.countDown();
+                continue;
+            }
+
+            final String table = entry.getKey();
+            final Set<InetAddress> pending = new HashSet<InetAddress>(endpointWithRanges.keySet());
+
+            // Send messages to respective folks to stream data over to me
+            for (final InetAddress source: endpointWithRanges.keySet())
+            {
+                Collection<Range<Token>> toFetch = endpointWithRanges.get(source);
+
+                final IStreamCallback callback = new IStreamCallback()
+                {
+                    public void onSuccess()
+                    {
+                        pending.remove(source);
+
+                        if (pending.isEmpty())
+                            latch.countDown();
+                    }
+
+                    public void onFailure()
+                    {
+                        logger.warn("Streaming from " + source + " failed");
+                        onSuccess(); // calling onSuccess for latch countdown
+                    }
+                };
+
+                if (logger.isDebugEnabled())
+                    logger.debug("Requesting from " + source + " ranges " + StringUtils.join(toFetch, ", "));
+
+                // sending actual request
+                StreamIn.requestRanges(source, table, toFetch, callback, OperationType.BOOTSTRAP);
+            }
+        }
+        return latch;
+    }

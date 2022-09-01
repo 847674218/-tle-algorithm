@@ -1,0 +1,44 @@
+public static void checkHealth() throws ConfigurationException, IOException
+    {
+        Table table = null;
+        try
+        {
+            table = Table.open(Table.SYSTEM_TABLE);
+        }
+        catch (AssertionError err)
+        {
+            // this happens when a user switches from OPP to RP.
+            ConfigurationException ex = new ConfigurationException("Could not read system table!");
+            ex.initCause(err);
+            throw ex;
+        }
+
+        SortedSet<ByteBuffer> cols = new TreeSet<ByteBuffer>(BytesType.instance);
+        cols.add(CLUSTERNAME);
+        QueryFilter filter = QueryFilter.getNamesFilter(decorate(LOCATION_KEY), new QueryPath(STATUS_CF), cols);
+        ColumnFamilyStore cfs = table.getColumnFamilyStore(STATUS_CF);
+        ColumnFamily cf = cfs.getColumnFamily(filter);
+
+        if (cf == null)
+        {
+            // this is a brand new node
+            if (!cfs.getSSTables().isEmpty())
+                throw new ConfigurationException("Found system table files, but they couldn't be loaded!");
+
+            // no system files.  this is a new node.
+            RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, LOCATION_KEY);
+            cf = ColumnFamily.create(Table.SYSTEM_TABLE, SystemTable.STATUS_CF);
+            cf.addColumn(new Column(CLUSTERNAME, ByteBufferUtil.bytes(DatabaseDescriptor.getClusterName()), FBUtilities.timestampMicros()));
+            rm.add(cf);
+            rm.apply();
+
+            return;
+        }
+
+
+        IColumn clusterCol = cf.getColumn(CLUSTERNAME);
+        assert clusterCol != null;
+        String savedClusterName = ByteBufferUtil.string(clusterCol.value());
+        if (!DatabaseDescriptor.getClusterName().equals(savedClusterName))
+            throw new ConfigurationException("Saved cluster name " + savedClusterName + " != configured name " + DatabaseDescriptor.getClusterName());
+    }

@@ -1,0 +1,74 @@
+private void executeUseKeySpace(Tree statement) throws TException
+    {
+        if (!CliMain.isConnected())
+            return;
+
+        int childCount = statement.getChildCount();
+        String keySpaceName, username = null, password = null;
+
+        // Get keyspace name
+        keySpaceName = CliUtils.unescapeSQLString(statement.getChild(0).getText());
+
+        if (childCount == 3)
+        {
+            username  = statement.getChild(1).getText();
+            password  = statement.getChild(2).getText();
+        }
+
+        if (keySpaceName == null)
+        {
+            sessionState.out.println("Keyspace argument required");
+            return;
+        }
+
+        try
+        {
+        	AuthenticationRequest authRequest;
+        	Map<String, String> credentials = new HashMap<String, String>();
+
+            keySpaceName = CliCompiler.getKeySpace(keySpaceName, thriftClient.describe_keyspaces());
+
+            thriftClient.set_keyspace(keySpaceName);
+
+        	if (username != null && password != null)
+        	{
+        	    /* remove quotes */
+        	    password = password.replace("\'", "");
+        	    credentials.put(IAuthenticator.USERNAME_KEY, username);
+                credentials.put(IAuthenticator.PASSWORD_KEY, password);
+                authRequest = new AuthenticationRequest(credentials);
+                thriftClient.login(authRequest);
+        	}
+
+            keySpace = keySpaceName;
+            this.username = username != null ? username : "default";
+
+            keyspacesMap.remove(keySpace);
+            CliMain.updateCompletor(CliUtils.getCfNamesByKeySpace(getKSMetaData(keySpace)));
+            sessionState.out.println("Authenticated to keyspace: " + keySpace);
+        }
+        catch (AuthenticationException e)
+        {
+            sessionState.err.println("Exception during authentication to the cassandra node: " +
+            		                 "verify keyspace exists, and you are using correct credentials.");
+        }
+        catch (AuthorizationException e)
+        {
+            sessionState.err.println("You are not authorized to use keyspace: " + keySpaceName);
+        }
+        catch (InvalidRequestException e)
+        {
+            sessionState.err.println(keySpaceName + " does not exist.");
+        }
+        catch (NotFoundException e)
+        {
+            sessionState.err.println(keySpaceName + " does not exist.");
+        }
+        catch (TException e)
+        {
+            if (sessionState.debug)
+                e.printStackTrace(sessionState.err);
+
+            sessionState.err.println("Login failure. Did you specify 'keyspace', 'username' and 'password'?");
+        }
+    }

@@ -1,0 +1,27 @@
+public ReplayPosition write(RowMutation rowMutation) throws IOException
+    {
+        assert !closed;
+        ReplayPosition repPos = getContext();
+        markDirty(rowMutation, repPos);
+
+        Checksum checksum = new PureJavaCrc32();
+        byte[] serializedRow = rowMutation.getSerializedBuffer(MessagingService.version_);
+
+        checksum.update(serializedRow.length);
+        buffer.putInt(serializedRow.length);
+        buffer.putLong(checksum.getValue());
+
+        buffer.put(serializedRow);
+        checksum.update(serializedRow, 0, serializedRow.length);
+        buffer.putLong(checksum.getValue());
+
+        if (buffer.remaining() >= 4)
+        {
+            // writes end of segment marker and rewinds back to position where it starts
+            buffer.putInt(CommitLog.END_OF_SEGMENT_MARKER);
+            buffer.position(buffer.position() - CommitLog.END_OF_SEGMENT_MARKER_SIZE);
+        }
+
+        needsSync = true;
+        return repPos;
+    }

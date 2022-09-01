@@ -1,0 +1,26 @@
+public long write(DataOutput out) throws IOException
+    {
+        assert !closed;
+
+        DataOutputBuffer clockOut = new DataOutputBuffer();
+        DeletionInfo.serializer().serializeForSSTable(emptyColumnFamily.deletionInfo(), clockOut);
+
+        long dataSize = clockOut.getLength() + columnSerializedSize;
+        if (logger.isDebugEnabled())
+            logger.debug(String.format("clock / column sizes are %s / %s", clockOut.getLength(), columnSerializedSize));
+        assert dataSize > 0;
+        out.writeLong(dataSize);
+        out.write(clockOut.getData(), 0, clockOut.getLength());
+        out.writeInt(indexBuilder.writtenAtomCount());
+
+        // We rebuild the column index uselessly, but we need to do that because range tombstone markers depend
+        // on indexing. If we're able to remove the two-phase compaction, we'll avoid that.
+        indexAndWrite(out);
+
+        long secondPassColumnSize = reducer == null ? 0 : reducer.serializedSize;
+        assert secondPassColumnSize == columnSerializedSize
+               : "originally calculated column size of " + columnSerializedSize + " but now it is " + secondPassColumnSize;
+
+        close();
+        return dataSize;
+    }

@@ -1,0 +1,41 @@
+public void updateNormalTokens(Multimap<InetAddress, Token> endpointTokens)
+    {
+        if (endpointTokens.isEmpty())
+            return;
+
+        lock.writeLock().lock();
+        try
+        {
+            boolean shouldSortTokens = false;
+            for (InetAddress endpoint : endpointTokens.keySet())
+            {
+                Collection<Token> tokens = endpointTokens.get(endpoint);
+
+                assert tokens != null && !tokens.isEmpty();
+
+                bootstrapTokens.removeValue(endpoint);
+                tokenToEndpointMap.removeValue(endpoint);
+                topology.addEndpoint(endpoint);
+                leavingEndpoints.remove(endpoint);
+                removeFromMoving(endpoint); // also removing this endpoint from moving
+
+                for (Token token : tokens)
+                {
+                    InetAddress prev = tokenToEndpointMap.put(token, endpoint);
+                    if (!endpoint.equals(prev))
+                    {
+                        if (prev != null)
+                            logger.warn("Token " + token + " changing ownership from " + prev + " to " + endpoint);
+                        shouldSortTokens = true;
+                    }
+                }
+            }
+
+            if (shouldSortTokens)
+                sortedTokens = sortTokens();
+        }
+        finally
+        {
+            lock.writeLock().unlock();
+        }
+    }

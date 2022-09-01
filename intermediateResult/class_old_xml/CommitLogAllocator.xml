@@ -1,0 +1,366 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\commitlog\CommitLogAllocator.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>commitlog</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOError</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collection</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>BlockingQueue</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>LinkedBlockingQueue</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentLinkedQueue</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicLong</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>WrappedRunnable</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Performs the pre-allocation of commit log segments in a background thread. All the
+ * public methods are thread safe.
+ */</comment>
+<class><specifier>public</specifier> class <name>CommitLogAllocator</name>
+<block>{
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CommitLogAllocator</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/** The (theoretical) max milliseconds between loop runs to perform janitorial tasks */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>int</name></type> <name>TICK_CYCLE_TIME</name> <init>= <expr>100</expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/** Segments that are ready to be used */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>BlockingQueue</name><argument_list>&lt;<argument><name>CommitLogSegment</name></argument>&gt;</argument_list></name></type> <name>availableSegments</name> <init>= <expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>CommitLogSegment</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/** Allocations to be run by the thread */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>BlockingQueue</name><argument_list>&lt;<argument><name>Runnable</name></argument>&gt;</argument_list></name></type> <name>queue</name> <init>= <expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>Runnable</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/** Active segments, containing unflushed data */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentLinkedQueue</name><argument_list>&lt;<argument><name>CommitLogSegment</name></argument>&gt;</argument_list></name></type> <name>activeSegments</name> <init>= <expr>new <call><name><name>ConcurrentLinkedQueue</name><argument_list>&lt;<argument><name>CommitLogSegment</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Tracks commitlog size, in multiples of the segment size.  We need to do this so we can "promise" size
+     * adjustments ahead of actually adding/freeing segments on disk, so that the "evict oldest segment" logic
+     * can see the effect of recycling segments immediately (even though they're really happening asynchronously
+     * on the allocator thread, which will take a ms or two).
+     */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>AtomicLong</name></type> <name>size</name> <init>= <expr>new <call><name>AtomicLong</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * New segment creation is initially disabled because we'll typically get some "free" segments
+     * recycled after log replay.
+     */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>boolean</name></type> <name>createReserveSegments</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Thread</name></type> <name>allocationThread</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>boolean</name></type> <name>run</name> <init>= <expr>true</expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CommitLogAllocator</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// The run loop for the allocation thread</comment>
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>WrappedRunnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+            <block>{
+                <while>while <condition>(<expr><name>run</name></expr>)</condition>
+                <block>{
+                    <decl_stmt><decl><type><name>Runnable</name></type> <name>r</name> <init>= <expr><call><name><name>queue</name>.<name>poll</name></name><argument_list>(<argument><expr><name>TICK_CYCLE_TIME</name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <if>if <condition>(<expr><name>r</name> != null</expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>r</name>.<name>run</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    }</block></then>
+                    <else>else
+                    <block>{
+                        <comment type="line">// no job, so we're clear to check to see if we're out of segments</comment>
+                        <comment type="line">// and ready a new one if needed. has the effect of ensuring there's</comment>
+                        <comment type="line">// almost always a segment available when it's needed.</comment>
+                        <if>if <condition>(<expr><call><name><name>availableSegments</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> &amp;&amp; (<call><name><name>activeSegments</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> || <name>createReserveSegments</name>)</expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"No segments in reserve; creating a fresh one"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name>createFreshSegment</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        }</block></then></if>
+                    }</block></else></if>
+                }</block></while>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><name>allocationThread</name> = new <call><name>Thread</name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr>"COMMIT-LOG-ALLOCATOR"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>allocationThread</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Fetches an empty segment file.
+     *
+     * @return the next writable segment
+     */</comment>
+    <function><type><specifier>public</specifier> <name>CommitLogSegment</name></type> <name>fetchSegment</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>CommitLogSegment</name></type> <name>next</name></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>next</name> = <call><name><name>availableSegments</name>.<name>take</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <assert>assert <expr>!<call><name><name>activeSegments</name>.<name>contains</name></name><argument_list>(<argument><expr><name>next</name></expr></argument>)</argument_list></call></expr>;</assert>
+        <expr_stmt><expr><call><name><name>activeSegments</name>.<name>add</name></name><argument_list>(<argument><expr><name>next</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name>isCapExceeded</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name>flushOldestTables</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <return>return <expr><name>next</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Indicates that a segment is no longer in use and that it should be recycled.
+     *
+     * @param segment segment that is no longer in use
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>recycleSegment</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>CommitLogSegment</name></type> <name>segment</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>activeSegments</name>.<name>remove</name></name><argument_list>(<argument><expr><name>segment</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr>!<call><name><name>CommitLog</name>.<name>instance</name>.<name>archiver</name>.<name>maybeWaitForArchiving</name></name><argument_list>(<argument><expr><call><name><name>segment</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <comment type="line">// if archiving (command) was not successful then leave the file alone. don't delete or recycle.</comment>
+            <expr_stmt><expr><call><name>discardSegment</name><argument_list>(<argument><expr><name>segment</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+        <if>if <condition>(<expr><call><name>isCapExceeded</name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>discardSegment</name><argument_list>(<argument><expr><name>segment</name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Recycling {}"</expr></argument>, <argument><expr><name>segment</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>queue</name>.<name>add</name></name><argument_list>(<argument><expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>CommitLogSegment</name></type> <name>recycled</name> <init>= <expr><call><name><name>segment</name>.<name>recycle</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name>internalAddReadySegment</name><argument_list>(<argument><expr><name>recycled</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Differs from the above because it can work on any file instead of just existing
+     * commit log segments managed by this allocator.
+     *
+     * @param file segment file that is no longer in use.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>recycleSegment</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>File</name></type> <name>file</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// check against SEGMENT_SIZE avoids recycling odd-sized or empty segments from old C* versions and unit tests</comment>
+        <if>if <condition>(<expr><call><name>isCapExceeded</name><argument_list>()</argument_list></call> || <call><name><name>file</name>.<name>length</name></name><argument_list>()</argument_list></call> != <call><name><name>DatabaseDescriptor</name>.<name>getCommitLogSegmentSize</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <comment type="line">// (don't decrease managed size, since this was never a "live" segment)</comment>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"(Unopened) segment {} is no longer needed and will be deleted now"</expr></argument>, <argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>FileUtils</name>.<name>deleteWithConfirm</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+            <return>return;</return>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Recycling {}"</expr></argument>, <argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// this wasn't previously a live segment, so add it to the managed size when we make it live</comment>
+        <expr_stmt><expr><call><name><name>size</name>.<name>addAndGet</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getCommitLogSegmentSize</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>queue</name>.<name>add</name></name><argument_list>(<argument><expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>CommitLogSegment</name></type> <name>segment</name> <init>= <expr>new <call><name>CommitLogSegment</name><argument_list>(<argument><expr><call><name><name>file</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name>internalAddReadySegment</name><argument_list>(<argument><expr><name>segment</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Indicates that a segment file should be deleted.
+     *
+     * @param segment segment to be discarded
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>discardSegment</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>CommitLogSegment</name></type> <name>segment</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>boolean</name></type> <name>deleteFile</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Segment {} is no longer active and will be deleted {}"</expr></argument>, <argument><expr><name>segment</name></expr></argument>, <argument><expr><name>deleteFile</name> ? "now" : "by the archive script"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>size</name>.<name>addAndGet</name></name><argument_list>(<argument><expr>-<call><name><name>DatabaseDescriptor</name>.<name>getCommitLogSegmentSize</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>queue</name>.<name>add</name></name><argument_list>(<argument><expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>segment</name>.<name>discard</name></name><argument_list>(<argument><expr><name>deleteFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the space (in bytes) used by all segment files.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>bytesUsed</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>size</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @param name the filename to check
+     * @return true if file is managed by this allocator.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>manages</name><parameter_list>(<param><decl><type><name>String</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>CommitLogSegment</name></type> <name>segment</name> <range>: <expr><call><name><name>Iterables</name>.<name>concat</name></name><argument_list>(<argument><expr><name>activeSegments</name></expr></argument>, <argument><expr><name>availableSegments</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+            <if>if <condition>(<expr><call><name><name>segment</name>.<name>getName</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr>true</expr>;</return></then></if></for>
+
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Creates and readies a brand new segment.
+     *
+     * @return the newly minted segment
+     */</comment>
+    <function><type><specifier>private</specifier> <name>CommitLogSegment</name></type> <name>createFreshSegment</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>size</name>.<name>addAndGet</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getCommitLogSegmentSize</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name>internalAddReadySegment</name><argument_list>(<argument><expr><call><name><name>CommitLogSegment</name>.<name>freshSegment</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Adds a segment to our internal tracking list and makes it ready for consumption.
+     *
+     * @param   segment the segment to add
+     * @return  the newly added segment
+     */</comment>
+    <function><type><specifier>private</specifier> <name>CommitLogSegment</name></type> <name>internalAddReadySegment</name><parameter_list>(<param><decl><type><name>CommitLogSegment</name></type> <name>segment</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr>!<call><name><name>activeSegments</name>.<name>contains</name></name><argument_list>(<argument><expr><name>segment</name></expr></argument>)</argument_list></call></expr>;</assert>
+        <assert>assert <expr>!<call><name><name>availableSegments</name>.<name>contains</name></name><argument_list>(<argument><expr><name>segment</name></expr></argument>)</argument_list></call></expr>;</assert>
+        <expr_stmt><expr><call><name><name>availableSegments</name>.<name>add</name></name><argument_list>(<argument><expr><name>segment</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>segment</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Check to see if the speculative current size exceeds the cap.
+     *
+     * @return true if cap is exceeded
+     */</comment>
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>isCapExceeded</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>currentSize</name> <init>= <expr><call><name><name>size</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Total active commitlog segment space used is {}"</expr></argument>, <argument><expr><name>currentSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>currentSize</name> &gt; <call><name><name>DatabaseDescriptor</name>.<name>getTotalCommitlogSpaceInMB</name></name><argument_list>()</argument_list></call> * 1024 * 1024</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Throws a flag that enables the behavior of keeping at least one spare segment
+     * available at all times.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>enableReserveSegmentCreation</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>createReserveSegments</name> = true</expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Force a flush on all dirty CFs represented in the oldest commitlog segment
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>flushOldestTables</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>CommitLogSegment</name></type> <name>oldestSegment</name> <init>= <expr><call><name><name>activeSegments</name>.<name>peek</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>oldestSegment</name> != null</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>Integer</name></type> <name>dirtyCFId</name> <range>: <expr><call><name><name>oldestSegment</name>.<name>getDirtyCFIDs</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>keypace</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCF</name></name><argument_list>(<argument><expr><name>dirtyCFId</name></expr></argument>)</argument_list></call>.<name>left</name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>keypace</name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name>dirtyCFId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <comment type="line">// flush shouldn't run on the commitlog executor, since it acquires Table.switchLock,</comment>
+                <comment type="line">// which may already be held by a thread waiting for the CL executor (via getContext),</comment>
+                <comment type="line">// causing deadlock</comment>
+                <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+                <block>{
+                    <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>cfs</name>.<name>forceFlush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    }</block></function>
+                }</block></class></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>StorageService</name>.<name>optionalTasks</name>.<name>execute</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Resets all the segments, for testing purposes. DO NOT USE THIS OUTSIDE OF TESTS.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>resetUnsafe</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Closing and clearing existing commit log segments..."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <while>while <condition>(<expr>!<call><name><name>queue</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <expr_stmt><expr><call><name><name>Thread</name>.<name>yield</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></while>
+
+        <for>for (<init><decl><type><name>CommitLogSegment</name></type> <name>segment</name> <range>: <expr><call><name><name>Iterables</name>.<name>concat</name></name><argument_list>(<argument><expr><name>activeSegments</name></expr></argument>, <argument><expr><name>availableSegments</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>segment</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+
+        <expr_stmt><expr><call><name><name>activeSegments</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>availableSegments</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Initiates the shutdown process for the allocator thread.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>shutdown</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>run</name> = false</expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns when the allocator thread terminates.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>awaitTermination</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>allocationThread</name>.<name>join</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return a read-only collection of the active commit log segments
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>CommitLogSegment</name></argument>&gt;</argument_list></name></type> <name>getActiveSegments</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>Collections</name>.<name>unmodifiableCollection</name></name><argument_list>(<argument><expr><name>activeSegments</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+
+</unit>

@@ -1,0 +1,53 @@
+static CFMetaData fromSchemaNoColumns(UntypedResultSet.Row result)
+    {
+        try
+        {
+            CFMetaData cfm = new CFMetaData(result.getString("keyspace_name"),
+                                            result.getString("columnfamily_name"),
+                                            ColumnFamilyType.valueOf(result.getString("type")),
+                                            TypeParser.parse(result.getString("comparator")),
+                                            result.has("subcomparator") ? TypeParser.parse(result.getString("subcomparator")) : null);
+
+            if (result.has("id"))// try to identify if ColumnFamily Id is old style (before C* 1.2) and add old -> new mapping if so
+                Schema.instance.addOldCfIdMapping(result.getInt("id"), cfm.cfId);
+
+            cfm.readRepairChance(result.getDouble("read_repair_chance"));
+            cfm.dcLocalReadRepairChance(result.getDouble("local_read_repair_chance"));
+            cfm.replicateOnWrite(result.getBoolean("replicate_on_write"));
+            cfm.gcGraceSeconds(result.getInt("gc_grace_seconds"));
+            cfm.defaultValidator(TypeParser.parse(result.getString("default_validator")));
+            cfm.keyValidator(TypeParser.parse(result.getString("key_validator")));
+            cfm.minCompactionThreshold(result.getInt("min_compaction_threshold"));
+            cfm.maxCompactionThreshold(result.getInt("max_compaction_threshold"));
+            if (result.has("comment"))
+                cfm.comment(result.getString("comment"));
+            // We need support the old key_alias for compatibility sake
+            if (result.has("key_aliases"))
+            {
+                cfm.keyAliases(aliasesFromStrings(fromJsonList(result.getString("key_aliases"))));
+            }
+            else if (result.has("key_alias"))
+            {
+                cfm.keyAliases(Collections.<ByteBuffer>singletonList(result.getBytes("key_alias")));
+            }
+            if (result.has("bloom_filter_fp_chance"))
+                cfm.bloomFilterFpChance(result.getDouble("bloom_filter_fp_chance"));
+            cfm.caching(Caching.valueOf(result.getString("caching")));
+            cfm.compactionStrategyClass(createCompactionStrategy(result.getString("compaction_strategy_class")));
+            cfm.compressionParameters(CompressionParameters.create(fromJsonMap(result.getString("compression_parameters"))));
+            cfm.columnAliases(aliasesFromStrings(fromJsonList(result.getString("column_aliases"))));
+            if (result.has("value_alias"))
+                cfm.valueAlias(result.getBytes("value_alias"));
+            cfm.compactionStrategyOptions(fromJsonMap(result.getString("compaction_strategy_options")));
+
+            return cfm;
+        }
+        catch (SyntaxException e)
+        {
+            throw new RuntimeException(e);
+        }
+        catch (ConfigurationException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }

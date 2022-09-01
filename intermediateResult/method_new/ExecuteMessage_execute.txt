@@ -1,0 +1,39 @@
+public Message.Response execute(QueryState state)
+    {
+        try
+        {
+            CQLStatement statement = QueryProcessor.getPrepared(statementId);
+
+            if (statement == null)
+                throw new PreparedQueryNotFoundException(statementId);
+
+            UUID tracingId = null;
+            if (isTracingRequested())
+            {
+                tracingId = UUIDGen.getTimeUUID();
+                state.prepareTracingSession(tracingId);
+            }
+
+            if (state.traceNextQuery())
+            {
+                state.createTracingSession();
+                // TODO we don't have [typed] access to CQL bind variables here.  CASSANDRA-4560 is open to add support.
+                Tracing.instance().begin("Execute CQL3 prepared query", Collections.<String, String>emptyMap());
+            }
+
+            Message.Response response = QueryProcessor.processPrepared(statement, consistency, state, values);
+
+            if (tracingId != null)
+                response.setTracingId(tracingId);
+
+            return response;
+        }
+        catch (Exception e)
+        {
+            return ErrorMessage.fromException(e);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
+    }

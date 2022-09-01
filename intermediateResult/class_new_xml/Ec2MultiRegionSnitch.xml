@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\locator\Ec2MultiRegionSnitch.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>ApplicationState</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>EndpointState</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>Gossiper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>IEndpointStateChangeSubscriber</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>VersionedValue</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * 1) Snitch will automatically set the public IP by querying the AWS API
+ *
+ * 2) Snitch will set the private IP as a Gossip application state.
+ *
+ * 3) Snitch implements IESCS and will reset the connection if it is within the
+ * same region to communicate via private IP.
+ *
+ * Implements Ec2Snitch to inherit its functionality and extend it for
+ * Multi-Region.
+ *
+ * Operational: All the nodes in this cluster needs to be able to (modify the
+ * Security group settings in AWS) communicate via Public IP's.
+ */</comment>
+<class><specifier>public</specifier> class <name>Ec2MultiRegionSnitch</name> <super><extends>extends <name>Ec2Snitch</name></extends> <implements>implements <name>IEndpointStateChangeSubscriber</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>PUBLIC_IP_QUERY_URL</name> <init>= <expr>"http://169.254.169.254/latest/meta-data/public-ipv4"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>PRIVATE_IP_QUERY_URL</name> <init>= <expr>"http://169.254.169.254/latest/meta-data/local-ipv4"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>public_ip</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>private_ip</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>Ec2MultiRegionSnitch</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>public_ip</name> = <call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><call><name>awsApiCall</name><argument_list>(<argument><expr><name>PUBLIC_IP_QUERY_URL</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"EC2Snitch using publicIP as identifier: " + <name>public_ip</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>private_ip</name> = <call><name>awsApiCall</name><argument_list>(<argument><expr><name>PRIVATE_IP_QUERY_URL</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// use the Public IP to broadcast Address to other nodes.</comment>
+        <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>setBroadcastAddress</name></name><argument_list>(<argument><expr><name>public_ip</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onJoin</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>epState</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>epState</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>INTERNAL_IP</name></name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name>reConnect</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><call><name><name>epState</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>INTERNAL_IP</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onChange</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>ApplicationState</name></type> <name>state</name></decl></param>, <param><decl><type><name>VersionedValue</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>state</name> == <name><name>ApplicationState</name>.<name>INTERNAL_IP</name></name></expr>)</condition><then>
+            <expr_stmt><expr><call><name>reConnect</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onAlive</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>state</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>state</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>INTERNAL_IP</name></name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name>reConnect</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><call><name><name>state</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>INTERNAL_IP</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onDead</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>state</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// do nothing</comment>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onRestart</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>state</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// do nothing</comment>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>onRemove</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// do nothing.</comment>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>reConnect</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>VersionedValue</name></type> <name>versionedValue</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name>getDatacenter</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><call><name>getDatacenter</name><argument_list>(<argument><expr><name>public_ip</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if> <comment type="line">// do nothing return back...</comment>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>remoteIP</name> <init>= <expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name><name>versionedValue</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getConnectionPool</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>reset</name><argument_list>(<argument><expr><name>remoteIP</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Intiated reconnect to an Internal IP %s for the %s"</expr></argument>, <argument><expr><name>remoteIP</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block> <catch>catch <parameter_list>(<param><decl><type><name>UnknownHostException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Error in getting the IP address resolved: "</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>gossiperStarting</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>super</name>.<name>gossiperStarting</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>addLocalApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>INTERNAL_IP</name></name></expr></argument>, <argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>valueFactory</name>.<name>internalIP</name></name><argument_list>(<argument><expr><name>private_ip</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>register</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+}</block></class>
+</unit>

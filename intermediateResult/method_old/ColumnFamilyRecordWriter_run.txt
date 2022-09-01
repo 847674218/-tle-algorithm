@@ -1,0 +1,73 @@
+public void run()
+        {
+            outer:
+            while (run || !queue.isEmpty())
+            {
+                Pair<ByteBuffer, Mutation> mutation;
+                try
+                {
+                    mutation = queue.take();
+                }
+                catch (InterruptedException e)
+                {
+                    // re-check loop condition after interrupt
+                    continue;
+                }
+
+                Map<ByteBuffer, Map<String, List<Mutation>>> batch = new HashMap<ByteBuffer, Map<String, List<Mutation>>>();
+                while (mutation != null)
+                {
+                    Map<String, List<Mutation>> subBatch = batch.get(mutation.left);
+                    if (subBatch == null)
+                    {
+                        subBatch = Collections.singletonMap(columnFamily, (List<Mutation>) new ArrayList<Mutation>());
+                        batch.put(mutation.left, subBatch);
+                    }
+
+                    subBatch.get(columnFamily).add(mutation.right);
+                    if (batch.size() >= batchThreshold)
+                        break;
+
+                    mutation = queue.poll();
+                }
+
+                Iterator<InetAddress> iter = endpoints.iterator();
+                while (true)
+                {
+                    // send the mutation to the last-used endpoint.  first time through, this will NPE harmlessly.
+                    try
+                    {
+                        thriftClient.batch_mutate(batch, consistencyLevel);
+                        break;
+                    }
+                    catch (Exception e)
+                    {
+                        closeInternal();
+                        if (!iter.hasNext())
+                        {
+                            lastException = new IOException(e);
+                            break outer;
+                        }
+                    }
+
+                    // attempt to connect to a different endpoint
+                    try
+                    {
+                        InetAddress address = iter.next();
+                        thriftSocket = new TSocket(address.getHostName(), ConfigHelper.getOutputRpcPort(conf));
+                        thriftClient = ColumnFamilyOutputFormat.createAuthenticatedClient(thriftSocket, conf);
+                    }
+                    catch (Exception e)
+                    {
+                        closeInternal();
+                        // TException means something unexpected went wrong to that endpoint, so
+                        // we should try again to another.  Other exceptions (auth or invalid request) are fatal.
+                        if ((!(e instanceof TException)) || !iter.hasNext())
+                        {
+                            lastException = new IOException(e);
+                            break outer;
+                        }
+                    }
+                }
+            }
+        }

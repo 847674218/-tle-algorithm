@@ -1,0 +1,341 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\locator\DynamicEndpointSnitch.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentHashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>MBeanServer</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>ObjectName</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>yammer</name>.<name>metrics</name>.<name>stats</name>.<name>ExponentiallyDecayingSample</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * A dynamic snitch that sorts endpoints by latency with an adapted phi failure detector
+ */</comment>
+<class><specifier>public</specifier> class <name>DynamicEndpointSnitch</name> <super><extends>extends <name>AbstractEndpointSnitch</name></extends> <implements>implements <name>ILatencySubscriber</name>, <name>DynamicEndpointSnitchMBean</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>double</name></type> <name>ALPHA</name> <init>= <expr>0.75</expr></init></decl>;</decl_stmt> <comment type="line">// set to 0.75 to make EDS more biased to towards the newer values</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>WINDOW_SIZE</name> <init>= <expr>100</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>UPDATE_INTERVAL_IN_MS</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getDynamicUpdateInterval</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>RESET_INTERVAL_IN_MS</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getDynamicResetInterval</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>double</name></type> <name>BADNESS_THRESHOLD</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getDynamicBadnessThreshold</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>mbeanName</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>registered</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Double</name></argument>&gt;</argument_list></name></type> <name>scores</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Double</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>lastReceived</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>ExponentiallyDecayingSample</name></argument>&gt;</argument_list></name></type> <name>samples</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>ExponentiallyDecayingSample</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>IEndpointSnitch</name></type> <name>subsnitch</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>DynamicEndpointSnitch</name><parameter_list>(<param><decl><type><name>IEndpointSnitch</name></type> <name>snitch</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>snitch</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+    <constructor><specifier>public</specifier> <name>DynamicEndpointSnitch</name><parameter_list>(<param><decl><type><name>IEndpointSnitch</name></type> <name>snitch</name></decl></param>, <param><decl><type><name>String</name></type> <name>instance</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>mbeanName</name> = "org.apache.cassandra.db:type=DynamicEndpointSnitch"</expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>instance</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><name>mbeanName</name> += ",instance=" + <name>instance</name></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><name>subsnitch</name> = <name>snitch</name></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>update</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>updateScores</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>reset</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <comment type="line">// we do this so that a host considered bad has a chance to recover, otherwise would we never try</comment>
+                <comment type="line">// to read from it, which would cause its score to never change</comment>
+                <expr_stmt><expr><call><name>reset</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>scheduledTasks</name>.<name>scheduleWithFixedDelay</name></name><argument_list>(<argument><expr><name>update</name></expr></argument>, <argument><expr><name>UPDATE_INTERVAL_IN_MS</name></expr></argument>, <argument><expr><name>UPDATE_INTERVAL_IN_MS</name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>scheduledTasks</name>.<name>scheduleWithFixedDelay</name></name><argument_list>(<argument><expr><name>reset</name></expr></argument>, <argument><expr><name>RESET_INTERVAL_IN_MS</name></expr></argument>, <argument><expr><name>RESET_INTERVAL_IN_MS</name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>registerMBean</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+   }</block></constructor>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>registerMBean</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>MBeanServer</name></type> <name>mbs</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>mbs</name>.<name>registerMBean</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name>mbeanName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>unregisterMBean</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>MBeanServer</name></type> <name>mbs</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>mbs</name>.<name>unregisterMBean</name></name><argument_list>(<argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name>mbeanName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>gossiperStarting</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>subsnitch</name>.<name>gossiperStarting</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getRack</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>subsnitch</name>.<name>getRack</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getDatacenter</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>subsnitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getSortedListByProximity</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>InetAddress</name></type> <name>address</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>addresses</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>list</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>addresses</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>sortByProximity</name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>list</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>list</name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>sortByProximity</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>InetAddress</name></type> <name>address</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>addresses</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><call><name><name>address</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</assert> <comment type="line">// we only know about ourself</comment>
+        <if>if <condition>(<expr><name>BADNESS_THRESHOLD</name> == 0</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>sortByProximityWithScore</name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>addresses</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name>sortByProximityWithBadness</name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>addresses</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>sortByProximityWithScore</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>InetAddress</name></type> <name>address</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>addresses</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>super</name>.<name>sortByProximity</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>addresses</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>sortByProximityWithBadness</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>InetAddress</name></type> <name>address</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>addresses</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>addresses</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; 2</expr>)</condition><then>
+            <return>return;</return></then></if>
+        <expr_stmt><expr><call><name><name>subsnitch</name>.<name>sortByProximity</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>addresses</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>Double</name></type> <name>first</name> <init>= <expr><call><name><name>scores</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>addresses</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>first</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+        <for>for (<init><decl><type><name>InetAddress</name></type> <name>addr</name> <range>: <expr><name>addresses</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>Double</name></type> <name>next</name> <init>= <expr><call><name><name>scores</name>.<name>get</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>next</name> == null</expr>)</condition><then>
+                <return>return;</return></then></if>
+            <if>if <condition>(<expr>(<name>first</name> - <name>next</name>) / <name>first</name> &gt; <name>BADNESS_THRESHOLD</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name>sortByProximityWithScore</name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>addresses</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>compareEndpoints</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>target</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>a1</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>a2</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Double</name></type> <name>scored1</name> <init>= <expr><call><name><name>scores</name>.<name>get</name></name><argument_list>(<argument><expr><name>a1</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Double</name></type> <name>scored2</name> <init>= <expr><call><name><name>scores</name>.<name>get</name></name><argument_list>(<argument><expr><name>a2</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        
+        <if>if <condition>(<expr><name>scored1</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>scored1</name> = 0.0</expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>receiveTiming</name><argument_list>(<argument><expr><name>a1</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><name>scored2</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>scored2</name> = 0.0</expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>receiveTiming</name><argument_list>(<argument><expr><name>a2</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><call><name><name>scored1</name>.<name>equals</name></name><argument_list>(<argument><expr><name>scored2</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr><call><name><name>subsnitch</name>.<name>compareEndpoints</name></name><argument_list>(<argument><expr><name>target</name></expr></argument>, <argument><expr><name>a1</name></expr></argument>, <argument><expr><name>a2</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+        <if>if <condition>(<expr><name>scored1</name> &lt; <name>scored2</name></expr>)</condition><then>
+            <return>return <expr>-1</expr>;</return></then>
+        <else>else
+            <return>return <expr>1</expr>;</return></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>receiveTiming</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>host</name></decl></param>, <param><decl><type><name>long</name></type> <name>latency</name></decl></param>)</parameter_list> <comment type="line">// this is cheap</comment>
+    <block>{
+        <expr_stmt><expr><call><name><name>lastReceived</name>.<name>put</name></name><argument_list>(<argument><expr><name>host</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>ExponentiallyDecayingSample</name></type> <name>sample</name> <init>= <expr><call><name><name>samples</name>.<name>get</name></name><argument_list>(<argument><expr><name>host</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>sample</name> == null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>ExponentiallyDecayingSample</name></type> <name>maybeNewSample</name> <init>= <expr>new <call><name>ExponentiallyDecayingSample</name><argument_list>(<argument><expr><name>WINDOW_SIZE</name></expr></argument>, <argument><expr><name>ALPHA</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>sample</name> = <call><name><name>samples</name>.<name>putIfAbsent</name></name><argument_list>(<argument><expr><name>host</name></expr></argument>, <argument><expr><name>maybeNewSample</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>sample</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>sample</name> = <name>maybeNewSample</name></expr>;</expr_stmt></then></if>
+        }</block></then></if>
+        <expr_stmt><expr><call><name><name>sample</name>.<name>update</name></name><argument_list>(<argument><expr><name>latency</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>updateScores</name><parameter_list>()</parameter_list> <comment type="line">// this is expensive</comment>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isInitialized</name></name><argument_list>()</argument_list></call></expr>)</condition><then> 
+            <return>return;</return></then></if>
+        <if>if <condition>(<expr>!<name>registered</name></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>register</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>registered</name> = true</expr>;</expr_stmt>
+            }</block></then></if>
+
+        }</block></then></if>
+        <decl_stmt><decl><type><name>double</name></type> <name>maxLatency</name> <init>= <expr>1</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>maxPenalty</name> <init>= <expr>1</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>HashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>penalties</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>ExponentiallyDecayingSample</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>samples</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>double</name></type> <name>mean</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getSnapshot</name><argument_list>()</argument_list></call>.<call><name>getMedian</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>mean</name> &gt; <name>maxLatency</name></expr>)</condition><then>
+                <expr_stmt><expr><name>maxLatency</name> = <name>mean</name></expr>;</expr_stmt></then></if>
+            <decl_stmt><decl><type><name>long</name></type> <name>timePenalty</name> <init>= <expr><call><name><name>lastReceived</name>.<name>containsKey</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> ? <call><name><name>lastReceived</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> : <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>timePenalty</name> = <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>timePenalty</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>timePenalty</name> = <name>timePenalty</name> &gt; <name>UPDATE_INTERVAL_IN_MS</name> ? <name>UPDATE_INTERVAL_IN_MS</name> : <name>timePenalty</name></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>penalties</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>timePenalty</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>timePenalty</name> &gt; <name>maxPenalty</name></expr>)</condition><then>
+                <expr_stmt><expr><name>maxPenalty</name> = <name>timePenalty</name></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>ExponentiallyDecayingSample</name></argument>&gt;</argument_list></name></name></type> <name>entry</name><range>: <expr><call><name><name>samples</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>double</name></type> <name>score</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getSnapshot</name><argument_list>()</argument_list></call>.<call><name>getMedian</name><argument_list>()</argument_list></call> / <name>maxLatency</name></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>penalties</name>.<name>containsKey</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><name>score</name> += <call><name><name>penalties</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> / ((<name>double</name>) <name>maxPenalty</name>)</expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><name>score</name> += 1</expr>;</expr_stmt></else></if> <comment type="line">// maxPenalty / maxPenalty</comment>
+            <expr_stmt><expr><name>score</name> += <call><name><name>StorageService</name>.<name>instance</name>.<name>getSeverity</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>scores</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>score</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>            
+        }</block></for>
+    }</block></function>
+
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>reset</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ExponentiallyDecayingSample</name></type> <name>sample</name> <range>: <expr><call><name><name>samples</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>sample</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Double</name></argument>&gt;</argument_list></name></type> <name>getScores</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>scores</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getUpdateInterval</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>UPDATE_INTERVAL_IN_MS</name></expr>;</return>
+    }</block></function>
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getResetInterval</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>RESET_INTERVAL_IN_MS</name></expr>;</return>
+    }</block></function>
+    <function><type><specifier>public</specifier> <name>double</name></type> <name>getBadnessThreshold</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>BADNESS_THRESHOLD</name></expr>;</return>
+    }</block></function>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getSubsnitchClassName</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>subsnitch</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getName</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Double</name></argument>&gt;</argument_list></name></type> <name>dumpTimings</name><parameter_list>(<param><decl><type><name>String</name></type> <name>hostname</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnknownHostException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>host</name> <init>= <expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>hostname</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Double</name></argument>&gt;</argument_list></name></type> <name>timings</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Double</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ExponentiallyDecayingSample</name></type> <name>sample</name> <init>= <expr><call><name><name>samples</name>.<name>get</name></name><argument_list>(<argument><expr><name>host</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>sample</name> != null</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>double</name></type> <name>time</name><range>: <expr><call><name><name>sample</name>.<name>getSnapshot</name></name><argument_list>()</argument_list></call>.<call><name>getValues</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>timings</name>.<name>add</name></name><argument_list>(<argument><expr><name>time</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block></then></if>
+        <return>return <expr><name>timings</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setSeverity</name><parameter_list>(<param><decl><type><name>double</name></type> <name>severity</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>reportSeverity</name></name><argument_list>(<argument><expr><name>severity</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>double</name></type> <name>getSeverity</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>StorageService</name>.<name>instance</name>.<name>getSeverity</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isWorthMergingForRangeQuery</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>merged</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>l1</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>l2</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>subsnitch</name>.<name>isWorthMergingForRangeQuery</name></name><argument_list>(<argument><expr><name>merged</name></expr></argument>, <argument><expr><name>l1</name></expr></argument>, <argument><expr><name>l2</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <comment type="line">// Make sure we return the subsnitch decision (i.e true if we're here) if we lack too much scores</comment>
+        <decl_stmt><decl><type><name>double</name></type> <name>maxMerged</name> <init>= <expr><call><name>maxScore</name><argument_list>(<argument><expr><name>merged</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>double</name></type> <name>maxL1</name> <init>= <expr><call><name>maxScore</name><argument_list>(<argument><expr><name>l1</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>double</name></type> <name>maxL2</name> <init>= <expr><call><name>maxScore</name><argument_list>(<argument><expr><name>l2</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>maxMerged</name> &lt; 0 || <name>maxL1</name> &lt; 0 || <name>maxL2</name> &lt; 0</expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+
+        <return>return <expr><name>maxMerged</name> &lt; <name>maxL1</name> + <name>maxL2</name></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// Return the max score for the endpoint in the provided list, or -1.0 if no node have a score.</comment>
+    <function><type><specifier>private</specifier> <name>double</name></type> <name>maxScore</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>double</name></type> <name>maxScore</name> <init>= <expr>-1.0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>endpoints</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>Double</name></type> <name>score</name> <init>= <expr><call><name><name>scores</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>score</name> == null</expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <if>if <condition>(<expr><name>score</name> &gt; <name>maxScore</name></expr>)</condition><then>
+                <expr_stmt><expr><name>maxScore</name> = <name>score</name></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <return>return <expr><name>maxScore</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

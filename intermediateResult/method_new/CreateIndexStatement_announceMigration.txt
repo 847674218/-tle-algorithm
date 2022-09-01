@@ -1,0 +1,56 @@
+public void announceMigration() throws InvalidRequestException, ConfigurationException
+    {
+        CFMetaData oldCfm = ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
+        boolean columnExists = false;
+        // Mutating oldCfm directly would be bad so cloning.
+        CFMetaData cfm = oldCfm.clone();
+        CFDefinition cfDef = oldCfm.getCfDef();
+
+        for (ColumnDefinition cd : cfm.getColumn_metadata().values())
+        {
+            if (cd.name.equals(columnName.key))
+            {
+                if (cd.getIndexType() != null)
+                    throw new InvalidRequestException("Index already exists");
+                if (logger.isDebugEnabled())
+                    logger.debug("Updating column {} definition for index {}", columnName, indexName);
+
+                if (cd.getValidator().isCollection())
+                    throw new InvalidRequestException("Indexes on collections are no yet supported");
+
+                if (cfDef.isComposite)
+                {
+                    CompositeType composite = (CompositeType)cfm.comparator;
+                    Map<String, String> opts = new HashMap<String, String>();
+                    opts.put(CompositesIndex.PREFIX_SIZE_OPTION, String.valueOf(composite.types.size() - (cfDef.hasCollections ? 2 : 1)));
+                    cd.setIndexType(IndexType.COMPOSITES, opts);
+                }
+                else
+                {
+                    cd.setIndexType(IndexType.KEYS, Collections.<String, String>emptyMap());
+                }
+                cd.setIndexName(indexName);
+                columnExists = true;
+                break;
+            }
+        }
+        if (!columnExists)
+        {
+            CFDefinition.Name name = cfDef.get(columnName);
+            if (name != null)
+            {
+                switch (name.kind)
+                {
+                    case KEY_ALIAS:
+                    case COLUMN_ALIAS:
+                        throw new InvalidRequestException(String.format("Cannot create index on PRIMARY KEY part %s", columnName));
+                    case VALUE_ALIAS:
+                        throw new InvalidRequestException(String.format("Cannot create index on column %s of compact CF", columnName));
+                }
+            }
+            throw new InvalidRequestException("No column definition found for column " + columnName);
+        }
+
+        cfm.addDefaultIndexNames();
+        MigrationManager.announceColumnFamilyUpdate(cfm);
+    }

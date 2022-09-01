@@ -1,0 +1,311 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\compaction\LazilyCompactedRow.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>security</name>.<name>MessageDigest</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Iterator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Predicates</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterators</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>ICountableColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>OnDiskAtomIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>SecondaryIndexManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>ColumnStats</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>DataOutputBuffer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>MergeIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>StreamingHistogram</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * LazilyCompactedRow only computes the row bloom filter and column index in memory
+ * (at construction time); it does this by reading one column at a time from each
+ * of the rows being compacted, and merging them as it does so.  So the most we have
+ * in memory at a time is the bloom filter, the index, and one column from each
+ * pre-compaction row.
+ *
+ * When write() or update() is called, a second pass is made over the pre-compaction
+ * rows to write the merged columns or update the hash, again with at most one column
+ * from each row deserialized at a time.
+ */</comment>
+<class><specifier>public</specifier> class <name>LazilyCompactedRow</name> <super><extends>extends <name>AbstractCompactedRow</name></extends> <implements>implements <name><name>Iterable</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>LazilyCompactedRow</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>ICountableColumnIterator</name></extends></argument>&gt;</argument_list></name></type> <name>rows</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>CompactionController</name></type> <name>controller</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>shouldPurge</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ColumnFamily</name></type> <name>emptyColumnFamily</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>Reducer</name></type> <name>reducer</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ColumnStats</name></type> <name>columnStats</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>columnSerializedSize</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>closed</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>ColumnIndex</name>.<name>Builder</name></name></type> <name>indexBuilder</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ColumnIndex</name></type> <name>columnsIndex</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>SecondaryIndexManager</name>.<name>Updater</name></name></type> <name>indexer</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>LazilyCompactedRow</name><parameter_list>(<param><decl><type><name>CompactionController</name></type> <name>controller</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>ICountableColumnIterator</name></extends></argument>&gt;</argument_list></name></type> <name>rows</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><call><name><name>rows</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>.<call><name>getKey</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>rows</name></name> = <name>rows</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>controller</name></name> = <name>controller</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>indexer</name> = <call><name><name>controller</name>.<name>cfs</name>.<name>indexManager</name>.<name>updaterFor</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>maxDelTimestamp</name> <init>= <expr><name><name>Long</name>.<name>MIN_VALUE</name></name></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>OnDiskAtomIterator</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>row</name>.<name>getColumnFamily</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>maxDelTimestamp</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>maxDelTimestamp</name></expr></argument>, <argument><expr><call><name><name>cf</name>.<name>deletionInfo</name></name><argument_list>()</argument_list></call>.<call><name>maxTimestamp</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>emptyColumnFamily</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>emptyColumnFamily</name> = <name>cf</name></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name><name>emptyColumnFamily</name>.<name>delete</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></for>
+        <expr_stmt><expr><name><name>this</name>.<name>shouldPurge</name></name> = <call><name><name>controller</name>.<name>shouldPurge</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>maxDelTimestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>indexAndWrite</name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <comment type="line">// reach into the reducer used during iteration to get column count, size, max column timestamp</comment>
+        <comment type="line">// (however, if there are zero columns, iterator() will not be called by ColumnIndexer and reducer will be null)</comment>
+        <expr_stmt><expr><name>columnStats</name> = new <call><name>ColumnStats</name><argument_list>(<argument><expr><name>reducer</name> == null ? 0 : <name><name>reducer</name>.<name>columns</name></name></expr></argument>, 
+                                      <argument><expr><name>reducer</name> == null ? <name><name>Long</name>.<name>MAX_VALUE</name></name> : <name><name>reducer</name>.<name>minTimestampSeen</name></name></expr></argument>, 
+                                      <argument><expr><name>reducer</name> == null ? <name>maxDelTimestamp</name> : <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>maxDelTimestamp</name></expr></argument>, <argument><expr><name><name>reducer</name>.<name>maxTimestampSeen</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                      <argument><expr><name>reducer</name> == null ? new <call><name>StreamingHistogram</name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>TOMBSTONE_HISTOGRAM_BIN_SIZE</name></name></expr></argument>)</argument_list></call> : <name><name>reducer</name>.<name>tombstones</name></name></expr></argument>
+        )</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>columnSerializedSize</name> = <name>reducer</name> == null ? 0 : <name><name>reducer</name>.<name>serializedSize</name></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>reducer</name> = null</expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>indexAndWrite</name><parameter_list>(<param><decl><type><name>DataOutput</name></type> <name>out</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>indexBuilder</name></name> = new <call><name><name>ColumnIndex</name>.<name>Builder</name></name><argument_list>(<argument><expr><name>emptyColumnFamily</name></expr></argument>, <argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>, <argument><expr><call><name>getEstimatedColumnCount</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>out</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>columnsIndex</name></name> = <call><name><name>indexBuilder</name>.<name>build</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>write</name><parameter_list>(<param><decl><type><name>DataOutput</name></type> <name>out</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr>!<name>closed</name></expr>;</assert>
+
+        <decl_stmt><decl><type><name>DataOutputBuffer</name></type> <name>clockOut</name> <init>= <expr>new <call><name>DataOutputBuffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>DeletionInfo</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serializeForSSTable</name><argument_list>(<argument><expr><call><name><name>emptyColumnFamily</name>.<name>deletionInfo</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>clockOut</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>dataSize</name> <init>= <expr><call><name><name>clockOut</name>.<name>getLength</name></name><argument_list>()</argument_list></call> + <name>columnSerializedSize</name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"clock / column sizes are %s / %s"</expr></argument>, <argument><expr><call><name><name>clockOut</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>columnSerializedSize</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <assert>assert <expr><name>dataSize</name> &gt; 0</expr>;</assert>
+        <expr_stmt><expr><call><name><name>out</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name>dataSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr><call><name><name>clockOut</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>clockOut</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr><call><name><name>indexBuilder</name>.<name>writtenAtomCount</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// We rebuild the column index uselessly, but we need to do that because range tombstone markers depend</comment>
+        <comment type="line">// on indexing. If we're able to remove the two-phase compaction, we'll avoid that.</comment>
+        <expr_stmt><expr><call><name>indexAndWrite</name><argument_list>(<argument><expr><name>out</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>secondPassColumnSize</name> <init>= <expr><name>reducer</name> == null ? 0 : <name><name>reducer</name>.<name>serializedSize</name></name></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>secondPassColumnSize</name> == <name>columnSerializedSize</name>
+               : "originally calculated column size of " + <name>columnSerializedSize</name> + " but now it is " + <name>secondPassColumnSize</name></expr>;</assert>
+
+        <expr_stmt><expr><call><name>close</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>dataSize</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>update</name><parameter_list>(<param><decl><type><name>MessageDigest</name></type> <name>digest</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr>!<name>closed</name></expr>;</assert>
+
+        <comment type="line">// no special-case for rows.size == 1, we're actually skipping some bytes here so just</comment>
+        <comment type="line">// blindly updating everything wouldn't be correct</comment>
+        <decl_stmt><decl><type><name>DataOutputBuffer</name></type> <name>out</name> <init>= <expr>new <call><name>DataOutputBuffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>DeletionInfo</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serializeForSSTable</name><argument_list>(<argument><expr><call><name><name>emptyColumnFamily</name>.<name>deletionInfo</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>out</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>columnStats</name>.<name>columnCount</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>digest</name>.<name>update</name></name><argument_list>(<argument><expr><call><name><name>out</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>out</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name>iterator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <expr_stmt><expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call>.<call><name>updateDigest</name><argument_list>(<argument><expr><name>digest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></while>
+        <expr_stmt><expr><call><name>close</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isEmpty</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>boolean</name></type> <name>cfIrrelevant</name> <init>= <expr><name>shouldPurge</name>
+                             ? <call><name><name>ColumnFamilyStore</name>.<name>removeDeletedCF</name></name><argument_list>(<argument><expr><name>emptyColumnFamily</name></expr></argument>, <argument><expr><name><name>controller</name>.<name>gcBefore</name></name></expr></argument>)</argument_list></call> == null
+                             : !<call><name><name>emptyColumnFamily</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// tombstones are relevant</comment>
+        <return>return <expr><name>cfIrrelevant</name> &amp;&amp; <name><name>columnStats</name>.<name>columnCount</name></name> == 0</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getEstimatedColumnCount</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ICountableColumnIterator</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+            <expr_stmt><expr><name>n</name> += <call><name><name>row</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>n</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getComparator</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>emptyColumnFamily</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name></type> <name>iterator</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ICountableColumnIterator</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>row</name>.<name>reset</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        <expr_stmt><expr><name>reducer</name> = new <call><name>Reducer</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name><name>MergeIterator</name>.<name>get</name></name><argument_list>(<argument><expr><name>rows</name></expr></argument>, <argument><expr><call><name>getComparator</name><argument_list>()</argument_list></call>.<name>onDiskAtomComparator</name></expr></argument>, <argument><expr><name>reducer</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>Iterators</name>.<name>filter</name></name><argument_list>(<argument><expr><name>iter</name></expr></argument>, <argument><expr><call><name><name>Predicates</name>.<name>notNull</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnStats</name></type> <name>columnStats</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>columnStats</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>OnDiskAtomIterator</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>row</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></for>
+        <expr_stmt><expr><name>closed</name> = true</expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>DeletionInfo</name></type> <name>deletionInfo</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>emptyColumnFamily</name>.<name>deletionInfo</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the column index for this row.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>ColumnIndex</name></type> <name>index</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>columnsIndex</name></expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> class <name>Reducer</name> <super><extends>extends <name><name>MergeIterator</name>.<name><name>Reducer</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>, <argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name></name></extends></super>
+    <block>{
+        <comment type="line">// all columns reduced together will have the same name, so there will only be one column</comment>
+        <comment type="line">// in the container; we just want to leverage the conflict resolution code from CF</comment>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>container</name> <init>= <expr><call><name><name>emptyColumnFamily</name>.<name>cloneMeShallow</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// tombstone reference; will be reconciled w/ column during getReduced</comment>
+        <decl_stmt><decl><type><name>RangeTombstone</name></type> <name>tombstone</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>serializedSize</name> <init>= <expr>4</expr></init></decl>;</decl_stmt> <comment type="line">// int for column count</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>columns</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>minTimestampSeen</name> <init>= <expr><name><name>Long</name>.<name>MAX_VALUE</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>maxTimestampSeen</name> <init>= <expr><name><name>Long</name>.<name>MIN_VALUE</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>StreamingHistogram</name></type> <name>tombstones</name> <init>= <expr>new <call><name>StreamingHistogram</name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>TOMBSTONE_HISTOGRAM_BIN_SIZE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>reduce</name><parameter_list>(<param><decl><type><name>OnDiskAtom</name></type> <name>current</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>current</name> instanceof <name>RangeTombstone</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>tombstone</name> = (<name>RangeTombstone</name>)<name>current</name></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr>(<name>IColumn</name>) <name>current</name></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>container</name>.<name>addColumn</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>container</name>.<name>getColumn</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> != <name>column</name></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>indexer</name>.<name>remove</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></else></if>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>OnDiskAtom</name></type> <name>getReduced</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>tombstone</name> != null</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>RangeTombstone</name></type> <name>t</name> <init>= <expr><name>tombstone</name></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>tombstone</name> = null</expr>;</expr_stmt>
+
+                <if>if <condition>(<expr><call><name><name>t</name>.<name>data</name>.<name>isGcAble</name></name><argument_list>(<argument><expr><name><name>controller</name>.<name>gcBefore</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <return>return <expr>null</expr>;</return>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><name>serializedSize</name> += <call><name><name>t</name>.<name>serializedSizeForSSTable</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <return>return <expr><name>t</name></expr>;</return>
+                }</block></else></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>purged</name> <init>= <expr><call><name><name>PrecompactedRow</name>.<name>removeDeletedAndOldShards</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>shouldPurge</name></expr></argument>, <argument><expr><name>controller</name></expr></argument>, <argument><expr><name>container</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>purged</name> == null || !<call><name><name>purged</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>hasNext</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>container</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <return>return <expr>null</expr>;</return>
+                }</block></then></if>
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>reduced</name> <init>= <expr><call><name><name>purged</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>container</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+                <comment type="line">// PrecompactedRow.removeDeletedAndOldShards have only checked the top-level CF deletion times,</comment>
+                <comment type="line">// not the range tombstone. For that we use the columnIndexer tombstone tracker.</comment>
+                <comment type="line">// Note that this doesn't work for super columns.</comment>
+                <if>if <condition>(<expr><call><name><name>indexBuilder</name>.<name>tombstoneTracker</name></name><argument_list>()</argument_list></call>.<call><name>isDeleted</name><argument_list>(<argument><expr><name>reduced</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return <expr>null</expr>;</return></then></if>
+
+                <expr_stmt><expr><name>serializedSize</name> += <call><name><name>reduced</name>.<name>serializedSizeForSSTable</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>columns</name>++</expr>;</expr_stmt>
+                <expr_stmt><expr><name>minTimestampSeen</name> = <call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>minTimestampSeen</name></expr></argument>, <argument><expr><call><name><name>reduced</name>.<name>minTimestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>maxTimestampSeen</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>maxTimestampSeen</name></expr></argument>, <argument><expr><call><name><name>reduced</name>.<name>maxTimestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>deletionTime</name> <init>= <expr><call><name><name>reduced</name>.<name>getLocalDeletionTime</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>deletionTime</name> &lt; <name><name>Integer</name>.<name>MAX_VALUE</name></name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>tombstones</name>.<name>update</name></name><argument_list>(<argument><expr><name>deletionTime</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+                <return>return <expr><name>reduced</name></expr>;</return>
+            }</block></else></if>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

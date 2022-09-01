@@ -1,0 +1,118 @@
+public static void main(String args[]) throws IOException
+    {
+        Options options = Options.parseArgs(args);
+        try
+        {
+            // Migrate sstables from pre-#2749 to the correct location
+            if (Directories.sstablesNeedsMigration())
+                Directories.migrateSSTables();
+
+            // load keyspace descriptions.
+            DatabaseDescriptor.loadSchemas();
+
+            if (Schema.instance.getCFMetaData(options.tableName, options.cfName) == null)
+                throw new IllegalArgumentException(String.format("Unknown keyspace/columnFamily %s.%s",
+                                                                 options.tableName,
+                                                                 options.cfName));
+
+            // Do not load sstables since they might be broken
+            Table table = Table.openWithoutSSTables(options.tableName);
+            ColumnFamilyStore cfs = table.getColumnFamilyStore(options.cfName);
+            String snapshotName = "pre-scrub-" + System.currentTimeMillis();
+
+            OutputHandler handler = new OutputHandler.SystemOutput(options.verbose, options.debug);
+            Directories.SSTableLister lister = cfs.directories.sstableLister().skipCompacted(true).skipTemporary(true);
+
+            List<SSTableReader> sstables = new ArrayList<SSTableReader>();
+
+            // Scrub sstables
+            for (Map.Entry<Descriptor, Set<Component>> entry : lister.list().entrySet())
+            {
+                Set<Component> components = entry.getValue();
+                if (!components.contains(Component.DATA) || !components.contains(Component.PRIMARY_INDEX))
+                    continue;
+
+                try
+                {
+                    SSTableReader sstable = SSTableReader.openNoValidation(entry.getKey(), components, cfs.metadata);
+                    sstables.add(sstable);
+
+                    File snapshotDirectory = Directories.getSnapshotDirectory(sstable.descriptor, snapshotName);
+                    sstable.createLinks(snapshotDirectory.getPath());
+
+                }
+                catch (Exception e)
+                {
+                    System.err.println(String.format("Error Loading %s: %s", entry.getKey(), e.getMessage()));
+                    if (options.debug)
+                        e.printStackTrace(System.err);
+                }
+            }
+            System.out.println(String.format("Pre-scrub sstables snapshotted into snapshot %s", snapshotName));
+
+            // If leveled, load the manifest
+            LeveledManifest manifest = null;
+            if (cfs.directories.tryGetLeveledManifest() != null)
+            {
+                cfs.directories.snapshotLeveledManifest(snapshotName);
+                System.out.println(String.format("Leveled manifest snapshotted into snapshot %s", snapshotName));
+
+                int maxSizeInMB = (int)((cfs.getCompactionStrategy().getMaxSSTableSize()) / (1024L * 1024L));
+                manifest = LeveledManifest.create(cfs, maxSizeInMB, sstables);
+            }
+
+            if (!options.manifestCheckOnly)
+            {
+                for (SSTableReader sstable : sstables)
+                {
+                    try
+                    {
+                        Scrubber scrubber = new Scrubber(cfs, sstable, handler, true);
+                        try
+                        {
+                            scrubber.scrub();
+                        }
+                        finally
+                        {
+                            scrubber.close();
+                        }
+
+                        if (manifest != null)
+                        {
+                            if (scrubber.getNewInOrderSSTable() != null)
+                                manifest.add(scrubber.getNewInOrderSSTable());
+
+                            List<SSTableReader> added = scrubber.getNewSSTable() == null
+                                ? Collections.<SSTableReader>emptyList()
+                                : Collections.singletonList(scrubber.getNewSSTable());
+                            manifest.replace(Collections.singletonList(sstable), added);
+                        }
+
+                        // Remove the sstable (it's been copied by scrub and snapshotted)
+                        sstable.markCompacted();
+                        sstable.releaseReference();
+                    }
+                    catch (Exception e)
+                    {
+                        System.err.println(String.format("Error scrubbing %s: %s", sstable, e.getMessage()));
+                        if (options.debug)
+                            e.printStackTrace(System.err);
+                    }
+                }
+            }
+
+            // Check (and repair) manifest
+            if (manifest != null)
+                checkManifest(manifest);
+
+            SSTableDeletingTask.waitForDeletions();
+            System.exit(0); // We need that to stop non daemonized threads
+        }
+        catch (Exception e)
+        {
+            System.err.println(e.getMessage());
+            if (options.debug)
+                e.printStackTrace(System.err);
+            System.exit(1);
+        }
+    }

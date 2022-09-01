@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\streaming\PendingFile.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>TypeSizes</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IVersionedSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>compress</name>.<name>CompressionMetadata</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>Descriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>compress</name>.<name>CompressionInfo</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Represents portions of a file to be streamed between nodes.
+ */</comment>
+<class><specifier>public</specifier> class <name>PendingFile</name>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>PendingFileSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>PendingFileSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// NB: this reference is used to be able to release the acquired reference upon completion</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>SSTableReader</name></type> <name>sstable</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Descriptor</name></type> <name>desc</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>String</name></type> <name>component</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>sections</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>OperationType</name></type> <name>type</name></decl>;</decl_stmt>
+    <comment type="block" format="javadoc">/** total length of data to transfer */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>long</name></type> <name>size</name></decl>;</decl_stmt>
+    <comment type="block" format="javadoc">/** estimated number of keys to transfer */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>long</name></type> <name>estimatedKeys</name></decl>;</decl_stmt>
+    <comment type="block" format="javadoc">/** compression information. null if data is not compressed */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>CompressionInfo</name></type> <name>compressionInfo</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <name>long</name></type> <name>progress</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>PendingFile</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>, <param><decl><type><name>PendingFile</name></type> <name>pf</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>desc</name></expr></argument>, <argument><expr><name><name>pf</name>.<name>component</name></name></expr></argument>, <argument><expr><name><name>pf</name>.<name>sections</name></name></expr></argument>, <argument><expr><name><name>pf</name>.<name>type</name></name></expr></argument>, <argument><expr><name><name>pf</name>.<name>estimatedKeys</name></name></expr></argument>, <argument><expr><name><name>pf</name>.<name>compressionInfo</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>PendingFile</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>, <param><decl><type><name>String</name></type> <name>component</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>,<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>sections</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>desc</name></expr></argument>, <argument><expr><name>component</name></expr></argument>, <argument><expr><name>sections</name></expr></argument>, <argument><expr><name>type</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>PendingFile</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>,
+                       <param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>,
+                       <param><decl><type><name>String</name></type> <name>component</name></decl></param>,
+                       <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>,<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>sections</name></decl></param>,
+                       <param><decl><type><name>OperationType</name></type> <name>type</name></decl></param>,
+                       <param><decl><type><name>long</name></type> <name>estimatedKeys</name></decl></param>,
+                       <param><decl><type><name>CompressionInfo</name></type> <name>compressionInfo</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>sstable</name></name> = <name>sstable</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>desc</name></name> = <name>desc</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>component</name></name> = <name>component</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>sections</name></name> = <name>sections</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>type</name></name> = <name>type</name></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>tempSize</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>compressionInfo</name> == null</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>section</name> <range>: <expr><name>sections</name></expr></range></decl></init>)
+                <expr_stmt><expr><name>tempSize</name> += <name><name>section</name>.<name>right</name></name> - <name><name>section</name>.<name>left</name></name></expr>;</expr_stmt></for>
+        }</block></then>
+        <else>else
+        <block>{
+            <comment type="line">// calculate total length of transferring chunks</comment>
+            <for>for (<init><decl><type><name><name>CompressionMetadata</name>.<name>Chunk</name></name></type> <name>chunk</name> <range>: <expr><name><name>compressionInfo</name>.<name>chunks</name></name></expr></range></decl></init>)
+                <expr_stmt><expr><name>tempSize</name> += <name><name>chunk</name>.<name>length</name></name> + 4</expr>;</expr_stmt></for> <comment type="line">// 4 bytes for CRC</comment>
+        }</block></else></if>
+        <expr_stmt><expr><name>size</name> = <name>tempSize</name></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name><name>this</name>.<name>estimatedKeys</name></name> = <name>estimatedKeys</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>compressionInfo</name></name> = <name>compressionInfo</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getFilename</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>equals</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!(<name>o</name> instanceof <name>PendingFile</name>)</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>PendingFile</name></type> <name>rhs</name> <init>= <expr>(<name>PendingFile</name>)<name>o</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name>getFilename</name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><call><name><name>rhs</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>hashCode</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getFilename</name><argument_list>()</argument_list></call>.<call><name>hashCode</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getFilename</name><argument_list>()</argument_list></call> + " sections=" + <call><name><name>sections</name>.<name>size</name></name><argument_list>()</argument_list></call> + " progress=" + <name>progress</name> + "/" + <name>size</name> + " - " + <name>progress</name>*100/<name>size</name> + "%"</expr>;</return>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>PendingFileSerializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>PendingFile</name></type> <name>sc</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <if>if <condition>(<expr><name>sc</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr>""</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><call><name><name>sc</name>.<name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>sc</name>.<name>component</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><name><name>sc</name>.<name>component</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><call><name><name>sc</name>.<name>sections</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>,<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>section</name> <range>: <expr><name><name>sc</name>.<name>sections</name></name></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name><name>section</name>.<name>left</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name><name>section</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><call><name><name>sc</name>.<name>type</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name><name>sc</name>.<name>estimatedKeys</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>version</name> &gt; <name><name>MessagingService</name>.<name>VERSION_11</name></name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>CompressionInfo</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>sc</name>.<name>compressionInfo</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>PendingFile</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>filename</name> <init>= <expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>filename</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr>null</expr>;</return></then></if>
+
+            <decl_stmt><decl><type><name>Descriptor</name></type> <name>desc</name> <init>= <expr><call><name><name>Descriptor</name>.<name>fromFilename</name></name><argument_list>(<argument><expr><name>filename</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>component</name> <init>= <expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>count</name> <init>= <expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>,<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>sections</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>,<argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>count</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>count</name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+                <expr_stmt><expr><call><name><name>sections</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>Pair</name>.<name>create</name></name><argument_list>(<argument><expr><call><name><name>dis</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>dis</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <comment type="line">// this controls the way indexes are rebuilt when streaming in.</comment>
+            <decl_stmt><decl><type><name>OperationType</name></type> <name>type</name> <init>= <expr><name><name>OperationType</name>.<name>RESTORE_REPLICA_COUNT</name></name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>type</name> = <call><name><name>OperationType</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>estimatedKeys</name> <init>= <expr><call><name><name>dis</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>CompressionInfo</name></type> <name>info</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>version</name> &gt; <name><name>MessagingService</name>.<name>VERSION_11</name></name></expr>)</condition><then>
+                <expr_stmt><expr><name>info</name> = <call><name><name>CompressionInfo</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <return>return <expr>new <call><name>PendingFile</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>desc</name></expr></argument>, <argument><expr><name>component</name></expr></argument>, <argument><expr><name>sections</name></expr></argument>, <argument><expr><name>type</name></expr></argument>, <argument><expr><name>estimatedKeys</name></expr></argument>, <argument><expr><name>info</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>PendingFile</name></type> <name>pf</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>pf</name> == null</expr>)</condition><then>
+                <return>return <expr><call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr>""</expr></argument>)</argument_list></call></expr>;</return></then></if>
+
+            <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><call><name><name>pf</name>.<name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>pf</name>.<name>component</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>size</name> += <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>pf</name>.<name>component</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>size</name> += <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><call><name><name>pf</name>.<name>sections</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>,<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>section</name> <range>: <expr><name><name>pf</name>.<name>sections</name></name></expr></range></decl></init>)
+                <expr_stmt><expr><name>size</name> += <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>section</name>.<name>left</name></name></expr></argument>)</argument_list></call> + <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>section</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><name>size</name> += <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><call><name><name>pf</name>.<name>type</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>size</name> += <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>pf</name>.<name>estimatedKeys</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>version</name> &gt; <name><name>MessagingService</name>.<name>VERSION_11</name></name></expr>)</condition><then>
+                <expr_stmt><expr><name>size</name> += <call><name><name>CompressionInfo</name>.<name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name><name>pf</name>.<name>compressionInfo</name></name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <return>return <expr><name>size</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

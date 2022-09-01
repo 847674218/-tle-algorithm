@@ -1,0 +1,63 @@
+private void load(boolean recreatebloom) throws IOException
+    {
+        SegmentedFile.Builder ibuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getIndexAccessMode());
+        SegmentedFile.Builder dbuilder = compression
+                                          ? SegmentedFile.getCompressedBuilder()
+                                          : SegmentedFile.getBuilder(DatabaseDescriptor.getDiskAccessMode());
+
+        // we read the positions in a BRAF so we don't have to worry about an entry spanning a mmap boundary.
+        RandomAccessReader primaryIndex = RandomAccessReader.open(new File(descriptor.filenameFor(Component.PRIMARY_INDEX)), true);
+
+        // try to load summaries from the disk and check if we need
+        // to read primary index because we should re-create a BloomFilter or pre-load KeyCache
+        final boolean summaryLoaded = loadSummary(this, ibuilder, dbuilder);
+        final boolean readIndex = recreatebloom || !summaryLoaded;
+        try
+        {
+            long indexSize = primaryIndex.length();
+            long histogramCount = sstableMetadata.estimatedRowSize.count();
+            long estimatedKeys = histogramCount > 0 && !sstableMetadata.estimatedRowSize.isOverflowed()
+                               ? histogramCount
+                               : estimateRowsFromIndex(primaryIndex); // statistics is supposed to be optional
+            if (recreatebloom)
+                bf = LegacyBloomFilter.getFilter(estimatedKeys, 15);
+
+            if (!summaryLoaded)
+                indexSummary = new IndexSummary(estimatedKeys);
+
+            long indexPosition;
+            while (readIndex && (indexPosition = primaryIndex.getFilePointer()) != indexSize)
+            {
+                ByteBuffer key = ByteBufferUtil.readWithShortLength(primaryIndex);
+                RowIndexEntry indexEntry = RowIndexEntry.serializer.deserialize(primaryIndex, descriptor.version);
+                DecoratedKey decoratedKey = decodeKey(partitioner, descriptor, key);
+                if (first == null)
+                    first = decoratedKey;
+                last = decoratedKey;
+
+                if (recreatebloom)
+                    bf.add(decoratedKey.key);
+
+                // if summary was already read from disk we don't want to re-populate it using primary index
+                if (!summaryLoaded)
+                {
+                    indexSummary.maybeAddEntry(decoratedKey, indexPosition);
+                    ibuilder.addPotentialBoundary(indexPosition);
+                    dbuilder.addPotentialBoundary(indexEntry.position);
+                }
+            }
+        }
+        finally
+        {
+            FileUtils.closeQuietly(primaryIndex);
+        }
+        first = getMinimalKey(first);
+        last = getMinimalKey(last);
+        // finalize the load.
+        indexSummary.complete();
+        // finalize the state of the reader
+        ifile = ibuilder.complete(descriptor.filenameFor(Component.PRIMARY_INDEX));
+        dfile = dbuilder.complete(descriptor.filenameFor(Component.DATA));
+        if (readIndex) // save summary information to disk
+            saveSummary(this, ibuilder, dbuilder);
+    }

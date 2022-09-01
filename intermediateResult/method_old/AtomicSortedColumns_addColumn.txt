@@ -1,0 +1,28 @@
+long addColumn(IColumn column, Allocator allocator)
+        {
+            ByteBuffer name = column.name();
+            while (true)
+            {
+                IColumn oldColumn = map.putIfAbsent(name, column);
+                if (oldColumn == null)
+                    return column.serializedSize();
+
+                if (oldColumn instanceof SuperColumn)
+                {
+                    assert column instanceof SuperColumn;
+                    long previousSize = oldColumn.serializedSize();
+                    ((SuperColumn) oldColumn).putColumn((SuperColumn)column, allocator);
+                    return oldColumn.serializedSize() - previousSize;
+                }
+                else
+                {
+                    // calculate reconciled col from old (existing) col and new col
+                    IColumn reconciledColumn = column.reconcile(oldColumn, allocator);
+                    if (map.replace(name, oldColumn, reconciledColumn))
+                        return reconciledColumn.serializedSize() - oldColumn.serializedSize();
+
+                    // We failed to replace column due to a concurrent update or a concurrent removal. Keep trying.
+                    // (Currently, concurrent removal should not happen (only updates), but let us support that anyway.)
+                }
+            }
+        }

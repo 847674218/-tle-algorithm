@@ -1,0 +1,89 @@
+private void read(SSTableReader sstable, FileDataInput file, RowIndexEntry indexEntry)
+    throws IOException
+    {
+        IFilter bf;
+        List<IndexHelper.IndexInfo> indexList;
+
+        // If the entry is not indexed or the index is not promoted, read from the row start
+        if (!indexEntry.isIndexed())
+        {
+            if (file == null)
+                file = createFileDataInput(indexEntry.position);
+            else
+                file.seek(indexEntry.position);
+
+            DecoratedKey keyInDisk = SSTableReader.decodeKey(sstable.partitioner,
+                                                             sstable.descriptor,
+                                                             ByteBufferUtil.readWithShortLength(file));
+            assert keyInDisk.equals(key) : String.format("%s != %s in %s", keyInDisk, key, file.getPath());
+            SSTableReader.readRowSize(file, sstable.descriptor);
+        }
+
+        if (sstable.descriptor.version.hasPromotedIndexes)
+        {
+            bf = indexEntry.isIndexed() ? indexEntry.bloomFilter() : null;
+            indexList = indexEntry.columnsIndex();
+        }
+        else
+        {
+            assert file != null;
+            bf = IndexHelper.defreezeBloomFilter(file, sstable.descriptor.version.filterType);
+            indexList = IndexHelper.deserializeIndex(file);
+        }
+
+        if (!indexEntry.isIndexed())
+        {
+            // we can stop early if bloom filter says none of the columns actually exist -- but,
+            // we can't stop before initializing the cf above, in case there's a relevant tombstone
+            ColumnFamilySerializer serializer = ColumnFamily.serializer;
+            try
+            {
+                cf = ColumnFamily.create(sstable.metadata);
+                cf.delete(DeletionInfo.serializer().deserializeFromSSTable(file, sstable.descriptor.version));
+            }
+            catch (Exception e)
+            {
+                throw new IOException(serializer + " failed to deserialize " + sstable.getColumnFamilyName() + " with " + sstable.metadata + " from " + file, e);
+            }
+        }
+        else
+        {
+            cf = ColumnFamily.create(sstable.metadata);
+            cf.delete(indexEntry.deletionInfo());
+        }
+
+        List<OnDiskAtom> result = new ArrayList<OnDiskAtom>();
+        List<ByteBuffer> filteredColumnNames = new ArrayList<ByteBuffer>(columns.size());
+        for (ByteBuffer name : columns)
+        {
+            if (bf == null || bf.isPresent(name))
+            {
+                filteredColumnNames.add(name);
+            }
+        }
+        if (filteredColumnNames.isEmpty())
+            return;
+
+        if (indexList.isEmpty())
+        {
+            readSimpleColumns(file, columns, filteredColumnNames, result);
+        }
+        else
+        {
+            long basePosition;
+            if (sstable.descriptor.version.hasPromotedIndexes)
+            {
+                basePosition = indexEntry.position;
+            }
+            else
+            {
+                assert file != null;
+                file.readInt(); // column count
+                basePosition = file.getFilePointer();
+            }
+            readIndexedColumns(sstable.metadata, file, columns, filteredColumnNames, indexList, basePosition, result);
+        }
+
+        // create an iterator view of the columns we read
+        iter = result.iterator();
+    }

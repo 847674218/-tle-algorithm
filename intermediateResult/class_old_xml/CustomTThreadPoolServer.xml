@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\thrift\CustomTThreadPoolServer.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>net</name>.<name>SocketTimeoutException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutorService</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicInteger</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>TException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>TProcessor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>protocol</name>.<name>TProtocol</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>server</name>.<name>TServer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>server</name>.<name>TThreadPoolServer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TTransport</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TTransportException</name></name>;</import>
+
+
+<comment type="block" format="javadoc">/**
+ * Slightly modified version of the Apache Thrift TThreadPoolServer.
+ * &lt;p/&gt;
+ * This allows passing an executor so you have more control over the actual
+ * behaviour of the tasks being run.
+ * &lt;p/&gt;
+ * Newer version of Thrift should make this obsolete.
+ */</comment>
+<class><specifier>public</specifier> class <name>CustomTThreadPoolServer</name> <super><extends>extends <name>TServer</name></extends></super>
+<block>{
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>LOGGER</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><call><name><name>CustomTThreadPoolServer</name>.<name><name>class</name>.<name>getName</name></name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// Executor service for handling client connections</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ExecutorService</name></type> <name>executorService_</name></decl>;</decl_stmt>
+
+    <comment type="line">// Flag for stopping the server</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>boolean</name></type> <name>stopped_</name></decl>;</decl_stmt>
+
+    <comment type="line">// Server options</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>TThreadPoolServer</name>.<name>Args</name></name></type> <name>args</name></decl>;</decl_stmt>
+
+    <comment type="line">//Track and Limit the number of connected clients</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>AtomicInteger</name></type> <name>activeClients</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+
+    <constructor><specifier>public</specifier> <name>CustomTThreadPoolServer</name><parameter_list>(<param><decl><type><name><name>TThreadPoolServer</name>.<name>Args</name></name></type> <name>args</name></decl></param>, <param><decl><type><name>ExecutorService</name></type> <name>executorService</name></decl></param>)</parameter_list> <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>args</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>executorService_</name> = <name>executorService</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>args</name></name> = <name>args</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>serve</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>serverTransport_</name>.<name>listen</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>TTransportException</name></type> <name>ttx</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>LOGGER</name>.<name>error</name></name><argument_list>(<argument><expr>"Error occurred during listening."</expr></argument>, <argument><expr><name>ttx</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></catch></try>
+
+        <expr_stmt><expr><name>stopped_</name> = false</expr>;</expr_stmt>
+        <while>while <condition>(<expr>!<name>stopped_</name></expr>)</condition>
+        <block>{
+            <comment type="line">// block until we are under max clients</comment>
+            <while>while <condition>(<expr><call><name><name>activeClients</name>.<name>get</name></name><argument_list>()</argument_list></call> &gt;= <name><name>args</name>.<name>maxWorkerThreads</name></name></expr>)</condition>
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr>100</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></while>
+
+            <try>try
+            <block>{
+                <decl_stmt><decl><type><name>TTransport</name></type> <name>client</name> <init>= <expr><call><name><name>serverTransport_</name>.<name>accept</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>activeClients</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>WorkerProcess</name></type> <name>wp</name> <init>= <expr>new <call><name>WorkerProcess</name><argument_list>(<argument><expr><name>client</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>executorService_</name>.<name>execute</name></name><argument_list>(<argument><expr><name>wp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>TTransportException</name></type> <name>ttx</name></decl></param>)</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>ttx</name>.<name>getCause</name></name><argument_list>()</argument_list></call> instanceof <name>SocketTimeoutException</name></expr>)</condition><then> <comment type="line">// thrift sucks</comment>
+                    <continue>continue;</continue></then></if>
+
+                <if>if <condition>(<expr>!<name>stopped_</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>LOGGER</name>.<name>warn</name></name><argument_list>(<argument><expr>"Transport error occurred during acceptance of message."</expr></argument>, <argument><expr><name>ttx</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></catch></try>
+
+            <if>if <condition>(<expr><call><name><name>activeClients</name>.<name>get</name></name><argument_list>()</argument_list></call> &gt;= <name><name>args</name>.<name>maxWorkerThreads</name></name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>LOGGER</name>.<name>warn</name></name><argument_list>(<argument><expr>"Maximum number of clients " + <name><name>args</name>.<name>maxWorkerThreads</name></name> + " reached"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></while>
+
+        <expr_stmt><expr><call><name><name>executorService_</name>.<name>shutdown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// Thrift's default shutdown waits for the WorkerProcess threads to complete.  We do not,</comment>
+        <comment type="line">// because doing that allows a client to hold our shutdown "hostage" by simply not sending</comment>
+        <comment type="line">// another message after stop is called (since process will block indefinitely trying to read</comment>
+        <comment type="line">// the next meessage header).</comment>
+        <comment type="line">//</comment>
+        <comment type="line">// The "right" fix would be to update thrift to set a socket timeout on client connections</comment>
+        <comment type="line">// (and tolerate unintentional timeouts until stopped_ is set).  But this requires deep</comment>
+        <comment type="line">// changes to the code generator, so simply setting these threads to daemon (in our custom</comment>
+        <comment type="line">// CleaningThreadPool) and ignoring them after shutdown is good enough.</comment>
+        <comment type="line">//</comment>
+        <comment type="line">// Remember, our goal on shutdown is not necessarily that each client request we receive</comment>
+        <comment type="line">// gets answered first [to do that, you should redirect clients to a different coordinator</comment>
+        <comment type="line">// first], but rather (1) to make sure that for each update we ack as successful, we generate</comment>
+        <comment type="line">// hints for any non-responsive replicas, and (2) to make sure that we quickly stop</comment>
+        <comment type="line">// accepting client connections so shutdown can continue.  Not waiting for the WorkerProcess</comment>
+        <comment type="line">// threads here accomplishes (2); MessagingService's shutdown method takes care of (1).</comment>
+        <comment type="line">//</comment>
+        <comment type="line">// See CASSANDRA-3335 and CASSANDRA-3727.</comment>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>stop</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>stopped_</name> = true</expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>serverTransport_</name>.<name>interrupt</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <class><specifier>private</specifier> class <name>WorkerProcess</name> <super><implements>implements <name>Runnable</name></implements></super>
+    <block>{
+
+        <comment type="block" format="javadoc">/**
+         * Client that this services.
+         */</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>TTransport</name></type> <name>client_</name></decl>;</decl_stmt>
+
+        <comment type="block" format="javadoc">/**
+         * Default constructor.
+         *
+         * @param client Transport to process
+         */</comment>
+        <constructor><specifier>private</specifier> <name>WorkerProcess</name><parameter_list>(<param><decl><type><name>TTransport</name></type> <name>client</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>client_</name> = <name>client</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/**
+         * Loops on processing a client forever
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>TProcessor</name></type> <name>processor</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TTransport</name></type> <name>inputTransport</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TTransport</name></type> <name>outputTransport</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TProtocol</name></type> <name>inputProtocol</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TProtocol</name></type> <name>outputProtocol</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>processor</name> = <call><name><name>processorFactory_</name>.<name>getProcessor</name></name><argument_list>(<argument><expr><name>client_</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>inputTransport</name> = <call><name><name>inputTransportFactory_</name>.<name>getTransport</name></name><argument_list>(<argument><expr><name>client_</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>outputTransport</name> = <call><name><name>outputTransportFactory_</name>.<name>getTransport</name></name><argument_list>(<argument><expr><name>client_</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>inputProtocol</name> = <call><name><name>inputProtocolFactory_</name>.<name>getProtocol</name></name><argument_list>(<argument><expr><name>inputTransport</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>outputProtocol</name> = <call><name><name>outputProtocolFactory_</name>.<name>getProtocol</name></name><argument_list>(<argument><expr><name>outputTransport</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <comment type="line">// we check stopped_ first to make sure we're not supposed to be shutting</comment>
+                <comment type="line">// down. this is necessary for graceful shutdown.  (but not sufficient,</comment>
+                <comment type="line">// since process() can take arbitrarily long waiting for client input.</comment>
+                <comment type="line">// See comments at the end of serve().)</comment>
+                <while>while <condition>(<expr>!<name>stopped_</name> &amp;&amp; <call><name><name>processor</name>.<name>process</name></name><argument_list>(<argument><expr><name>inputProtocol</name></expr></argument>, <argument><expr><name>outputProtocol</name></expr></argument>)</argument_list></call></expr>)</condition>
+                <block>{
+                    <expr_stmt><expr><name>inputProtocol</name> = <call><name><name>inputProtocolFactory_</name>.<name>getProtocol</name></name><argument_list>(<argument><expr><name>inputTransport</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>outputProtocol</name> = <call><name><name>outputProtocolFactory_</name>.<name>getProtocol</name></name><argument_list>(<argument><expr><name>outputTransport</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></while>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>TTransportException</name></type> <name>ttx</name></decl></param>)</parameter_list>
+            <block>{
+                <comment type="line">// Assume the client died and continue silently</comment>
+                <comment type="line">// Log at debug to allow debugging of "frame too large" errors (see CASSANDRA-3142).</comment>
+                <expr_stmt><expr><call><name><name>LOGGER</name>.<name>debug</name></name><argument_list>(<argument><expr>"Thrift transport error occurred during processing of message."</expr></argument>, <argument><expr><name>ttx</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>TException</name></type> <name>tx</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>LOGGER</name>.<name>error</name></name><argument_list>(<argument><expr>"Thrift error occurred during processing of message."</expr></argument>, <argument><expr><name>tx</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>x</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>LOGGER</name>.<name>error</name></name><argument_list>(<argument><expr>"Error occurred during processing of message."</expr></argument>, <argument><expr><name>x</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></catch>
+            <finally>finally
+            <block>{
+                <expr_stmt><expr><call><name><name>activeClients</name>.<name>decrementAndGet</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></finally></try>
+
+            <if>if <condition>(<expr><name>inputTransport</name> != null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>inputTransport</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <if>if <condition>(<expr><name>outputTransport</name> != null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>outputTransport</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

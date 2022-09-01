@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\service\GCInspector.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>GarbageCollectorMXBean</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>MemoryMXBean</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>MemoryUsage</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>MBeanServer</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>ObjectName</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableDeletingTask</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>StatusLogger</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>GCInspector</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>GCInspector</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>final</specifier> <specifier>static</specifier> <name>long</name></type> <name>INTERVAL_IN_MS</name> <init>= <expr>1000</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>final</specifier> <specifier>static</specifier> <name>long</name></type> <name>MIN_DURATION</name> <init>= <expr>200</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>final</specifier> <specifier>static</specifier> <name>long</name></type> <name>MIN_DURATION_TPSTATS</name> <init>= <expr>1000</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>GCInspector</name></type> <name>instance</name> <init>= <expr>new <call><name>GCInspector</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>gctimes</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>gccounts</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>GarbageCollectorMXBean</name></argument>&gt;</argument_list></name></type> <name>beans</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>GarbageCollectorMXBean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>MemoryMXBean</name></type> <name>membean</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getMemoryMXBean</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>boolean</name></type> <name>cacheSizesReduced</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>GCInspector</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>MBeanServer</name></type> <name>server</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>ObjectName</name></type> <name>gcName</name> <init>= <expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>ManagementFactory</name>.<name>GARBAGE_COLLECTOR_MXBEAN_DOMAIN_TYPE</name></name> + ",*"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>ObjectName</name></type> <name>name</name> <range>: <expr><call><name><name>server</name>.<name>queryNames</name></name><argument_list>(<argument><expr><name>gcName</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>GarbageCollectorMXBean</name></type> <name>gc</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>newPlatformMXBeanProxy</name></name><argument_list>(<argument><expr><name>server</name></expr></argument>, <argument><expr><call><name><name>name</name>.<name>getCanonicalName</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>GarbageCollectorMXBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>beans</name>.<name>add</name></name><argument_list>(<argument><expr><name>gc</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// don't bother starting a thread that will do nothing.</comment>
+        <if>if <condition>(<expr><call><name><name>beans</name>.<name>size</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+            <return>return;</return></then></if>
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>t</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>logGCResults</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>scheduledTasks</name>.<name>scheduleWithFixedDelay</name></name><argument_list>(<argument><expr><name>t</name></expr></argument>, <argument><expr><name>INTERVAL_IN_MS</name></expr></argument>, <argument><expr><name>INTERVAL_IN_MS</name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>logGCResults</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>GarbageCollectorMXBean</name></type> <name>gc</name> <range>: <expr><name>beans</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>Long</name></type> <name>previousTotal</name> <init>= <expr><call><name><name>gctimes</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>gc</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>Long</name></type> <name>total</name> <init>= <expr><call><name><name>gc</name>.<name>getCollectionTime</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>previousTotal</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>previousTotal</name> = 0L</expr>;</expr_stmt></then></if>
+            <if>if <condition>(<expr><call><name><name>previousTotal</name>.<name>equals</name></name><argument_list>(<argument><expr><name>total</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+            <expr_stmt><expr><call><name><name>gctimes</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>gc</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>total</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>Long</name></type> <name>duration</name> <init>= <expr><name>total</name> - <name>previousTotal</name></expr></init></decl>;</decl_stmt> <comment type="line">// may be zero for a really fast collection</comment>
+
+            <decl_stmt><decl><type><name>Long</name></type> <name>previousCount</name> <init>= <expr><call><name><name>gccounts</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>gc</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>Long</name></type> <name>count</name> <init>= <expr><call><name><name>gc</name>.<name>getCollectionCount</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>previousCount</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>previousCount</name> = 0L</expr>;</expr_stmt></then></if>
+            <if>if <condition>(<expr><call><name><name>count</name>.<name>equals</name></name><argument_list>(<argument><expr><name>previousCount</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <expr_stmt><expr><call><name><name>gccounts</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>gc</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>count</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>MemoryUsage</name></type> <name>mu</name> <init>= <expr><call><name><name>membean</name>.<name>getHeapMemoryUsage</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>memoryUsed</name> <init>= <expr><call><name><name>mu</name>.<name>getUsed</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>memoryMax</name> <init>= <expr><call><name><name>mu</name>.<name>getMax</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><name>String</name></type> <name>st</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"GC for %s: %s ms for %s collections, %s used; max is %s"</expr></argument>,
+                                      <argument><expr><call><name><name>gc</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>duration</name></expr></argument>, <argument><expr><name>count</name> - <name>previousCount</name></expr></argument>, <argument><expr><name>memoryUsed</name></expr></argument>, <argument><expr><name>memoryMax</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>durationPerCollection</name> <init>= <expr><name>duration</name> / (<name>count</name> - <name>previousCount</name>)</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>durationPerCollection</name> &gt; <name>MIN_DURATION</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><name>st</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><name>st</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if></else></if>
+
+            <if>if <condition>(<expr><name>durationPerCollection</name> &gt; <name>MIN_DURATION_TPSTATS</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>StatusLogger</name>.<name>log</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <comment type="line">// if we just finished a full collection and we're still using a lot of memory, try to reduce the pressure</comment>
+            <if>if <condition>(<expr><call><name><name>gc</name>.<name>getName</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr>"ConcurrentMarkSweep"</expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>SSTableDeletingTask</name>.<name>rescheduleFailedTasks</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+                <decl_stmt><decl><type><name>double</name></type> <name>usage</name> <init>= <expr>(<name>double</name>) <name>memoryUsed</name> / <name>memoryMax</name></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><name>memoryUsed</name> &gt; <call><name><name>DatabaseDescriptor</name>.<name>getReduceCacheSizesAt</name></name><argument_list>()</argument_list></call> * <name>memoryMax</name> &amp;&amp; !<name>cacheSizesReduced</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>cacheSizesReduced</name> = true</expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Heap is " + <name>usage</name> + " full.  You may need to reduce memtable and/or cache sizes.  Cassandra is now reducing cache sizes to free up memory.  Adjust reduce_cache_sizes_at threshold in cassandra.yaml if you don't want Cassandra to do this automatically"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>CacheService</name>.<name>instance</name>.<name>reduceCacheSizes</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+
+                <if>if <condition>(<expr><name>memoryUsed</name> &gt; <call><name><name>DatabaseDescriptor</name>.<name>getFlushLargestMemtablesAt</name></name><argument_list>()</argument_list></call> * <name>memoryMax</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Heap is " + <name>usage</name> + " full.  You may need to reduce memtable and/or cache sizes.  Cassandra will now flush up to the two largest memtables to free up memory.  Adjust flush_largest_memtables_at threshold in cassandra.yaml if you don't want Cassandra to do this automatically"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>flushLargestMemtables</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></then></if>
+        }</block></for>
+    }</block></function>
+}</block></class>
+</unit>

@@ -1,0 +1,33 @@
+static void processKeys(CFDefinition cfDef, List<Relation> keys, Map<ColumnIdentifier, List<Term>> processed, CFDefinition.Name[] names) throws InvalidRequestException
+    {
+        for (Relation rel : keys)
+        {
+            CFDefinition.Name name = cfDef.get(rel.getEntity());
+            if (name == null)
+                throw new InvalidRequestException(String.format("Unknown key identifier %s", rel.getEntity()));
+
+            switch (name.kind)
+            {
+                case KEY_ALIAS:
+                case COLUMN_ALIAS:
+                    List<Term> values;
+                    if (rel.operator() == Relation.Type.EQ)
+                        values = Collections.singletonList(rel.getValue());
+                    else if (name.kind == CFDefinition.Name.Kind.KEY_ALIAS && rel.operator() == Relation.Type.IN)
+                        values = rel.getInValues();
+                    else
+                        throw new InvalidRequestException(String.format("Invalid operator %s for key %s", rel.operator(), rel.getEntity()));
+
+                    if (processed.containsKey(name.name))
+                        throw new InvalidRequestException(String.format("Multiple definition found for PRIMARY KEY part %s", name));
+                    for (Term value : values)
+                        if (value.isBindMarker())
+                            names[value.bindIndex] = name;
+                    processed.put(name.name, values);
+                    break;
+                case VALUE_ALIAS:
+                case COLUMN_METADATA:
+                    throw new InvalidRequestException(String.format("PRIMARY KEY part %s found in SET part", rel.getEntity()));
+            }
+        }
+    }

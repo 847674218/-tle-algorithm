@@ -1,0 +1,371 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\cql3\CFDefinition.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Joiner</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>AbstractIterator</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ColumnDefinition</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>ColumnToCollectionType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>CompositeType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>UTF8Type</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Holds metadata on a CF preprocessed for use by CQL queries.
+ */</comment>
+<class><specifier>public</specifier> class <name>CFDefinition</name> <super><implements>implements <name><name>Iterable</name><argument_list>&lt;<argument><name><name>CFDefinition</name>.<name>Name</name></name></argument>&gt;</argument_list></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>definitionType</name> <init>= <expr><name><name>UTF8Type</name>.<name>instance</name></name></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>DEFAULT_KEY_ALIAS</name> <init>= <expr>"key"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>DEFAULT_COLUMN_ALIAS</name> <init>= <expr>"column"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>DEFAULT_VALUE_ALIAS</name> <init>= <expr>"value"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>CFMetaData</name></type> <name>cfm</name></decl>;</decl_stmt>
+    <comment type="line">// LinkedHashMap because the order does matter (it is the order in the composite type)</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>LinkedHashMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Name</name></argument>&gt;</argument_list></name></type> <name>keys</name> <init>= <expr>new <call><name><name>LinkedHashMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Name</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>LinkedHashMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Name</name></argument>&gt;</argument_list></name></type> <name>columns</name> <init>= <expr>new <call><name><name>LinkedHashMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Name</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Name</name></type> <name>value</name></decl>;</decl_stmt>
+    <comment type="line">// Keep metadata lexicographically ordered so that wildcard expansion have a deterministic order</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Name</name></argument>&gt;</argument_list></name></type> <name>metadata</name> <init>= <expr>new <call><name><name>TreeMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Name</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>isComposite</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>hasCompositeKey</name></decl>;</decl_stmt>
+    <comment type="line">// Note that isCompact means here that no componet of the comparator correspond to the column names</comment>
+    <comment type="line">// defined in the CREATE TABLE QUERY. This is not exactly equivalent to the 'WITH COMPACT STORAGE'</comment>
+    <comment type="line">// option when creating a table in that "static CF" without a composite type will have isCompact == false</comment>
+    <comment type="line">// even though one must use 'WITH COMPACT STORAGE' to declare them.</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>isCompact</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>hasCollections</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CFDefinition</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>cfm</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>cfm</name></name> = <name>cfm</name></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>cfm</name>.<name>getKeyValidator</name></name><argument_list>()</argument_list></call> instanceof <name>CompositeType</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>hasCompositeKey</name></name> = true</expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>CompositeType</name></type> <name>keyComposite</name> <init>= <expr>(<name>CompositeType</name>)<call><name><name>cfm</name>.<name>getKeyValidator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><call><name><name>keyComposite</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 1</expr>;</assert>
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>keyComposite</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <block>{
+                <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>id</name> <init>= <expr><call><name>getKeyId</name><argument_list>(<argument><expr><name>cfm</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>this</name>.<name>keys</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr>new <call><name>Name</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name><name>Name</name>.<name>Kind</name>.<name>KEY_ALIAS</name></name></expr></argument>, <argument><expr><name>i</name></expr></argument>, <argument><expr><call><name><name>keyComposite</name>.<name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>hasCompositeKey</name></name> = false</expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>id</name> <init>= <expr><call><name>getKeyId</name><argument_list>(<argument><expr><name>cfm</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>this</name>.<name>keys</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr>new <call><name>Name</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name><name>Name</name>.<name>Kind</name>.<name>KEY_ALIAS</name></name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>cfm</name>.<name>getKeyValidator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <if>if <condition>(<expr><name><name>cfm</name>.<name>comparator</name></name> instanceof <name>CompositeType</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>isComposite</name></name> = true</expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>CompositeType</name></type> <name>composite</name> <init>= <expr>(<name>CompositeType</name>)<name><name>cfm</name>.<name>comparator</name></name></expr></init></decl>;</decl_stmt>
+            <comment type="block">/*
+             * We are a "sparse" composite, i.e. a non-compact one, if either:
+             *   - the last type of the composite is a ColumnToCollectionType
+             *   - or we have one less alias than of composite types and the last type is UTF8Type.
+             *
+             * Note that this is not perfect: if someone upgrading from thrift "renames" all but
+             * the last column alias, the cf will be considered "sparse" and he will be stuck with
+             * that even though that might not be what he wants. But the simple workaround is
+             * for that user to rename all the aliases at the same time in the first place.
+             */</comment>
+            <decl_stmt><decl><type><name>int</name></type> <name>last</name> <init>= <expr><call><name><name>composite</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>lastType</name> <init>= <expr><call><name><name>composite</name>.<name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>last</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>lastType</name> instanceof <name>ColumnToCollectionType</name>
+                || (<call><name><name>cfm</name>.<name>getColumnAliases</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> == <name>last</name> &amp;&amp; <name>lastType</name> instanceof <name>UTF8Type</name>)</expr>)</condition><then>
+            <block>{
+                <comment type="line">// "sparse" composite</comment>
+                <expr_stmt><expr><name><name>this</name>.<name>isCompact</name></name> = false</expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>value</name></name> = null</expr>;</expr_stmt>
+                <assert>assert <expr><call><name><name>cfm</name>.<name>getValueAlias</name></name><argument_list>()</argument_list></call> == null</expr>;</assert>
+                <comment type="line">// check for collection type</comment>
+                <if>if <condition>(<expr><name>lastType</name> instanceof <name>ColumnToCollectionType</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr>--<name>last</name></expr>;</expr_stmt>
+                    <expr_stmt><expr><name><name>this</name>.<name>hasCollections</name></name> = true</expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><name><name>this</name>.<name>hasCollections</name></name> = false</expr>;</expr_stmt>
+                }</block></else></if>
+
+                <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>last</name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>id</name> <init>= <expr><call><name>getColumnId</name><argument_list>(<argument><expr><name>cfm</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>this</name>.<name>columns</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr>new <call><name>Name</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name><name>Name</name>.<name>Kind</name>.<name>COLUMN_ALIAS</name></name></expr></argument>, <argument><expr><name>i</name></expr></argument>, <argument><expr><call><name><name>composite</name>.<name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+
+                <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>ColumnDefinition</name></argument>&gt;</argument_list></name></name></type> <name>def</name> <range>: <expr><call><name><name>cfm</name>.<name>getColumn_metadata</name></name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>id</name> <init>= <expr>new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr><call><name><name>def</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>cfm</name>.<name>getColumnDefinitionComparator</name></name><argument_list>(<argument><expr><call><name><name>def</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>this</name>.<name>metadata</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr>new <call><name>Name</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name><name>Name</name>.<name>Kind</name>.<name>COLUMN_METADATA</name></name></expr></argument>, <argument><expr><call><name><name>def</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getValidator</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></then>
+            <else>else
+            <block>{
+                <comment type="line">// "dense" composite</comment>
+                <expr_stmt><expr><name><name>this</name>.<name>isCompact</name></name> = true</expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>hasCollections</name></name> = false</expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>composite</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>id</name> <init>= <expr><call><name>getColumnId</name><argument_list>(<argument><expr><name>cfm</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>this</name>.<name>columns</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr>new <call><name>Name</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name><name>Name</name>.<name>Kind</name>.<name>COLUMN_ALIAS</name></name></expr></argument>, <argument><expr><name>i</name></expr></argument>, <argument><expr><call><name><name>composite</name>.<name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+                <expr_stmt><expr><name><name>this</name>.<name>value</name></name> = <call><name>createValue</name><argument_list>(<argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>isComposite</name></name> = false</expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>hasCollections</name></name> = false</expr>;</expr_stmt>
+            <if>if <condition>(<expr>!<call><name><name>cfm</name>.<name>getColumnAliases</name></name><argument_list>()</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call> || <call><name><name>cfm</name>.<name>getColumn_metadata</name></name><argument_list>()</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <comment type="line">// dynamic CF</comment>
+                <expr_stmt><expr><name><name>this</name>.<name>isCompact</name></name> = true</expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>id</name> <init>= <expr><call><name>getColumnId</name><argument_list>(<argument><expr><name>cfm</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>Name</name></type> <name>name</name> <init>= <expr>new <call><name>Name</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name><name>Name</name>.<name>Kind</name>.<name>COLUMN_ALIAS</name></name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name><name>cfm</name>.<name>comparator</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>this</name>.<name>columns</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>value</name></name> = <call><name>createValue</name><argument_list>(<argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <comment type="line">// static CF</comment>
+                <expr_stmt><expr><name><name>this</name>.<name>isCompact</name></name> = false</expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>value</name></name> = null</expr>;</expr_stmt>
+                <assert>assert <expr><call><name><name>cfm</name>.<name>getValueAlias</name></name><argument_list>()</argument_list></call> == null</expr>;</assert>
+                <assert>assert <expr><call><name><name>cfm</name>.<name>getColumnAliases</name></name><argument_list>()</argument_list></call> == null || <call><name><name>cfm</name>.<name>getColumnAliases</name></name><argument_list>()</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>;</assert>
+                <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>ColumnDefinition</name></argument>&gt;</argument_list></name></name></type> <name>def</name> <range>: <expr><call><name><name>cfm</name>.<name>getColumn_metadata</name></name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>id</name> <init>= <expr>new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr><call><name><name>def</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>cfm</name>.<name>getColumnDefinitionComparator</name></name><argument_list>(<argument><expr><call><name><name>def</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>this</name>.<name>metadata</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr>new <call><name>Name</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name><name>Name</name>.<name>Kind</name>.<name>COLUMN_METADATA</name></name></expr></argument>, <argument><expr><call><name><name>def</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getValidator</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></else></if>
+        }</block></else></if>
+        <assert>assert <expr><name>value</name> == null || <call><name><name>metadata</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>ColumnIdentifier</name></type> <name>getKeyId</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>cfm</name></decl></param>, <param><decl><type><name>int</name></type> <name>i</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>definedNames</name> <init>= <expr><call><name><name>cfm</name>.<name>getKeyAliases</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// For compatibility sake, non-composite key default alias is 'key', not 'key1'.</comment>
+        <return>return <expr><name>definedNames</name> == null || <name>i</name> &gt;= <call><name><name>definedNames</name>.<name>size</name></name><argument_list>()</argument_list></call> || <call><name><name>cfm</name>.<name>getKeyAliases</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call> == null
+             ? new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr><name>i</name> == 0 ? <name>DEFAULT_KEY_ALIAS</name> : <name>DEFAULT_KEY_ALIAS</name> + (<name>i</name> + 1)</expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call>
+             : new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr><call><name><name>cfm</name>.<name>getKeyAliases</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>definitionType</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>ColumnIdentifier</name></type> <name>getColumnId</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>cfm</name></decl></param>, <param><decl><type><name>int</name></type> <name>i</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>definedNames</name> <init>= <expr><call><name><name>cfm</name>.<name>getColumnAliases</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>definedNames</name> == null || <name>i</name> &gt;= <call><name><name>definedNames</name>.<name>size</name></name><argument_list>()</argument_list></call> || <call><name><name>cfm</name>.<name>getColumnAliases</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call> == null
+             ? new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr><name>DEFAULT_COLUMN_ALIAS</name> + (<name>i</name> + 1)</expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call>
+             : new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr><call><name><name>cfm</name>.<name>getColumnAliases</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>definitionType</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>ColumnIdentifier</name></type> <name>getValueId</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>cfm</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cfm</name>.<name>getValueAlias</name></name><argument_list>()</argument_list></call> == null
+             ? new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr><name>DEFAULT_VALUE_ALIAS</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call>
+             : new <call><name>ColumnIdentifier</name><argument_list>(<argument><expr><call><name><name>cfm</name>.<name>getValueAlias</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>definitionType</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnToCollectionType</name></type> <name>getCollectionType</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>hasCollections</name></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>CompositeType</name></type> <name>composite</name> <init>= <expr>(<name>CompositeType</name>)<name><name>cfm</name>.<name>comparator</name></name></expr></init></decl>;</decl_stmt>
+        <return>return <expr>(<name>ColumnToCollectionType</name>)<call><name><name>composite</name>.<name>types</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>composite</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>Name</name></type> <name>createValue</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>cfm</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>alias</name> <init>= <expr><call><name>getValueId</name><argument_list>(<argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// That's how we distinguish between 'no value alias because coming from thrift' and 'I explicitely did not</comment>
+        <comment type="line">// define a value' (see CreateColumnFamilyStatement)</comment>
+        <return>return <expr><call><name><name>alias</name>.<name>key</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></argument>)</argument_list></call>
+               ? null
+               : new <call><name>Name</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>alias</name></expr></argument>, <argument><expr><name><name>Name</name>.<name>Kind</name>.<name>VALUE_ALIAS</name></name></expr></argument>, <argument><expr><call><name><name>cfm</name>.<name>getDefaultValidator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Name</name></type> <name>get</name><parameter_list>(<param><decl><type><name>ColumnIdentifier</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>CFDefinition</name>.<name>Name</name></name></type> <name>kdef</name> <init>= <expr><call><name><name>keys</name>.<name>get</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>kdef</name> != null</expr>)</condition><then>
+            <return>return <expr><name>kdef</name></expr>;</return></then></if>
+        <if>if <condition>(<expr><name>value</name> != null &amp;&amp; <call><name><name>name</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>value</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr><name>value</name></expr>;</return></then></if>
+        <decl_stmt><decl><type><name><name>CFDefinition</name>.<name>Name</name></name></type> <name>def</name> <init>= <expr><call><name><name>columns</name>.<name>get</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>def</name> != null</expr>)</condition><then>
+            <return>return <expr><name>def</name></expr>;</return></then></if>
+        <return>return <expr><call><name><name>metadata</name>.<name>get</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>Name</name></argument>&gt;</argument_list></name></type> <name>iterator</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <class><super><name><name>AbstractIterator</name><argument_list>&lt;<argument><name>Name</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>Name</name></argument>&gt;</argument_list></name></type> <name>keyIter</name> <init>= <expr><call><name><name>keys</name>.<name>values</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>Name</name></argument>&gt;</argument_list></name></type> <name>columnIter</name> <init>= <expr><call><name><name>columns</name>.<name>values</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>valueDone</name></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>Name</name></argument>&gt;</argument_list></name></type> <name>metadataIter</name> <init>= <expr><call><name><name>metadata</name>.<name>values</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <function><type><specifier>protected</specifier> <name>Name</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>keyIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><call><name><name>keyIter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+                <if>if <condition>(<expr><call><name><name>columnIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><call><name><name>columnIter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+                <if>if <condition>(<expr><name>value</name> != null &amp;&amp; !<name>valueDone</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>valueDone</name> = true</expr>;</expr_stmt>
+                    <return>return <expr><name>value</name></expr>;</return>
+                }</block></then></if>
+
+                <if>if <condition>(<expr><call><name><name>metadataIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><call><name><name>metadataIter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+                <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnNameBuilder</name></type> <name>getKeyNameBuilder</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>hasCompositeKey</name>
+             ? new <call><name><name>CompositeType</name>.<name>Builder</name></name><argument_list>(<argument><expr>(<name>CompositeType</name>)<call><name><name>cfm</name>.<name>getKeyValidator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+             : new <call><name>NonCompositeBuilder</name><argument_list>(<argument><expr><call><name><name>cfm</name>.<name>getKeyValidator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnNameBuilder</name></type> <name>getColumnNameBuilder</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>isComposite</name>
+             ? new <call><name><name>CompositeType</name>.<name>Builder</name></name><argument_list>(<argument><expr>(<name>CompositeType</name>)<name><name>cfm</name>.<name>comparator</name></name></expr></argument>)</argument_list></call>
+             : new <call><name>NonCompositeBuilder</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>comparator</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>Name</name> <super><extends>extends <name>ColumnSpecification</name></extends></super>
+    <block>{
+        <enum><specifier>public</specifier> <specifier>static</specifier> enum <name>Kind</name>
+        <block>{
+            <decl><name>KEY_ALIAS</name></decl>, <decl><name>COLUMN_ALIAS</name></decl>, <decl><name>VALUE_ALIAS</name></decl>, <decl><name>COLUMN_METADATA</name></decl>
+        }</block></enum>
+
+        <constructor><specifier>private</specifier> <name>Name</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ksName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>, <param><decl><type><name>ColumnIdentifier</name></type> <name>name</name></decl></param>, <param><decl><type><name>Kind</name></type> <name>kind</name></decl></param>, <param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>ksName</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name>kind</name></expr></argument>, <argument><expr>-1</expr></argument>, <argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <constructor><specifier>private</specifier> <name>Name</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ksName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>, <param><decl><type><name>ColumnIdentifier</name></type> <name>name</name></decl></param>, <param><decl><type><name>Kind</name></type> <name>kind</name></decl></param>, <param><decl><type><name>int</name></type> <name>position</name></decl></param>, <param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>ksName</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>kind</name></name> = <name>kind</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>position</name></name> = <name>position</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Kind</name></type> <name>kind</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>int</name></type> <name>position</name></decl>;</decl_stmt> <comment type="line">// only make sense for KEY_ALIAS and COLUMN_ALIAS</comment>
+    }</block></class>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>Joiner</name>.<name>on</name></name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call>.<call><name>join</name><argument_list>(<argument><expr><call><name><name>keys</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr>!<call><name><name>columns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>Joiner</name>.<name>on</name></name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call>.<call><name>join</name><argument_list>(<argument><expr><call><name><name>columns</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>" =&gt; "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>value</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name><name>value</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr>!<call><name><name>metadata</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"{"</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>Joiner</name>.<name>on</name></name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call>.<call><name>join</name><argument_list>(<argument><expr><call><name><name>metadata</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>" }"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>NonCompositeBuilder</name> <super><implements>implements <name>ColumnNameBuilder</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>columnName</name></decl>;</decl_stmt>
+
+        <constructor><specifier>private</specifier> <name>NonCompositeBuilder</name><parameter_list>(<param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>type</name></name> = <name>type</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>NonCompositeBuilder</name></type> <name>add</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>columnName</name> != null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"Column name is already constructed"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <expr_stmt><expr><name>columnName</name> = <name>bb</name></expr>;</expr_stmt>
+            <return>return <expr><name>this</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>NonCompositeBuilder</name></type> <name>add</name><parameter_list>(<param><decl><type><name>Term</name></type> <name>t</name></decl></param>, <param><decl><type><name><name>Relation</name>.<name>Type</name></name></type> <name>op</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>variables</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+        <block>{
+            <if>if <condition>(<expr><name>columnName</name> != null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"Column name is already constructed"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <comment type="line">// We don't support the relation type yet, i.e., there is no distinction between x &gt; 3 and x &gt;= 3.</comment>
+            <expr_stmt><expr><name>columnName</name> = <call><name><name>t</name>.<name>getByteBuffer</name></name><argument_list>(<argument><expr><name>type</name></expr></argument>, <argument><expr><name>variables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>this</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>componentCount</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>columnName</name> == null ? 0 : 1</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>remainingCount</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>columnName</name> == null ? 1 : 0</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>build</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>columnName</name> == null ? <name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name> : <name>columnName</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>buildAsEndOfRange</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name>build</name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>NonCompositeBuilder</name></type> <name>copy</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>NonCompositeBuilder</name></type> <name>newBuilder</name> <init>= <expr>new <call><name>NonCompositeBuilder</name><argument_list>(<argument><expr><name>type</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name><name>newBuilder</name>.<name>columnName</name></name> = <name>columnName</name></expr>;</expr_stmt>
+            <return>return <expr><name>newBuilder</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

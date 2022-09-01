@@ -1,0 +1,76 @@
+private void doSlice(String keyspace, ByteBuffer key, String columnFamily, byte[] superColumnName, int limit)
+            throws InvalidRequestException, UnavailableException, TimedOutException, TException, IllegalAccessException, NotFoundException, InstantiationException, NoSuchFieldException
+    {
+
+        long startTime = System.nanoTime();
+        ColumnParent parent = new ColumnParent(columnFamily);
+        if(superColumnName != null)
+            parent.setSuper_column(superColumnName);
+
+        SliceRange range = new SliceRange(ByteBufferUtil.EMPTY_BYTE_BUFFER, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, limit);
+        SlicePredicate predicate = new SlicePredicate().setColumn_names(null).setSlice_range(range);
+
+        CfDef cfDef = getCfDef(columnFamily);
+        boolean isSuperCF = cfDef.column_type.equals("Super");
+
+        List<ColumnOrSuperColumn> columns = thriftClient.get_slice(key, parent, predicate, consistencyLevel);
+        AbstractType<?> validator;
+
+        // Print out super columns or columns.
+        for (ColumnOrSuperColumn cosc : columns)
+        {
+            if (cosc.isSetSuper_column())
+            {
+                SuperColumn superColumn = cosc.super_column;
+
+                sessionState.out.printf("=> (super_column=%s,", formatColumnName(keyspace, columnFamily, superColumn.name));
+                for (Column col : superColumn.getColumns())
+                {
+                    validator = getValidatorForValue(cfDef, col.getName());
+                    sessionState.out.printf("%n     (column=%s, value=%s, timestamp=%d%s)", formatSubcolumnName(keyspace, columnFamily, col.name),
+                                                    validator.getString(col.value), col.timestamp,
+                                                    col.isSetTtl() ? String.format(", ttl=%d", col.getTtl()) : "");
+                }
+
+                sessionState.out.println(")");
+            }
+            else if (cosc.isSetColumn())
+            {
+                Column column = cosc.column;
+                validator = getValidatorForValue(cfDef, column.getName());
+
+                String formattedName = isSuperCF
+                                       ? formatSubcolumnName(keyspace, columnFamily, column.name)
+                                       : formatColumnName(keyspace, columnFamily, column.name);
+
+                sessionState.out.printf("=> (column=%s, value=%s, timestamp=%d%s)%n",
+                                        formattedName,
+                                        validator.getString(column.value),
+                                        column.timestamp,
+                                        column.isSetTtl() ? String.format(", ttl=%d", column.getTtl()) : "");
+            }
+            else if (cosc.isSetCounter_super_column())
+            {
+                CounterSuperColumn superColumn = cosc.counter_super_column;
+
+                sessionState.out.printf("=> (super_column=%s,", formatColumnName(keyspace, columnFamily, superColumn.name));
+                for (CounterColumn col : superColumn.getColumns())
+                {
+                    sessionState.out.printf("%n     (counter=%s, value=%s)", formatSubcolumnName(keyspace, columnFamily, col.name), col.value);
+                }
+                sessionState.out.println(")");
+            }
+            else // cosc.isSetCounter_column()
+            {
+                CounterColumn column = cosc.counter_column;
+                String formattedName = isSuperCF
+                                       ? formatSubcolumnName(keyspace, columnFamily, column.name)
+                                       : formatColumnName(keyspace, columnFamily, column.name);
+
+                sessionState.out.printf("=> (counter=%s, value=%s)%n", formattedName, column.value);
+            }
+        }
+
+        sessionState.out.println("Returned " + columns.size() + " results.");
+        elapsedTime(startTime);
+    }

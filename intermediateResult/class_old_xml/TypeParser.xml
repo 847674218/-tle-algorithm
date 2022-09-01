@@ -1,0 +1,434 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\marshal\TypeParser.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>lang</name>.<name>reflect</name>.<name>Field</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>reflect</name>.<name>InvocationTargetException</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>reflect</name>.<name>Method</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Iterator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Parse a string containing an Type definition.
+ */</comment>
+<class><specifier>public</specifier> class <name>TypeParser</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>str</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>idx</name></decl>;</decl_stmt>
+
+    <comment type="line">// A cache of parsed string, specially useful for DynamicCompositeType</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>cache</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>TypeParser</name></type> <name>EMPTY_PARSER</name> <init>= <expr>new <call><name>TypeParser</name><argument_list>(<argument><expr>""</expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>private</specifier> <name>TypeParser</name><parameter_list>(<param><decl><type><name>String</name></type> <name>str</name></decl></param>, <param><decl><type><name>int</name></type> <name>idx</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>str</name></name> = <name>str</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>idx</name></name> = <name>idx</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Parse a string containing an type definition.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>parse</name><parameter_list>(<param><decl><type><name>String</name></type> <name>str</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>str</name> == null</expr>)</condition><then>
+            <return>return <expr><name><name>BytesType</name>.<name>instance</name></name></expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name> <init>= <expr><call><name><name>cache</name>.<name>get</name></name><argument_list>(<argument><expr><name>str</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>type</name> != null</expr>)</condition><then>
+            <return>return <expr><name>type</name></expr>;</return></then></if>
+
+        <comment type="line">// This could be simplier (i.e. new TypeParser(str).parse()) but we avoid creating a TypeParser object if not really necessary.</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>i</name> = <call><name>skipBlank</name><argument_list>(<argument><expr><name>str</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>j</name> <init>= <expr><name>i</name></expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr>!<call><name>isEOS</name><argument_list>(<argument><expr><name>str</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call> &amp;&amp; <call><name>isIdentifierChar</name><argument_list>(<argument><expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition>
+            <expr_stmt><expr>++<name>i</name></expr>;</expr_stmt></while>
+
+        <if>if <condition>(<expr><name>i</name> == <name>j</name></expr>)</condition><then>
+            <return>return <expr><name><name>BytesType</name>.<name>instance</name></name></expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>String</name></type> <name>name</name> <init>= <expr><call><name><name>str</name>.<name>substring</name></name><argument_list>(<argument><expr><name>j</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>i</name> = <call><name>skipBlank</name><argument_list>(<argument><expr><name>str</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr>!<call><name>isEOS</name><argument_list>(<argument><expr><name>str</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call> == '('</expr>)</condition><then>
+            <expr_stmt><expr><name>type</name> = <call><name>getAbstractType</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr>new <call><name>TypeParser</name><argument_list>(<argument><expr><name>str</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><name>type</name> = <call><name>getAbstractType</name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+
+        <comment type="line">// We don't really care about concurrency here. Worst case scenario, we do some parsing unnecessarily</comment>
+        <expr_stmt><expr><call><name><name>cache</name>.<name>put</name></name><argument_list>(<argument><expr><name>str</name></expr></argument>, <argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>type</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>parse</name><parameter_list>(<param><decl><type><name>CharSequence</name></type> <name>compareWith</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>parse</name><argument_list>(<argument><expr><name>compareWith</name> == null ? null : <call><name><name>compareWith</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>String</name></type> <name>getShortName</name><parameter_list>(<param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>type</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Parse an AbstractType from current position of this parser.
+     */</comment>
+    <function><type><specifier>private</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>parse</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>skipBlank</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>name</name> <init>= <expr><call><name>readNextIdentifier</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name>skipBlank</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr>!<call><name>isEOS</name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> == '('</expr>)</condition><then>
+            <return>return <expr><call><name>getAbstractType</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</return></then>
+        <else>else
+            <return>return <expr><call><name>getAbstractType</name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</return></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getKeyValueParameters</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name>isEOS</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><name>map</name></expr>;</return></then></if>
+
+        <if>if <condition>(<expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> != '('</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr>++<name>idx</name></expr>;</expr_stmt> <comment type="line">// skipping '('</comment>
+
+        <while>while <condition>(<expr><call><name>skipBlankAndComma</name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> == ')'</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr>++<name>idx</name></expr>;</expr_stmt>
+                <return>return <expr><name>map</name></expr>;</return>
+            }</block></then></if>
+
+            <decl_stmt><decl><type><name>String</name></type> <name>k</name> <init>= <expr><call><name>readNextIdentifier</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>v</name> <init>= <expr>""</expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name>skipBlank</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> == '='</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr>++<name>idx</name></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>skipBlank</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>v</name> = <call><name>readNextIdentifier</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else <if>if <condition>(<expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> != ',' &amp;&amp; <call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> != ')'</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name>throwSyntaxError</name><argument_list>(<argument><expr>"unexpected character '" + <call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> + "'"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if></else></if>
+            <expr_stmt><expr><call><name><name>map</name>.<name>put</name></name><argument_list>(<argument><expr><name>k</name></expr></argument>, <argument><expr><name>v</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></while>
+        <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Syntax error parsing '%s' at char %d: unexpected end of string"</expr></argument>, <argument><expr><name>str</name></expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getTypeParameters</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>list</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name>isEOS</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><name>list</name></expr>;</return></then></if>
+
+        <if>if <condition>(<expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> != '('</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr>++<name>idx</name></expr>;</expr_stmt> <comment type="line">// skipping '('</comment>
+
+        <while>while <condition>(<expr><call><name>skipBlankAndComma</name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> == ')'</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr>++<name>idx</name></expr>;</expr_stmt>
+                <return>return <expr><name>list</name></expr>;</return>
+            }</block></then></if>
+
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>list</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>parse</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>ConfigurationException</name></type> <name>ex</name> <init>= <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Exception while parsing '%s' around char %d"</expr></argument>, <argument><expr><name>str</name></expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>ex</name>.<name>initCause</name></name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <throw>throw <expr><name>ex</name></expr>;</throw>
+            }</block></catch></try>
+        }</block></while>
+        <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Syntax error parsing '%s' at char %d: unexpected end of string"</expr></argument>, <argument><expr><name>str</name></expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getAliasParameters</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name>isEOS</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><name>map</name></expr>;</return></then></if>
+
+        <if>if <condition>(<expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> != '('</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr>++<name>idx</name></expr>;</expr_stmt> <comment type="line">// skipping '('</comment>
+
+
+        <while>while <condition>(<expr><call><name>skipBlankAndComma</name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> == ')'</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr>++<name>idx</name></expr>;</expr_stmt>
+                <return>return <expr><name>map</name></expr>;</return>
+            }</block></then></if>
+
+            <decl_stmt><decl><type><name>String</name></type> <name>alias</name> <init>= <expr><call><name>readNextIdentifier</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>alias</name>.<name>length</name></name><argument_list>()</argument_list></call> != 1</expr>)</condition><then>
+                <expr_stmt><expr><call><name>throwSyntaxError</name><argument_list>(<argument><expr>"An alias should be a single character"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <decl_stmt><decl><type><name>char</name></type> <name>aliasChar</name> <init>= <expr><call><name><name>alias</name>.<name>charAt</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name><name>aliasChar</name> <argument_list>&lt; <argument>33 || <name>aliasChar</name></argument> &gt;</argument_list></name> 127</expr>)</condition><then>
+                <expr_stmt><expr><call><name>throwSyntaxError</name><argument_list>(<argument><expr>"An alias should be a single character in [0..9a..bA..B-+._&amp;]"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <expr_stmt><expr><call><name>skipBlank</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr>!(<call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call> == '=' &amp;&amp; <call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name>+1</expr></argument>)</argument_list></call> == '&gt;')</expr>)</condition><then>
+                <expr_stmt><expr><call><name>throwSyntaxError</name><argument_list>(<argument><expr>"expecting '=&gt;' token"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <expr_stmt><expr><name>idx</name> += 2</expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>skipBlank</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>map</name>.<name>put</name></name><argument_list>(<argument><expr>(<name>byte</name>)<name>aliasChar</name></expr></argument>, <argument><expr><call><name>parse</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>ConfigurationException</name></type> <name>ex</name> <init>= <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Exception while parsing '%s' around char %d"</expr></argument>, <argument><expr><name>str</name></expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>ex</name>.<name>initCause</name></name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <throw>throw <expr><name>ex</name></expr>;</throw>
+            }</block></catch></try>
+        }</block></while>
+        <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Syntax error parsing '%s' at char %d: unexpected end of string"</expr></argument>, <argument><expr><name>str</name></expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getAbstractType</name><parameter_list>(<param><decl><type><name>String</name></type> <name>compareWith</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>className</name> <init>= <expr><call><name><name>compareWith</name>.<name>contains</name></name><argument_list>(<argument><expr>"."</expr></argument>)</argument_list></call> ? <name>compareWith</name> : "org.apache.cassandra.db.marshal." + <name>compareWith</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></extends></argument>&gt;</argument_list></name></type> <name>typeClass</name> <init>= <expr><name><name>FBUtilities</name>.</name>&lt;<name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name>&gt;<call><name>classForName</name><argument_list>(<argument><expr><name>className</name></expr></argument>, <argument><expr>"abstract-type"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>Field</name></type> <name>field</name> <init>= <expr><call><name><name>typeClass</name>.<name>getDeclaredField</name></name><argument_list>(<argument><expr>"instance"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>(<name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name>) <call><name><name>field</name>.<name>get</name></name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>NoSuchFieldException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// Trying with empty parser</comment>
+            <return>return <expr><call><name>getRawAbstractType</name><argument_list>(<argument><expr><name>typeClass</name></expr></argument>, <argument><expr><name>EMPTY_PARSER</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IllegalAccessException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// Trying with empty parser</comment>
+            <return>return <expr><call><name>getRawAbstractType</name><argument_list>(<argument><expr><name>typeClass</name></expr></argument>, <argument><expr><name>EMPTY_PARSER</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getAbstractType</name><parameter_list>(<param><decl><type><name>String</name></type> <name>compareWith</name></decl></param>, <param><decl><type><name>TypeParser</name></type> <name>parser</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>className</name> <init>= <expr><call><name><name>compareWith</name>.<name>contains</name></name><argument_list>(<argument><expr>"."</expr></argument>)</argument_list></call> ? <name>compareWith</name> : "org.apache.cassandra.db.marshal." + <name>compareWith</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></extends></argument>&gt;</argument_list></name></type> <name>typeClass</name> <init>= <expr><name><name>FBUtilities</name>.</name>&lt;<name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name>&gt;<call><name>classForName</name><argument_list>(<argument><expr><name>className</name></expr></argument>, <argument><expr>"abstract-type"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>Method</name></type> <name>method</name> <init>= <expr><call><name><name>typeClass</name>.<name>getDeclaredMethod</name></name><argument_list>(<argument><expr>"getInstance"</expr></argument>, <argument><expr><name><name>TypeParser</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>(<name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name>) <call><name><name>method</name>.<name>invoke</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>parser</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>NoSuchMethodException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// Trying to see if we have an instance field and apply the default parameter to it</comment>
+            <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name> <init>= <expr><call><name>getRawAbstractType</name><argument_list>(<argument><expr><name>typeClass</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>AbstractType</name>.<name>parseDefaultParameters</name></name><argument_list>(<argument><expr><name>type</name></expr></argument>, <argument><expr><name>parser</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IllegalAccessException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// Trying to see if we have an instance field and apply the default parameter to it</comment>
+            <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name> <init>= <expr><call><name>getRawAbstractType</name><argument_list>(<argument><expr><name>typeClass</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>AbstractType</name>.<name>parseDefaultParameters</name></name><argument_list>(<argument><expr><name>type</name></expr></argument>, <argument><expr><name>parser</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>InvocationTargetException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>ConfigurationException</name></type> <name>ex</name> <init>= <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Invalid definition for comparator " + <call><name><name>typeClass</name>.<name>getName</name></name><argument_list>()</argument_list></call> + "."</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>ex</name>.<name>initCause</name></name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getTargetException</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <throw>throw <expr><name>ex</name></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getRawAbstractType</name><parameter_list>(<param><decl><type><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></extends></argument>&gt;</argument_list></name></type> <name>typeClass</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>Field</name></type> <name>field</name> <init>= <expr><call><name><name>typeClass</name>.<name>getDeclaredField</name></name><argument_list>(<argument><expr>"instance"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>(<name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name>) <call><name><name>field</name>.<name>get</name></name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>NoSuchFieldException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Invalid comparator class " + <call><name><name>typeClass</name>.<name>getName</name></name><argument_list>()</argument_list></call> + ": must define a public static instance field or a public static method getInstance(TypeParser)."</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IllegalAccessException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Invalid comparator class " + <call><name><name>typeClass</name>.<name>getName</name></name><argument_list>()</argument_list></call> + ": must define a public static instance field or a public static method getInstance(TypeParser)."</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getRawAbstractType</name><parameter_list>(<param><decl><type><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></extends></argument>&gt;</argument_list></name></type> <name>typeClass</name></decl></param>, <param><decl><type><name>TypeParser</name></type> <name>parser</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>Method</name></type> <name>method</name> <init>= <expr><call><name><name>typeClass</name>.<name>getDeclaredMethod</name></name><argument_list>(<argument><expr>"getInstance"</expr></argument>, <argument><expr><name><name>TypeParser</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>(<name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name>) <call><name><name>method</name>.<name>invoke</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>parser</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>NoSuchMethodException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Invalid comparator class " + <call><name><name>typeClass</name>.<name>getName</name></name><argument_list>()</argument_list></call> + ": must define a public static instance field or a public static method getInstance(TypeParser)."</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IllegalAccessException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Invalid comparator class " + <call><name><name>typeClass</name>.<name>getName</name></name><argument_list>()</argument_list></call> + ": must define a public static instance field or a public static method getInstance(TypeParser)."</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>InvocationTargetException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>ConfigurationException</name></type> <name>ex</name> <init>= <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Invalid definition for comparator " + <call><name><name>typeClass</name>.<name>getName</name></name><argument_list>()</argument_list></call> + "."</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>ex</name>.<name>initCause</name></name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getTargetException</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <throw>throw <expr><name>ex</name></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>throwSyntaxError</name><parameter_list>(<param><decl><type><name>String</name></type> <name>msg</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Syntax error parsing '%s' at char %d: %s"</expr></argument>, <argument><expr><name>str</name></expr></argument>, <argument><expr><name>idx</name></expr></argument>, <argument><expr><name>msg</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>isEOS</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>isEOS</name><argument_list>(<argument><expr><name>str</name></expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>isEOS</name><parameter_list>(<param><decl><type><name>String</name></type> <name>str</name></decl></param>, <param><decl><type><name>int</name></type> <name>i</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name>i</name> &gt;= <call><name><name>str</name>.<name>length</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>isBlank</name><parameter_list>(<param><decl><type><name>int</name></type> <name>c</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name>c</name> == ' ' || <name>c</name> == '\t' || <name>c</name> == '\n'</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>skipBlank</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>idx</name> = <call><name>skipBlank</name><argument_list>(<argument><expr><name>str</name></expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>int</name></type> <name>skipBlank</name><parameter_list>(<param><decl><type><name>String</name></type> <name>str</name></decl></param>, <param><decl><type><name>int</name></type> <name>i</name></decl></param>)</parameter_list>
+    <block>{
+        <while>while <condition>(<expr>!<call><name>isEOS</name><argument_list>(<argument><expr><name>str</name></expr></argument>, <argument><expr><name>i</name></expr></argument>)</argument_list></call> &amp;&amp; <call><name>isBlank</name><argument_list>(<argument><expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition>
+            <expr_stmt><expr>++<name>i</name></expr>;</expr_stmt></while>
+
+        <return>return <expr><name>i</name></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// skip all blank and at best one comma, return true if there not EOS</comment>
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>skipBlankAndComma</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>boolean</name></type> <name>commaFound</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr>!<call><name>isEOS</name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>c</name> <init>= <expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>c</name> == ','</expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name>commaFound</name></expr>)</condition><then>
+                    <return>return <expr>true</expr>;</return></then>
+                <else>else
+                    <expr_stmt><expr><name>commaFound</name> = true</expr>;</expr_stmt></else></if>
+            }</block></then>
+            <else>else <if>if <condition>(<expr>!<call><name>isBlank</name><argument_list>(<argument><expr><name>c</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <return>return <expr>true</expr>;</return>
+            }</block></then></if></else></if>
+            <expr_stmt><expr>++<name>idx</name></expr>;</expr_stmt>
+        }</block></while>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     * [0..9a..bA..B-+._&amp;]
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>isIdentifierChar</name><parameter_list>(<param><decl><type><name>int</name></type> <name>c</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>(<name>c</name> &gt;= '0' &amp;&amp; <name>c</name> &lt;= '9')
+            || (<name>c</name> &gt;= 'a' &amp;&amp; <name>c</name> &lt;= 'z') || (<name>c</name> &gt;= 'A' &amp;&amp; <name>c</name> &lt;= 'Z')
+            || <name>c</name> == '-' || <name>c</name> == '+' || <name>c</name> == '.' || <name>c</name> == '_' || <name>c</name> == '&amp;'</expr>;</return>
+    }</block></function>
+
+    <comment type="line">// left idx positioned on the character stopping the read</comment>
+    <function><type><specifier>private</specifier> <name>String</name></type> <name>readNextIdentifier</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name>idx</name></expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr>!<call><name>isEOS</name><argument_list>()</argument_list></call> &amp;&amp; <call><name>isIdentifierChar</name><argument_list>(<argument><expr><call><name><name>str</name>.<name>charAt</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition>
+            <expr_stmt><expr>++<name>idx</name></expr>;</expr_stmt></while>
+
+        <return>return <expr><call><name><name>str</name>.<name>substring</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Helper function to ease the writing of AbstractType.toString() methods.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>String</name></type> <name>stringifyAliasesParameters</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>aliases</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>'('</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name><name>aliases</name>.<name>entrySet</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <init>= <expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call>(<name>char</name>)<argument_list>(<argument><expr><name>byte</name></expr></argument>)</argument_list></call><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"=&gt;"</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <while>while <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <init>= <expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>','</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call>(<name>char</name>)<argument_list>(<argument><expr><name>byte</name></expr></argument>)</argument_list></call><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"=&gt;"</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></while>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>')'</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Helper function to ease the writing of AbstractType.toString() methods.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>String</name></type> <name>stringifyTypeParameters</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>types</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>'('</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><name>types</name></expr></argument>, <argument><expr>","</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>')'</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

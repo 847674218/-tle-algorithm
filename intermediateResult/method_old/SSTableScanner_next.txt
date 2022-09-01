@@ -1,0 +1,37 @@
+public IColumnIterator next()
+        {
+            try
+            {
+                if (row != null)
+                    file.seek(finishedAt);
+                assert !file.isEOF();
+
+                final DecoratedKey<?> key = SSTableReader.decodeKey(sstable.partitioner,
+                                                           sstable.descriptor,
+                                                           ByteBufferUtil.readWithShortLength(file));
+                long dataSize = SSTableReader.readRowSize(file, sstable.descriptor);
+                long dataStart = file.getFilePointer();
+                finishedAt = dataStart + dataSize;
+
+                if (filter == null)
+                {
+                    row = new SSTableIdentityIterator(sstable, file, key, dataStart, dataSize);
+                    return row;
+                }
+                else
+                {
+                    return row = new LazyColumnIterator(key, new IColumnIteratorFactory()
+                    {
+                        public IColumnIterator create()
+                        {
+                            return filter.getSSTableColumnIterator(sstable, file, key);
+                        }
+                    });
+                }
+            }
+            catch (IOException e)
+            {
+                sstable.markSuspect();
+                throw new RuntimeException(SSTableScanner.this + " failed to provide next columns from " + this, e);
+            }
+        }

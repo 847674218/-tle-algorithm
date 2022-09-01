@@ -1,0 +1,899 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\tools\NodeProbe.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tools</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>PrintStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>MemoryMXBean</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>MemoryUsage</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>RuntimeMXBean</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+<import>import <name><name>java</name>.<name>text</name>.<name>SimpleDateFormat</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name>.<name>Entry</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutionException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeoutException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>locks</name>.<name>Condition</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name></name>.*;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>remote</name>.<name>JMXConnector</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>remote</name>.<name>JMXConnectorFactory</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>remote</name>.<name>JMXServiceURL</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>JMXEnabledThreadPoolExecutorMBean</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStoreMBean</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>HintedHandOffManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>HintedHandOffManagerMBean</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManagerMBean</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>FailureDetector</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>FailureDetectorMBean</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>EndpointSnitchInfoMBean</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingServiceMBean</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>StreamingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>StreamingServiceMBean</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>SimpleCondition</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * JMX client operations for Cassandra.
+ */</comment>
+<class><specifier>public</specifier> class <name>NodeProbe</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>fmtUrl</name> <init>= <expr>"service:jmx:rmi:///jndi/rmi://%s:%d/jmxrmi"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>ssObjName</name> <init>= <expr>"org.apache.cassandra.db:type=StorageService"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>defaultPort</name> <init>= <expr>7199</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>host</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>final</specifier> <name>int</name></type> <name>port</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>username</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>password</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>JMXConnector</name></type> <name>jmxc</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>MBeanServerConnection</name></type> <name>mbeanServerConn</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>CompactionManagerMBean</name></type> <name>compactionProxy</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>StorageServiceMBean</name></type> <name>ssProxy</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>MemoryMXBean</name></type> <name>memProxy</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>RuntimeMXBean</name></type> <name>runtimeProxy</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>StreamingServiceMBean</name></type> <name>streamProxy</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <name>MessagingServiceMBean</name></type> <name>msProxy</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>FailureDetectorMBean</name></type> <name>fdProxy</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>CacheServiceMBean</name></type> <name>cacheService</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>PBSPredictorMBean</name></type> <name>PBSPredictorProxy</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>StorageProxyMBean</name></type> <name>spProxy</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>HintedHandOffManagerMBean</name></type> <name>hhProxy</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Creates a NodeProbe using the specified JMX host, port, username, and password.
+     *
+     * @param host hostname or IP address of the JMX agent
+     * @param port TCP port of the remote JMX agent
+     * @throws IOException on connection failures
+     */</comment>
+    <constructor><specifier>public</specifier> <name>NodeProbe</name><parameter_list>(<param><decl><type><name>String</name></type> <name>host</name></decl></param>, <param><decl><type><name>int</name></type> <name>port</name></decl></param>, <param><decl><type><name>String</name></type> <name>username</name></decl></param>, <param><decl><type><name>String</name></type> <name>password</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><name>username</name> != null &amp;&amp; !<call><name><name>username</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> &amp;&amp; <name>password</name> != null &amp;&amp; !<call><name><name>password</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call>
+               : "neither username nor password can be blank"</expr>;</assert>
+
+        <expr_stmt><expr><name><name>this</name>.<name>host</name></name> = <name>host</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>port</name></name> = <name>port</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>username</name></name> = <name>username</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>password</name></name> = <name>password</name></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>connect</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Creates a NodeProbe using the specified JMX host and port.
+     *
+     * @param host hostname or IP address of the JMX agent
+     * @param port TCP port of the remote JMX agent
+     * @throws IOException on connection failures
+     */</comment>
+    <constructor><specifier>public</specifier> <name>NodeProbe</name><parameter_list>(<param><decl><type><name>String</name></type> <name>host</name></decl></param>, <param><decl><type><name>int</name></type> <name>port</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>host</name></name> = <name>host</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>port</name></name> = <name>port</name></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>connect</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Creates a NodeProbe using the specified JMX host and default port.
+     *
+     * @param host hostname or IP address of the JMX agent
+     * @throws IOException on connection failures
+     */</comment>
+    <constructor><specifier>public</specifier> <name>NodeProbe</name><parameter_list>(<param><decl><type><name>String</name></type> <name>host</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>host</name></name> = <name>host</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>port</name></name> = <name>defaultPort</name></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>connect</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Create a connection to the JMX agent and setup the M[X]Bean proxies.
+     *
+     * @throws IOException on connection failures
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>connect</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>JMXServiceURL</name></type> <name>jmxUrl</name> <init>= <expr>new <call><name>JMXServiceURL</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr><name>fmtUrl</name></expr></argument>, <argument><expr><name>host</name></expr></argument>, <argument><expr><name>port</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>,<argument><name>Object</name></argument>&gt;</argument_list></name></type> <name>env</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>,<argument><name>Object</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>username</name> != null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>creds</name> <init>= <expr><block>{ <expr><name>username</name></expr>, <expr><name>password</name></expr> }</block></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>env</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>JMXConnector</name>.<name>CREDENTIALS</name></name></expr></argument>, <argument><expr><name>creds</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <expr_stmt><expr><name>jmxc</name> = <call><name><name>JMXConnectorFactory</name>.<name>connect</name></name><argument_list>(<argument><expr><name>jmxUrl</name></expr></argument>, <argument><expr><name>env</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>mbeanServerConn</name> = <call><name><name>jmxc</name>.<name>getMBeanServerConnection</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>ObjectName</name></type> <name>name</name> <init>= <expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name>ssObjName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>ssProxy</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>StorageServiceMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>name</name> = new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>PBSPredictor</name>.<name>MBEAN_NAME</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>PBSPredictorProxy</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>PBSPredictorMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>name</name> = new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>MBEAN_NAME</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>msProxy</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>MessagingServiceMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>name</name> = new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>StreamingService</name>.<name>MBEAN_OBJECT_NAME</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>streamProxy</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>StreamingServiceMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>name</name> = new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>CompactionManager</name>.<name>MBEAN_OBJECT_NAME</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>compactionProxy</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>CompactionManagerMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>name</name> = new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>FailureDetector</name>.<name>MBEAN_NAME</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>fdProxy</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>FailureDetectorMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>name</name> = new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>CacheService</name>.<name>MBEAN_NAME</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>cacheService</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>CacheServiceMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>name</name> = new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>StorageProxy</name>.<name>MBEAN_NAME</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>spProxy</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>StorageProxyMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>name</name> = new <call><name>ObjectName</name><argument_list>(<argument><expr><name><name>HintedHandOffManager</name>.<name>MBEAN_NAME</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>hhProxy</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>HintedHandOffManagerMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block> <catch>catch <parameter_list>(<param><decl><type><name>MalformedObjectNameException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(
+                    <argument><expr>"Invalid ObjectName? Please report this as a bug."</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><name>memProxy</name> = <call><name><name>ManagementFactory</name>.<name>newPlatformMXBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>,
+                <argument><expr><name><name>ManagementFactory</name>.<name>MEMORY_MXBEAN_NAME</name></name></expr></argument>, <argument><expr><name><name>MemoryMXBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>runtimeProxy</name> = <call><name><name>ManagementFactory</name>.<name>newPlatformMXBeanProxy</name></name><argument_list>(
+                <argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name><name>ManagementFactory</name>.<name>RUNTIME_MXBEAN_NAME</name></name></expr></argument>, <argument><expr><name><name>RuntimeMXBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>jmxc</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceTableCleanup</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>forceTableCleanup</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>scrub</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>scrub</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>upgradeSSTables</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>upgradeSSTables</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceTableCompaction</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>forceTableCompaction</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceTableFlush</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>forceTableFlush</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceTableRepair</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isSequential</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isLocal</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>forceTableRepair</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>isSequential</name></expr></argument>, <argument><expr><name>isLocal</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceRepairAsync</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>PrintStream</name></type> <name>out</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isSequential</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isLocal</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>primaryRange</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>RepairRunner</name></type> <name>runner</name> <init>= <expr>new <call><name>RepairRunner</name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>ssProxy</name>.<name>addNotificationListener</name></name><argument_list>(<argument><expr><name>runner</name></expr></argument>, <argument><expr>null</expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>runner</name>.<name>repairAndWait</name></name><argument_list>(<argument><expr><name>ssProxy</name></expr></argument>, <argument><expr><name>isSequential</name></expr></argument>, <argument><expr><name>isLocal</name></expr></argument>, <argument><expr><name>primaryRange</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr> ;</throw>
+        }</block></catch>
+        <finally>finally
+        <block>{
+            <try>try
+            <block>{
+               <expr_stmt><expr><call><name><name>ssProxy</name>.<name>removeNotificationListener</name></name><argument_list>(<argument><expr><name>runner</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>ListenerNotFoundException</name></type> <name>ignored</name></decl></param>)</parameter_list> <block>{}</block></catch></try>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceTableRepairPrimaryRange</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isSequential</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isLocal</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>forceTableRepairPrimaryRange</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>isSequential</name></expr></argument>, <argument><expr><name>isLocal</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceTableRepairRange</name><parameter_list>(<param><decl><type><name>String</name></type> <name>beginToken</name></decl></param>, <param><decl><type><name>String</name></type> <name>endToken</name></decl></param>, <param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isSequential</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isLocal</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>forceTableRepairRange</name></name><argument_list>(<argument><expr><name>beginToken</name></expr></argument>, <argument><expr><name>endToken</name></expr></argument>, <argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>isSequential</name></expr></argument>, <argument><expr><name>isLocal</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>invalidateKeyCache</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>cacheService</name>.<name>invalidateKeyCache</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>invalidateRowCache</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>cacheService</name>.<name>invalidateRowCache</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>drain</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument>, <argument><expr><name>ExecutionException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>drain</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getTokenToEndpointMap</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getTokenToEndpointMap</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getLiveNodes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getLiveNodes</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getJoiningNodes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getJoiningNodes</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getLeavingNodes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getLeavingNodes</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getMovingNodes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getMovingNodes</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getUnreachableNodes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getUnreachableNodes</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getLoadMap</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getLoadMap</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Float</name></argument>&gt;</argument_list></name></type> <name>getOwnership</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getOwnership</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Float</name></argument>&gt;</argument_list></name></type> <name>effectiveOwnership</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IllegalStateException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>effectiveOwnership</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>CacheServiceMBean</name></type> <name>getCacheServiceMBean</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>cachePath</name> <init>= <expr>"org.apache.cassandra.db:type=Caches"</expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name>cachePath</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>CacheServiceMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MalformedObjectNameException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>ColumnFamilyStoreMBean</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>getColumnFamilyStoreMBeanProxies</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr>new <call><name>ColumnFamilyStoreMBeanIterator</name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MalformedObjectNameException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Invalid ObjectName? Please report this as a bug."</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Could not retrieve list of stat mbeans."</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>CompactionManagerMBean</name></type> <name>getCompactionManagerProxy</name><parameter_list>()</parameter_list>
+    <block>{
+      <return>return <expr><name>compactionProxy</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getTokens</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getTokens</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getTokens</name><parameter_list>(<param><decl><type><name>String</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>ssProxy</name>.<name>getTokens</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>UnknownHostException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getLocalHostId</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getLocalHostId</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getHostIdMap</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getHostIdMap</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getLoadString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getLoadString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getReleaseVersion</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getReleaseVersion</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getCurrentGenerationNumber</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getCurrentGenerationNumber</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getUptime</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>runtimeProxy</name>.<name>getUptime</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>MemoryUsage</name></type> <name>getHeapMemoryUsage</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>memProxy</name>.<name>getHeapMemoryUsage</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Take a snapshot of all the tables, optionally specifying only a specific column family.
+     *
+     * @param snapshotName the name of the snapshot.
+     * @param columnFamily the column family to snapshot or all on null
+     * @param keyspaces the keyspaces to snapshot
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>takeSnapshot</name><parameter_list>(<param><decl><type><name>String</name></type> <name>snapshotName</name></decl></param>, <param><decl><type><name>String</name></type> <name>columnFamily</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>keyspaces</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>columnFamily</name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name><name>keyspaces</name>.<name>length</name></name> != 1</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"When specifying the column family for a snapshot, you must specify one and only one keyspace"</expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+            <expr_stmt><expr><call><name><name>ssProxy</name>.<name>takeColumnFamilySnapshot</name></name><argument_list>(<argument><expr><name><name>keyspaces</name><index>[<expr>0</expr>]</index></name></expr></argument>, <argument><expr><name>columnFamily</name></expr></argument>, <argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+            <expr_stmt><expr><call><name><name>ssProxy</name>.<name>takeSnapshot</name></name><argument_list>(<argument><expr><name>snapshotName</name></expr></argument>, <argument><expr><name>keyspaces</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Remove all the existing snapshots.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>clearSnapshot</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tag</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>keyspaces</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>clearSnapshot</name></name><argument_list>(<argument><expr><name>tag</name></expr></argument>, <argument><expr><name>keyspaces</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isJoined</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>isJoined</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>joinRing</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>joinRing</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>decommission</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>decommission</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>move</name><parameter_list>(<param><decl><type><name>String</name></type> <name>newToken</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>move</name></name><argument_list>(<argument><expr><name>newToken</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>removeNode</name><parameter_list>(<param><decl><type><name>String</name></type> <name>token</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>removeNode</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getRemovalStatus</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getRemovalStatus</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceRemoveCompletion</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>forceRemoveCompletion</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>JMXEnabledThreadPoolExecutorMBean</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>getThreadPoolMBeanProxies</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr>new <call><name>ThreadPoolProxyMBeanIterator</name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MalformedObjectNameException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Invalid ObjectName? Please report this as a bug."</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Could not retrieve list of stat mbeans."</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Get the compaction threshold
+     *
+     * @param outs the stream to write to
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>getCompactionThreshold</name><parameter_list>(<param><decl><type><name>PrintStream</name></type> <name>outs</name></decl></param>, <param><decl><type><name>String</name></type> <name>ks</name></decl></param>, <param><decl><type><name>String</name></type> <name>cf</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStoreMBean</name></type> <name>cfsProxy</name> <init>= <expr><call><name>getCfsProxy</name><argument_list>(<argument><expr><name>ks</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>outs</name>.<name>println</name></name><argument_list>(<argument><expr>"Current compaction thresholds for " + <name>ks</name> + "/" + <name>cf</name> + ": \n" +
+                     " min = " + <call><name><name>cfsProxy</name>.<name>getMinimumCompactionThreshold</name></name><argument_list>()</argument_list></call> + ", " +
+                     " max = " + <call><name><name>cfsProxy</name>.<name>getMaximumCompactionThreshold</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Set the compaction threshold
+     *
+     * @param minimumCompactionThreshold minimum compaction threshold
+     * @param maximumCompactionThreshold maximum compaction threshold
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setCompactionThreshold</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ks</name></decl></param>, <param><decl><type><name>String</name></type> <name>cf</name></decl></param>, <param><decl><type><name>int</name></type> <name>minimumCompactionThreshold</name></decl></param>, <param><decl><type><name>int</name></type> <name>maximumCompactionThreshold</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStoreMBean</name></type> <name>cfsProxy</name> <init>= <expr><call><name>getCfsProxy</name><argument_list>(<argument><expr><name>ks</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>cfsProxy</name>.<name>setCompactionThresholds</name></name><argument_list>(<argument><expr><name>minimumCompactionThreshold</name></expr></argument>, <argument><expr><name>maximumCompactionThreshold</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setCacheCapacities</name><parameter_list>(<param><decl><type><name>int</name></type> <name>keyCacheCapacity</name></decl></param>, <param><decl><type><name>int</name></type> <name>rowCacheCapacity</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>keyCachePath</name> <init>= <expr>"org.apache.cassandra.db:type=Caches"</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>CacheServiceMBean</name></type> <name>cacheMBean</name> <init>= <expr><call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name>keyCachePath</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>CacheServiceMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>cacheMBean</name>.<name>setKeyCacheCapacityInMB</name></name><argument_list>(<argument><expr><name>keyCacheCapacity</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>cacheMBean</name>.<name>setRowCacheCapacityInMB</name></name><argument_list>(<argument><expr><name>rowCacheCapacity</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MalformedObjectNameException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getEndpoints</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>String</name></type> <name>cf</name></decl></param>, <param><decl><type><name>String</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getNaturalEndpoints</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getSSTables</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>String</name></type> <name>cf</name></decl></param>, <param><decl><type><name>String</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStoreMBean</name></type> <name>cfsProxy</name> <init>= <expr><call><name>getCfsProxy</name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>cfsProxy</name>.<name>getSSTablesForKey</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getStreamDestinations</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>streamProxy</name>.<name>getStreamDestinations</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getFilesDestinedFor</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>host</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name><name>streamProxy</name>.<name>getOutgoingFiles</name></name><argument_list>(<argument><expr><call><name><name>host</name>.<name>getHostAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getStreamSources</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>streamProxy</name>.<name>getStreamSources</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getIncomingFiles</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>host</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name><name>streamProxy</name>.<name>getIncomingFiles</name></name><argument_list>(<argument><expr><call><name><name>host</name>.<name>getHostAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getOperationMode</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getOperationMode</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>truncate</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>ssProxy</name>.<name>truncate</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>TimeoutException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Error while executing truncate"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Error while executing truncate"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>EndpointSnitchInfoMBean</name></type> <name>getEndpointSnitchInfoProxy</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr>"org.apache.cassandra.db:type=EndpointSnitchInfo"</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>EndpointSnitchInfoMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MalformedObjectNameException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamilyStoreMBean</name></type> <name>getCfsProxy</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ks</name></decl></param>, <param><decl><type><name>String</name></type> <name>cf</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStoreMBean</name></type> <name>cfsProxy</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ObjectName</name></argument>&gt;</argument_list></name></type> <name>beans</name> <init>= <expr><call><name><name>mbeanServerConn</name>.<name>queryNames</name></name><argument_list>(<argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr>"org.apache.cassandra.db:type=*ColumnFamilies,keyspace=" + <name>ks</name> + ",columnfamily=" + <name>cf</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>beans</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>MalformedObjectNameException</name><argument_list>(<argument><expr>"couldn't find that bean"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <assert>assert <expr><call><name><name>beans</name>.<name>size</name></name><argument_list>()</argument_list></call> == 1</expr>;</assert>
+            <for>for (<init><decl><type><name>ObjectName</name></type> <name>bean</name> <range>: <expr><name>beans</name></expr></range></decl></init>)
+                <expr_stmt><expr><name>cfsProxy</name> = <call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>bean</name></expr></argument>, <argument><expr><name><name>ColumnFamilyStoreMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MalformedObjectNameException</name></type> <name>mone</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr>"ColumnFamilyStore for " + <name>ks</name> + "/" + <name>cf</name> + " not found."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr>"ColumnFamilyStore for " + <name>ks</name> + "/" + <name>cf</name> + " not found: " + <name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+
+        <return>return <expr><name>cfsProxy</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>StorageProxyMBean</name></type> <name>getSpProxy</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>spProxy</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getEndpoint</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// Try to find the endpoint using the local token, doing so in a crazy manner</comment>
+        <comment type="line">// to maintain backwards compatibility with the MBean interface</comment>
+        <decl_stmt><decl><type><name>String</name></type> <name>stringToken</name> <init>= <expr><call><name><name>ssProxy</name>.<name>getTokens</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>tokenToEndpoint</name> <init>= <expr><call><name><name>ssProxy</name>.<name>getTokenToEndpointMap</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></name></type> <name>pair</name> <range>: <expr><call><name><name>tokenToEndpoint</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>pair</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>stringToken</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <return>return <expr><call><name><name>pair</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></then></if>
+        }</block></for>
+
+        <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Could not find myself in the endpoint list, something is very wrong!  Is the Cassandra node fully started?"</expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getDataCenter</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name>getEndpointSnitchInfoProxy</name><argument_list>()</argument_list></call>.<call><name>getDatacenter</name><argument_list>(<argument><expr><call><name>getEndpoint</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>UnknownHostException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>"Unknown"</expr>;</return>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getRack</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name>getEndpointSnitchInfoProxy</name><argument_list>()</argument_list></call>.<call><name>getRack</name><argument_list>(<argument><expr><call><name>getEndpoint</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>UnknownHostException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>"Unknown"</expr>;</return>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getKeyspaces</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getKeyspaces</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>disableHintedHandoff</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>spProxy</name>.<name>setHintedHandoffEnabled</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>enableHintedHandoff</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>spProxy</name>.<name>setHintedHandoffEnabled</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>pauseHintsDelivery</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>hhProxy</name>.<name>pauseHintsDelivery</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>resumeHintsDelivery</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>hhProxy</name>.<name>pauseHintsDelivery</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>stopGossiping</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>stopGossiping</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>startGossiping</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>startGossiping</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>stopThriftServer</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>stopRPCServer</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>startThriftServer</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>startRPCServer</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isThriftServerRunning</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>isRPCServerRunning</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isInitialized</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>isInitialized</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setCompactionThroughput</name><parameter_list>(<param><decl><type><name>int</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>setCompactionThroughputMbPerSec</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getCompactionThroughput</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getCompactionThroughputMbPerSec</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getExceptionCount</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getExceptionCount</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>getDroppedMessages</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>msProxy</name>.<name>getDroppedMessages</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>loadNewSSTables</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ksName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>loadNewSSTables</name></name><argument_list>(<argument><expr><name>ksName</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>rebuildIndex</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ksName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>idxNames</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>rebuildSecondaryIndex</name></name><argument_list>(<argument><expr><name>ksName</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>idxNames</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getGossipInfo</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>fdProxy</name>.<name>getAllEndpointStates</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>stop</name><parameter_list>(<param><decl><type><name>String</name></type> <name>string</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>compactionProxy</name>.<name>stopCompaction</name></name><argument_list>(<argument><expr><name>string</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setStreamThroughput</name><parameter_list>(<param><decl><type><name>int</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>setStreamThroughputMbPerSec</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setTraceProbability</name><parameter_list>(<param><decl><type><name>double</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>setTraceProbability</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getSchemaVersion</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>getSchemaVersion</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>describeRing</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspaceName</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>describeRingJMX</name></name><argument_list>(<argument><expr><name>keyspaceName</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>PBSPredictorMBean</name></type> <name>getPBSPredictorMBean</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>PBSPredictorProxy</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>rebuild</name><parameter_list>(<param><decl><type><name>String</name></type> <name>sourceDc</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>rebuild</name></name><argument_list>(<argument><expr><name>sourceDc</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>sampleKeyRange</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ssProxy</name>.<name>sampleKeyRange</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>resetLocalSchema</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>ssProxy</name>.<name>resetLocalSchema</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+}</block></class>
+
+<class>class <name>ColumnFamilyStoreMBeanIterator</name> <super><implements>implements <name><name>Iterator</name><argument_list>&lt;<argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>ColumnFamilyStoreMBean</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>ObjectName</name></argument>&gt;</argument_list></name></type> <name>resIter</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>MBeanServerConnection</name></type> <name>mbeanServerConn</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>ColumnFamilyStoreMBeanIterator</name><parameter_list>(<param><decl><type><name>MBeanServerConnection</name></type> <name>mbeanServerConn</name></decl></param>)</parameter_list>
+    <throws>throws <argument><expr><name>MalformedObjectNameException</name></expr></argument>, <argument><expr><name>NullPointerException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>ObjectName</name></type> <name>query</name> <init>= <expr>new <call><name>ObjectName</name><argument_list>(<argument><expr>"org.apache.cassandra.db:type=ColumnFamilies,*"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>resIter</name> = <call><name><name>mbeanServerConn</name>.<name>queryNames</name></name><argument_list>(<argument><expr><name>query</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>mbeanServerConn</name></name> = <name>mbeanServerConn</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>resIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>ColumnFamilyStoreMBean</name></argument>&gt;</argument_list></name></type> <name>next</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ObjectName</name></type> <name>objectName</name> <init>= <expr><call><name><name>resIter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>tableName</name> <init>= <expr><call><name><name>objectName</name>.<name>getKeyProperty</name></name><argument_list>(<argument><expr>"keyspace"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamilyStoreMBean</name></type> <name>cfsProxy</name> <init>= <expr><call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>objectName</name></expr></argument>, <argument><expr><name><name>ColumnFamilyStoreMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name><name>AbstractMap</name>.<name><name>SimpleImmutableEntry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>ColumnFamilyStoreMBean</name></argument>&gt;</argument_list></name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>cfsProxy</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>()</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+}</block></class>
+
+<class>class <name>ThreadPoolProxyMBeanIterator</name> <super><implements>implements <name><name>Iterator</name><argument_list>&lt;<argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>JMXEnabledThreadPoolExecutorMBean</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>ObjectName</name></argument>&gt;</argument_list></name></type> <name>resIter</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>MBeanServerConnection</name></type> <name>mbeanServerConn</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>ThreadPoolProxyMBeanIterator</name><parameter_list>(<param><decl><type><name>MBeanServerConnection</name></type> <name>mbeanServerConn</name></decl></param>)</parameter_list>
+    <throws>throws <argument><expr><name>MalformedObjectNameException</name></expr></argument>, <argument><expr><name>NullPointerException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ObjectName</name></argument>&gt;</argument_list></name></type> <name>requests</name> <init>= <expr><call><name><name>mbeanServerConn</name>.<name>queryNames</name></name><argument_list>(<argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr>"org.apache.cassandra.request:type=*"</expr></argument>)</argument_list></call></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ObjectName</name></argument>&gt;</argument_list></name></type> <name>internal</name> <init>= <expr><call><name><name>mbeanServerConn</name>.<name>queryNames</name></name><argument_list>(<argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr>"org.apache.cassandra.internal:type=*"</expr></argument>)</argument_list></call></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>resIter</name> = <call><name><name>Iterables</name>.<name>concat</name></name><argument_list>(<argument><expr><name>requests</name></expr></argument>, <argument><expr><name>internal</name></expr></argument>)</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>mbeanServerConn</name></name> = <name>mbeanServerConn</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasNext</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>resIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>JMXEnabledThreadPoolExecutorMBean</name></argument>&gt;</argument_list></name></name></type> <name>next</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ObjectName</name></type> <name>objectName</name> <init>= <expr><call><name><name>resIter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>poolName</name> <init>= <expr><call><name><name>objectName</name>.<name>getKeyProperty</name></name><argument_list>(<argument><expr>"type"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>JMXEnabledThreadPoolExecutorMBean</name></type> <name>threadPoolProxy</name> <init>= <expr><call><name><name>JMX</name>.<name>newMBeanProxy</name></name><argument_list>(<argument><expr><name>mbeanServerConn</name></expr></argument>, <argument><expr><name>objectName</name></expr></argument>, <argument><expr><name><name>JMXEnabledThreadPoolExecutorMBean</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name><name>AbstractMap</name>.<name><name>SimpleImmutableEntry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>JMXEnabledThreadPoolExecutorMBean</name></argument>&gt;</argument_list></name></name><argument_list>(<argument><expr><name>poolName</name></expr></argument>, <argument><expr><name>threadPoolProxy</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>()</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+}</block></class>
+
+<class>class <name>RepairRunner</name> <super><implements>implements <name>NotificationListener</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>SimpleDateFormat</name></type> <name>format</name> <init>= <expr>new <call><name>SimpleDateFormat</name><argument_list>(<argument><expr>"yyyy-MM-dd HH:mm:ss,SSS"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Condition</name></type> <name>condition</name> <init>= <expr>new <call><name>SimpleCondition</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>PrintStream</name></type> <name>out</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>keyspace</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name><index>[]</index></type> <name>columnFamilies</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>cmd</name></decl>;</decl_stmt>
+
+    <constructor><name>RepairRunner</name><parameter_list>(<param><decl><type><name>PrintStream</name></type> <name>out</name></decl></param>, <param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>columnFamilies</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>out</name></name> = <name>out</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>keyspace</name></name> = <name>keyspace</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>columnFamilies</name></name> = <name>columnFamilies</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>repairAndWait</name><parameter_list>(<param><decl><type><name>StorageServiceMBean</name></type> <name>ssProxy</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isSequential</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isLocal</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>primaryRangeOnly</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name>cmd</name> = <call><name><name>ssProxy</name>.<name>forceRepairAsync</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>isSequential</name></expr></argument>, <argument><expr><name>isLocal</name></expr></argument>, <argument><expr><name>primaryRangeOnly</name></expr></argument>, <argument><expr><name>columnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>cmd</name> &gt; 0</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>condition</name>.<name>await</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>message</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[%s] Nothing to repair for keyspace '%s'"</expr></argument>, <argument><expr><call><name><name>format</name>.<name>format</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>out</name>.<name>println</name></name><argument_list>(<argument><expr><name>message</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>handleNotification</name><parameter_list>(<param><decl><type><name>Notification</name></type> <name>notification</name></decl></param>, <param><decl><type><name>Object</name></type> <name>handback</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>"repair".<call><name>equals</name><argument_list>(<argument><expr><call><name><name>notification</name>.<name>getType</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>int</name><index>[]</index></type> <name>status</name> <init>= <expr>(<name><name>int</name><index>[]</index></name>) <call><name><name>notification</name>.<name>getUserData</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><name><name>status</name>.<name>length</name></name> == 2</expr>;</assert>
+            <if>if <condition>(<expr><name>cmd</name> == <name><name>status</name><index>[<expr>0</expr>]</index></name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>message</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[%s] %s"</expr></argument>, <argument><expr><call><name><name>format</name>.<name>format</name></name><argument_list>(<argument><expr><call><name><name>notification</name>.<name>getTimeStamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>notification</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>println</name></name><argument_list>(<argument><expr><name>message</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <comment type="line">// repair status is int array with [0] = cmd number, [1] = status</comment>
+                <if>if <condition>(<expr><name><name>status</name><index>[<expr>1</expr>]</index></name> == <call><name><name>AntiEntropyService</name>.<name>Status</name>.<name>FINISHED</name>.<name>ordinal</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>condition</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></then></if>
+        }</block></then></if>
+    }</block></function>
+}</block></class>
+</unit>

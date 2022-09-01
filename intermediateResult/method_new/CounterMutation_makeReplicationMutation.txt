@@ -1,0 +1,26 @@
+public RowMutation makeReplicationMutation() throws IOException
+    {
+        List<ReadCommand> readCommands = new LinkedList<ReadCommand>();
+        for (ColumnFamily columnFamily : rowMutation.getColumnFamilies())
+        {
+            if (!columnFamily.metadata().getReplicateOnWrite())
+                continue;
+            addReadCommandFromColumnFamily(rowMutation.getTable(), rowMutation.key(), columnFamily, readCommands);
+        }
+
+        // create a replication RowMutation
+        RowMutation replicationMutation = new RowMutation(rowMutation.getTable(), rowMutation.key());
+        for (ReadCommand readCommand : readCommands)
+        {
+            Table table = Table.open(readCommand.table);
+            Row row = readCommand.getRow(table);
+            if (row == null || row.cf == null)
+                continue;
+
+            ColumnFamily cf = row.cf;
+            if (cf.isSuper())
+                cf.retainAll(rowMutation.getColumnFamily(cf.metadata().cfId));
+            replicationMutation.add(cf);
+        }
+        return replicationMutation;
+    }

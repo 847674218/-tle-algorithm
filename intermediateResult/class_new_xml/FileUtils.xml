@@ -1,0 +1,396 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\io\util\FileUtils.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>reflect</name>.<name>InvocationTargetException</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>reflect</name>.<name>Method</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>MappedByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>text</name>.<name>DecimalFormat</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Arrays</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>BlacklistedDirectories</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSReadError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSWriteError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>CLibrary</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>FileUtils</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>FileUtils</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>double</name></type> <name>KB</name> <init>= <expr>1024d</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>double</name></type> <name>MB</name> <init>= <expr>1024*1024d</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>double</name></type> <name>GB</name> <init>= <expr>1024*1024*1024d</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>double</name></type> <name>TB</name> <init>= <expr>1024*1024*1024*1024d</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>DecimalFormat</name></type> <name>df</name> <init>= <expr>new <call><name>DecimalFormat</name><argument_list>(<argument><expr>"#.##"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Method</name></type> <name>cleanerMethod</name></decl>;</decl_stmt>
+
+    <expr_stmt><expr>static
+    <block>{
+        <expr><name>Method</name> <name>m</name></expr>;
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>m</name> = <call><name><name>Class</name>.<name>forName</name></name><argument_list>(<argument><expr>"sun.nio.ch.DirectBuffer"</expr></argument>)</argument_list></call>.<call><name>getMethod</name><argument_list>(<argument><expr>"cleaner"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt/></block></try>}</block></expr></expr_stmt>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// Perhaps a non-sun-derived JVM - contributions welcome</comment>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Cannot initialize un-mmaper.  (Are you using a non-SUN JVM?)  Compacted data files will not be removed promptly.  Consider using a SUN JVM or using standard disk access mode"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>m</name> = null</expr>;</expr_stmt>
+        }</block></catch>
+        <expr_stmt><expr><name>cleanerMethod</name> = <name>m</name></expr>;</expr_stmt>
+    }</block></class>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>createHardLink</name><parameter_list>(<param><decl><type><name>File</name></type> <name>from</name></decl></param>, <param><decl><type><name>File</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>to</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Tried to create duplicate hard link to " + <name>to</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr>!<call><name><name>from</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Tried to hard link to file that does not exist " + <name>from</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>CLibrary</name>.<name>createHardLink</name></name><argument_list>(<argument><expr><name>from</name></expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>File</name></type> <name>createTempFile</name><parameter_list>(<param><decl><type><name>String</name></type> <name>prefix</name></decl></param>, <param><decl><type><name>String</name></type> <name>suffix</name></decl></param>, <param><decl><type><name>File</name></type> <name>directory</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>File</name>.<name>createTempFile</name></name><argument_list>(<argument><expr><name>prefix</name></expr></argument>, <argument><expr><name>suffix</name></expr></argument>, <argument><expr><name>directory</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>directory</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>File</name></type> <name>createTempFile</name><parameter_list>(<param><decl><type><name>String</name></type> <name>prefix</name></decl></param>, <param><decl><type><name>String</name></type> <name>suffix</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>createTempFile</name><argument_list>(<argument><expr><name>prefix</name></expr></argument>, <argument><expr><name>suffix</name></expr></argument>, <argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"java.io.tmpdir"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>deleteWithConfirm</name><parameter_list>(<param><decl><type><name>String</name></type> <name>file</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>deleteWithConfirm</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>deleteWithConfirm</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><call><name><name>file</name>.<name>exists</name></name><argument_list>()</argument_list></call> : "attempted to delete non-existing file " + <call><name><name>file</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr>;</assert>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Deleting " + <call><name><name>file</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr>!<call><name><name>file</name>.<name>delete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Failed to delete " + <call><name><name>file</name>.<name>getAbsolutePath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>renameWithOutConfirm</name><parameter_list>(<param><decl><type><name>String</name></type> <name>from</name></decl></param>, <param><decl><type><name>String</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr>new <call><name>File</name><argument_list>(<argument><expr><name>from</name></expr></argument>)</argument_list></call>.<call><name>renameTo</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>renameWithConfirm</name><parameter_list>(<param><decl><type><name>String</name></type> <name>from</name></decl></param>, <param><decl><type><name>String</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>renameWithConfirm</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>from</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>renameWithConfirm</name><parameter_list>(<param><decl><type><name>File</name></type> <name>from</name></decl></param>, <param><decl><type><name>File</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><call><name><name>from</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>;</assert>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>(<call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Renaming %s to %s"</expr></argument>, <argument><expr><call><name><name>from</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>to</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>)</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <comment type="line">// this is not FSWE because usually when we see it it's because we didn't close the file before renaming it,</comment>
+        <comment type="line">// and Windows is picky about that.</comment>
+        <if>if <condition>(<expr>!<call><name><name>from</name>.<name>renameTo</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Failed to rename %s to %s"</expr></argument>, <argument><expr><call><name><name>from</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>to</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>truncate</name><parameter_list>(<param><decl><type><name>String</name></type> <name>path</name></decl></param>, <param><decl><type><name>long</name></type> <name>size</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>RandomAccessFile</name></type> <name>file</name></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>file</name> = new <call><name>RandomAccessFile</name><argument_list>(<argument><expr><name>path</name></expr></argument>, <argument><expr>"rw"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>FileNotFoundException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>file</name>.<name>getChannel</name></name><argument_list>()</argument_list></call>.<call><name>truncate</name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>path</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name>closeQuietly</name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>closeQuietly</name><parameter_list>(<param><decl><type><name>Closeable</name></type> <name>c</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><name>c</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>c</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Failed closing " + <name>c</name></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>close</name><parameter_list>(<param><decl><type><name>Closeable</name>...</type> <name>cs</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>close</name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>cs</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>close</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>Closeable</name></extends></argument>&gt;</argument_list></name></type> <name>cs</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>IOException</name></type> <name>e</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Closeable</name></type> <name>c</name> <range>: <expr><name>cs</name></expr></range></decl></init>)
+        <block>{
+            <try>try
+            <block>{
+                <if>if <condition>(<expr><name>c</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>c</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>ex</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><name>e</name> = <name>ex</name></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Failed closing stream " + <name>c</name></expr></argument>, <argument><expr><name>ex</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></catch></try>
+        }</block></for>
+        <if>if <condition>(<expr><name>e</name> != null</expr>)</condition><then>
+            <throw>throw <expr><name>e</name></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>String</name></type> <name>getCanonicalPath</name><parameter_list>(<param><decl><type><name>String</name></type> <name>filename</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr>new <call><name>File</name><argument_list>(<argument><expr><name>filename</name></expr></argument>)</argument_list></call>.<call><name>getCanonicalPath</name><argument_list>()</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSReadError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>filename</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>String</name></type> <name>getCanonicalPath</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>file</name>.<name>getCanonicalPath</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSReadError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>isCleanerAvailable</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>cleanerMethod</name> != null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>clean</name><parameter_list>(<param><decl><type><name>MappedByteBuffer</name></type> <name>buffer</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>Object</name></type> <name>cleaner</name> <init>= <expr><call><name><name>cleanerMethod</name>.<name>invoke</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>cleaner</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getMethod</name><argument_list>(<argument><expr>"clean"</expr></argument>)</argument_list></call>.<call><name>invoke</name><argument_list>(<argument><expr><name>cleaner</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IllegalAccessException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>InvocationTargetException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>NoSuchMethodException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>createDirectory</name><parameter_list>(<param><decl><type><name>String</name></type> <name>directory</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>createDirectory</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>directory</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>createDirectory</name><parameter_list>(<param><decl><type><name>File</name></type> <name>directory</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>directory</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>directory</name>.<name>mkdirs</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Failed to mkdirs " + <name>directory</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>directory</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>delete</name><parameter_list>(<param><decl><type><name>String</name></type> <name>file</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>f</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>f</name>.<name>delete</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>delete</name><parameter_list>(<param><decl><type><name><name>File</name><index>[]</index></name></type> <name>files</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for ( <init><decl><type><name>File</name></type> <name>file</name> <range>: <expr><name>files</name></expr></range></decl></init> )
+        <block>{
+            <expr_stmt><expr><call><name><name>file</name>.<name>delete</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>deleteAsync</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>String</name></type> <name>file</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>deleteWithConfirm</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>tasks</name>.<name>execute</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>String</name></type> <name>stringifyFileSize</name><parameter_list>(<param><decl><type><name>double</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>double</name></type> <name>d</name></decl>;</decl_stmt>
+        <if>if <condition>( <expr><name>value</name> &gt;= <name>TB</name></expr> )</condition><then>
+        <block>{
+            <expr_stmt><expr><name>d</name> = <name>value</name> / <name>TB</name></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>val</name> <init>= <expr><call><name><name>df</name>.<name>format</name></name><argument_list>(<argument><expr><name>d</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><name>val</name> + " TB"</expr>;</return>
+        }</block></then>
+        <else>else <if>if <condition>( <expr><name>value</name> &gt;= <name>GB</name></expr> )</condition><then>
+        <block>{
+            <expr_stmt><expr><name>d</name> = <name>value</name> / <name>GB</name></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>val</name> <init>= <expr><call><name><name>df</name>.<name>format</name></name><argument_list>(<argument><expr><name>d</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><name>val</name> + " GB"</expr>;</return>
+        }</block></then>
+        <else>else <if>if <condition>( <expr><name>value</name> &gt;= <name>MB</name></expr> )</condition><then>
+        <block>{
+            <expr_stmt><expr><name>d</name> = <name>value</name> / <name>MB</name></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>val</name> <init>= <expr><call><name><name>df</name>.<name>format</name></name><argument_list>(<argument><expr><name>d</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><name>val</name> + " MB"</expr>;</return>
+        }</block></then>
+        <else>else <if>if <condition>( <expr><name>value</name> &gt;= <name>KB</name></expr> )</condition><then>
+        <block>{
+            <expr_stmt><expr><name>d</name> = <name>value</name> / <name>KB</name></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>val</name> <init>= <expr><call><name><name>df</name>.<name>format</name></name><argument_list>(<argument><expr><name>d</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><name>val</name> + " KB"</expr>;</return>
+        }</block></then>
+        <else>else
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>val</name> <init>= <expr><call><name><name>df</name>.<name>format</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><name>val</name> + " bytes"</expr>;</return>
+        }</block></else></if></else></if></else></if></else></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Deletes all files and subdirectories under "dir".
+     * @param dir Directory to be deleted
+     * @throws FSWriteError if any part of the tree cannot be deleted
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>deleteRecursive</name><parameter_list>(<param><decl><type><name>File</name></type> <name>dir</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>dir</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>children</name> <init>= <expr><call><name><name>dir</name>.<name>list</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>String</name></type> <name>child</name> <range>: <expr><name>children</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name>deleteRecursive</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>dir</name></expr></argument>, <argument><expr><name>child</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block></then></if>
+
+        <comment type="line">// The directory is now empty so now it can be smoked</comment>
+        <expr_stmt><expr><call><name>deleteWithConfirm</name><argument_list>(<argument><expr><name>dir</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>skipBytesFully</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>in</name></decl></param>, <param><decl><type><name>int</name></type> <name>bytes</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><name>n</name> &lt; <name>bytes</name></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>skipped</name> <init>= <expr><call><name><name>in</name>.<name>skipBytes</name></name><argument_list>(<argument><expr><name>bytes</name> - <name>n</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>skipped</name> == 0</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>EOFException</name><argument_list>(<argument><expr>"EOF after " + <name>n</name> + " bytes out of " + <name>bytes</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><name>n</name> += <name>skipped</name></expr>;</expr_stmt>
+        }</block></while>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>skipBytesFully</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>in</name></decl></param>, <param><decl><type><name>long</name></type> <name>bytes</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><name>n</name> &lt; <name>bytes</name></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>m</name> <init>= <expr>(<name>int</name>) <call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>, <argument><expr><name>bytes</name> - <name>n</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>skipped</name> <init>= <expr><call><name><name>in</name>.<name>skipBytes</name></name><argument_list>(<argument><expr><name>m</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>skipped</name> == 0</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>EOFException</name><argument_list>(<argument><expr>"EOF after " + <name>n</name> + " bytes out of " + <name>bytes</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><name>n</name> += <name>skipped</name></expr>;</expr_stmt>
+        }</block></while>
+    }</block></function>
+    
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>handleFSError</name><parameter_list>(<param><decl><type><name>FSError</name></type> <name>e</name></decl></param>)</parameter_list>
+    <block>{
+        <switch>switch <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>getDiskFailurePolicy</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <case>case <expr><name>stop</name></expr>:
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Stopping the gossiper and the RPC server"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>stopGossiping</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>stopRPCServer</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>best_effort</name></expr>:
+                <comment type="line">// for both read and write errors mark the path as unwritable.</comment>
+                <expr_stmt><expr><call><name><name>BlacklistedDirectories</name>.<name>maybeMarkUnwritable</name></name><argument_list>(<argument><expr><name><name>e</name>.<name>path</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>e</name> instanceof <name>FSReadError</name></expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name>File</name></type> <name>directory</name> <init>= <expr><call><name><name>BlacklistedDirectories</name>.<name>maybeMarkUnreadable</name></name><argument_list>(<argument><expr><name><name>e</name>.<name>path</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>directory</name> != null</expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>Table</name>.<name>removeUnreadableSSTables</name></name><argument_list>(<argument><expr><name>directory</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                }</block></then></if>
+                <break>break;</break>
+            </case><case>case <expr><name>ignore</name></expr>:
+                <comment type="line">// already logged, so left nothing to do</comment>
+                <break>break;</break>
+            </case><default>default:
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>()</argument_list></call></expr>;</throw>
+        </default>}</block></switch>
+    }</block></function>
+}
+</unit>

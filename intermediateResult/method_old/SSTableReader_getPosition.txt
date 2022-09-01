@@ -1,0 +1,98 @@
+public long getPosition(RowPosition key, Operator op, boolean updateCacheAndStats)
+    {
+        // first, check bloom filter
+        if (op == Operator.EQ)
+        {
+            assert key instanceof DecoratedKey; // EQ only make sense if the key is a valid row key
+            if (!bf.isPresent(((DecoratedKey)key).key))
+                return -1;
+        }
+
+        // next, the key cache (only make sense for valid row key)
+        if ((op == Operator.EQ || op == Operator.GE) && (key instanceof DecoratedKey))
+        {
+            DecoratedKey decoratedKey = (DecoratedKey)key;
+            KeyCacheKey cacheKey = new KeyCacheKey(descriptor, decoratedKey.key);
+            Long cachedPosition = getCachedPosition(cacheKey, updateCacheAndStats);
+            if (cachedPosition != null)
+            {
+                logger.trace("Cache hit for {} -> {}", cacheKey, cachedPosition);
+                return cachedPosition;
+            }
+        }
+
+        // next, see if the sampled index says it's impossible for the key to be present
+        long sampledPosition = getIndexScanPosition(key);
+        if (sampledPosition == -1)
+        {
+            if (op == Operator.EQ && updateCacheAndStats)
+                bloomFilterTracker.addFalsePositive();
+            // we matched the -1th position: if the operator might match forward, return the 0th position
+            return op.apply(1) >= 0 ? 0 : -1;
+        }
+
+        // scan the on-disk index, starting at the nearest sampled position
+        Iterator<FileDataInput> segments = ifile.iterator(sampledPosition, INDEX_FILE_BUFFER_BYTES);
+        while (segments.hasNext())
+        {
+            FileDataInput input = segments.next();
+            try
+            {
+                while (!input.isEOF())
+                {
+                    // read key & data position from index entry
+                    DecoratedKey indexDecoratedKey = decodeKey(partitioner, descriptor, ByteBufferUtil.readWithShortLength(input));
+                    long dataPosition = input.readLong();
+
+                    int comparison = indexDecoratedKey.compareTo(key);
+                    int v = op.apply(comparison);
+                    if (v == 0)
+                    {
+                        if (comparison == 0)
+                        {
+                            assert key instanceof DecoratedKey; // key can be == to the index key only if it's a true row key
+                            DecoratedKey decoratedKey = (DecoratedKey)key;
+
+                            if (logger.isTraceEnabled())
+                            {
+                                // expensive sanity check!  see CASSANDRA-4687
+                                FileDataInput fdi = dfile.getSegment(dataPosition);
+                                DecoratedKey keyInDisk = SSTableReader.decodeKey(partitioner, descriptor, ByteBufferUtil.readWithShortLength(fdi));
+                                if (!keyInDisk.equals(key))
+                                    throw new AssertionError(String.format("%s != %s in %s", keyInDisk, key, fdi.getPath()));
+                                fdi.close();
+                            }
+
+                            if (keyCache != null && keyCache.getCapacity() > 0 && updateCacheAndStats)
+                            {
+                                // store exact match for the key
+                                cacheKey(decoratedKey, dataPosition);
+                            }
+                        }
+                        if (op == Operator.EQ && updateCacheAndStats)
+                            bloomFilterTracker.addTruePositive();
+                        return dataPosition;
+                    }
+                    if (v < 0)
+                    {
+                        if (op == Operator.EQ && updateCacheAndStats)
+                            bloomFilterTracker.addFalsePositive();
+                        return -1;
+                    }
+                }
+            }
+            catch (IOException e)
+            {
+                markSuspect();
+                throw new IOError(e);
+            }
+            finally
+            {
+                FileUtils.closeQuietly(input);
+            }
+        }
+
+        if (op == Operator.EQ && updateCacheAndStats)
+            bloomFilterTracker.addFalsePositive();
+        return -1;
+    }

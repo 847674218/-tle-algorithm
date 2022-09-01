@@ -1,0 +1,52 @@
+private static int importUnsorted(JsonParser parser, ColumnFamily columnFamily, String ssTablePath, IPartitioner<?> partitioner) throws IOException
+    {
+        int importedKeys = 0;
+        long start = System.currentTimeMillis();
+        Map<?, ?> data = parser.readValueAs(new TypeReference<Map<?, ?>>() {});
+
+        keyCountToImport = (keyCountToImport == null) ? data.size() : keyCountToImport;
+        SSTableWriter writer = new SSTableWriter(ssTablePath, keyCountToImport);
+
+        System.out.printf("Importing %s keys...%n", keyCountToImport);
+
+        // sort by dk representation, but hold onto the hex version
+        SortedMap<DecoratedKey,String> decoratedKeys = new TreeMap<DecoratedKey,String>();
+
+        for (Object keyObject : data.keySet())
+        {
+            String key = (String) keyObject;
+            decoratedKeys.put(partitioner.decorateKey(hexToBytes(key)), key);
+        }
+
+        for (Map.Entry<DecoratedKey, String> rowKey : decoratedKeys.entrySet())
+        {
+            if (columnFamily.getType() == ColumnFamilyType.Super)
+            {
+                addToSuperCF((Map<?, ?>) data.get(rowKey.getValue()), columnFamily);
+            }
+            else
+            {
+                addToStandardCF((List<?>) data.get(rowKey.getValue()), columnFamily);
+            }
+
+            writer.append(rowKey.getKey(), columnFamily);
+            columnFamily.clear();
+
+            importedKeys++;
+
+            long current = System.currentTimeMillis();
+
+            if (current - start >= 5000) // 5 secs.
+            {
+                System.out.printf("Currently imported %d keys.%n", importedKeys);
+                start = current;
+            }
+
+            if (keyCountToImport == importedKeys)
+                break;
+        }
+
+        writer.closeAndOpenReader();
+
+        return importedKeys;
+    }

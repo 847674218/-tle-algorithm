@@ -1,0 +1,1152 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\service\AntiEntropyService.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>security</name>.<name>MessageDigest</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicBoolean</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>locks</name>.<name>Condition</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Objects</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Sets</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>JMXConfigurableThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>NamedThreadFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>Stage</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>StageManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>AbstractCompactedRow</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>AbstractBounds</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>RandomPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IVersionedSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>TokenMetadata</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>StreamingRepairTask</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>.*;</import>
+
+<comment type="block" format="javadoc">/**
+ * AntiEntropyService encapsulates "validating" (hashing) individual column families,
+ * exchanging MerkleTrees with remote nodes via a TreeRequest/Response conversation,
+ * and then triggering repairs for disagreeing ranges.
+ *
+ * Every Tree conversation has an 'initiator', where valid trees are sent after generation
+ * and where the local and remote tree will rendezvous in rendezvous(cf, endpoint, tree).
+ * Once the trees rendezvous, a Differencer is executed and the service can trigger repairs
+ * for disagreeing ranges.
+ *
+ * Tree comparison and repair triggering occur in the single threaded Stage.ANTIENTROPY.
+ *
+ * The steps taken to enact a repair are as follows:
+ * 1. A major compaction is triggered via nodeprobe:
+ *   * Nodeprobe sends TreeRequest messages to all neighbors of the target node: when a node
+ *     receives a TreeRequest, it will perform a readonly compaction to immediately validate
+ *     the column family.
+ * 2. The compaction process validates the column family by:
+ *   * Calling Validator.prepare(), which samples the column family to determine key distribution,
+ *   * Calling Validator.add() in order for every row in the column family,
+ *   * Calling Validator.complete() to indicate that all rows have been added.
+ *     * Calling complete() indicates that a valid MerkleTree has been created for the column family.
+ *     * The valid tree is returned to the requesting node via a TreeResponse.
+ * 3. When a node receives a TreeResponse, it passes the tree to rendezvous(), which checks for trees to
+ *    rendezvous with / compare to:
+ *   * If the tree is local, it is cached, and compared to any trees that were received from neighbors.
+ *   * If the tree is remote, it is immediately compared to a local tree if one is cached. Otherwise,
+ *     the remote tree is stored until a local tree can be generated.
+ *   * A Differencer object is enqueued for each comparison.
+ * 4. Differencers are executed in Stage.ANTIENTROPY, to compare the two trees, and perform repair via the
+ *    streaming api.
+ */</comment>
+<class><specifier>public</specifier> class <name>AntiEntropyService</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>AntiEntropyService</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// singleton enforcement</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>AntiEntropyService</name></type> <name>instance</name> <init>= <expr>new <call><name>AntiEntropyService</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>ThreadPoolExecutor</name></type> <name>executor</name></decl>;</decl_stmt>
+    <expr_stmt><expr>static
+    <block>{
+        <expr><name>executor</name> = new <call><name>JMXConfigurableThreadPoolExecutor</name><argument_list>(<argument><expr>4</expr></argument>,
+                                                         <argument><expr>60</expr></argument>,
+                                                         <argument><expr><name><name>TimeUnit</name>.<name>SECONDS</name></name></expr></argument>,
+                                                         <argument><expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>Runnable</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>,
+                                                         <argument><expr>new <call><name>NamedThreadFactory</name><argument_list>(<argument><expr>"AntiEntropySessions"</expr></argument>)</argument_list></call></expr></argument>,
+                                                         <argument><expr>"internal"</expr></argument>)</argument_list></call></expr>;
+    }</block>
+
+    public static enum <name>Status</name>
+    <block>{
+        <expr><name>STARTED</name></expr>, <expr><name>SESSION_SUCCESS</name></expr>, <expr><name>SESSION_FAILED</name></expr>, <expr><name>FINISHED</name></expr>
+    }</block>
+
+    <comment type="block" format="javadoc">/**
+     * A map of active session.
+     */</comment>
+    private <name>final</name> <name><name>ConcurrentMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>RepairSession</name></argument>&gt;</argument_list></name> <name>sessions</name></expr>;</expr_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Protected constructor. Use AntiEntropyService.instance.
+     */</comment>
+    <constructor><specifier>protected</specifier> <name>AntiEntropyService</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>sessions</name> = new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>RepairSession</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Requests repairs for the given table and column families, and blocks until all repairs have been completed.
+     *
+     * @return Future for asynchronous call or null if there is no need to repair
+     */</comment>
+    <function><type><specifier>public</specifier> <name>RepairFuture</name></type> <name>submitRepairSession</name><parameter_list>(<param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>, <param><decl><type><name>String</name></type> <name>tablename</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isSequential</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isLocal</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>cfnames</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>RepairSession</name></type> <name>session</name> <init>= <expr>new <call><name>RepairSession</name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>isSequential</name></expr></argument>, <argument><expr><name>isLocal</name></expr></argument>, <argument><expr><name>cfnames</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>session</name>.<name>endpoints</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+        <decl_stmt><decl><type><name>RepairFuture</name></type> <name>futureTask</name> <init>= <expr><call><name><name>session</name>.<name>getFuture</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>executor</name>.<name>execute</name></name><argument_list>(<argument><expr><name>futureTask</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>futureTask</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>terminateSessions</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>RepairSession</name></type> <name>session</name> <range>: <expr><call><name><name>sessions</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>session</name>.<name>forceShutdown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <comment type="line">// for testing only. Create a session corresponding to a fake request and</comment>
+    <comment type="line">// add it to the sessions (avoid NPE in tests)</comment>
+    <function><type><name>RepairFuture</name></type> <name>submitArtificialRepairSession</name><parameter_list>(<param><decl><type><name>TreeRequest</name></type> <name>req</name></decl></param>, <param><decl><type><name>String</name></type> <name>tablename</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>cfnames</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>RepairFuture</name></type> <name>futureTask</name> <init>= <expr>new <call><name>RepairSession</name><argument_list>(<argument><expr><name>req</name></expr></argument>, <argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>cfnames</name></expr></argument>)</argument_list></call>.<call><name>getFuture</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>executor</name>.<name>execute</name></name><argument_list>(<argument><expr><name>futureTask</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>futureTask</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Return all of the neighbors with whom we share the provided range.
+     *
+     * @param table table to repair
+     * @param toRepair token to repair
+     * @param isLocal need to use only nodes from local datacenter
+     *
+     * @return neighbors with whom we share the provided range
+     */</comment>
+    <function><type><specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getNeighbors</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>toRepair</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isLocal</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StorageService</name></type> <name>ss</name> <init>= <expr><name><name>StorageService</name>.<name>instance</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>replicaSets</name> <init>= <expr><call><name><name>ss</name>.<name>getRangeToAddressMap</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>rangeSuperSet</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><call><name><name>ss</name>.<name>getLocalRanges</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>range</name>.<name>contains</name></name><argument_list>(<argument><expr><name>toRepair</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>rangeSuperSet</name> = <name>range</name></expr>;</expr_stmt>
+                <break>break;</break>
+            }</block></then>
+            <else>else <if>if <condition>(<expr><call><name><name>range</name>.<name>intersects</name></name><argument_list>(<argument><expr><name>toRepair</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"Requested range intersects a local range but is not fully contained in one; this would lead to imprecise repair"</expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if></else></if>
+        }</block></for>
+        <if>if <condition>(<expr><name>rangeSuperSet</name> == null || !<call><name><name>replicaSets</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>toRepair</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr><call><name><name>Collections</name>.<name>emptySet</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>neighbors</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>replicaSets</name>.<name>get</name></name><argument_list>(<argument><expr><name>rangeSuperSet</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>neighbors</name>.<name>remove</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>isLocal</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>TokenMetadata</name>.<name>Topology</name></name></type> <name>topology</name> <init>= <expr><call><name><name>ss</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call>.<call><name>cloneOnlyTokenMap</name><argument_list>()</argument_list></call>.<call><name>getTopology</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>localEndpoints</name> <init>= <expr><call><name><name>Sets</name>.<name>newHashSet</name></name><argument_list>(<argument><expr><call><name><name>topology</name>.<name>getDatacenterEndpoints</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getLocalDataCenter</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>Sets</name>.<name>intersection</name></name><argument_list>(<argument><expr><name>neighbors</name></expr></argument>, <argument><expr><name>localEndpoints</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then></if>
+
+        <return>return <expr><name>neighbors</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Register a tree for the given request to be compared to the appropriate trees in Stage.ANTIENTROPY when they become available.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>rendezvous</name><parameter_list>(<param><decl><type><name>TreeRequest</name></type> <name>request</name></decl></param>, <param><decl><type><name>MerkleTree</name></type> <name>tree</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>RepairSession</name></type> <name>session</name> <init>= <expr><call><name><name>sessions</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>sessionid</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>session</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Got a merkle tree response for unknown repair session {}: either this node has been restarted since the session was started, or the session has been interrupted for an unknown reason. "</expr></argument>, <argument><expr><name><name>request</name>.<name>sessionid</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name><name>RepairSession</name>.<name>RepairJob</name></name></type> <name>job</name> <init>= <expr><call><name><name>session</name>.<name>jobs</name>.<name>peek</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>job</name> == null</expr>)</condition><then>
+        <block>{
+            <assert>assert <expr><call><name><name>session</name>.<name>terminated</name></name><argument_list>()</argument_list></call></expr>;</assert>
+            <return>return;</return>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] Received merkle tree for %s from %s"</expr></argument>, <argument><expr><call><name><name>session</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>request</name>.<name>cf</name>.<name>right</name></name></expr></argument>, <argument><expr><name><name>request</name>.<name>endpoint</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>job</name>.<name>addTree</name></name><argument_list>(<argument><expr><name>request</name></expr></argument>, <argument><expr><name>tree</name></expr></argument>)</argument_list></call> == 0</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"All trees received for " + <call><name><name>session</name>.<name>getName</name></name><argument_list>()</argument_list></call> + "/" + <name><name>request</name>.<name>cf</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>job</name>.<name>submitDifferencers</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// This job is complete, switching to next in line (note that only</comment>
+            <comment type="line">// one thread will can ever do this)</comment>
+            <expr_stmt><expr><call><name><name>session</name>.<name>jobs</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name><name>RepairSession</name>.<name>RepairJob</name></name></type> <name>nextJob</name> <init>= <expr><call><name><name>session</name>.<name>jobs</name>.<name>peek</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>nextJob</name> == null</expr>)</condition><then>
+                <comment type="line">// We are done with this repair session as far as differencing</comment>
+                <comment type="line">// is considern. Just inform the session</comment>
+                <expr_stmt><expr><call><name><name>session</name>.<name>differencingDone</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name><name>nextJob</name>.<name>sendTreeRequests</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Responds to the node that requested the given valid tree.
+     * @param validator A locally generated validator
+     * @param local localhost (parameterized for testing)
+     */</comment>
+    <function><type><name>void</name></type> <name>respond</name><parameter_list>(<param><decl><type><name>Validator</name></type> <name>validator</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>local</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>MessagingService</name></type> <name>ms</name> <init>= <expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>validator</name>.<name>request</name>.<name>endpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] Sending completed merkle tree to %s for %s"</expr></argument>, <argument><expr><name><name>validator</name>.<name>request</name>.<name>sessionid</name></name></expr></argument>, <argument><expr><name><name>validator</name>.<name>request</name>.<name>endpoint</name></name></expr></argument>, <argument><expr><name><name>validator</name>.<name>request</name>.<name>cf</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>ms</name>.<name>sendOneWay</name></name><argument_list>(<argument><expr><call><name><name>validator</name>.<name>createMessage</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>validator</name>.<name>request</name>.<name>endpoint</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] Error sending completed merkle tree to %s for %s "</expr></argument>, <argument><expr><name><name>validator</name>.<name>request</name>.<name>sessionid</name></name></expr></argument>, <argument><expr><name><name>validator</name>.<name>request</name>.<name>endpoint</name></name></expr></argument>, <argument><expr><name><name>validator</name>.<name>request</name>.<name>cf</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * A Strategy to handle building and validating a merkle tree for a column family.
+     *
+     * Lifecycle:
+     * 1. prepare() - Initialize tree with samples.
+     * 2. add() - 0 or more times, to add hashes to the tree.
+     * 3. complete() - Enqueues any operations that were blocked waiting for a valid tree.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>Validator</name> <super><implements>implements <name>Runnable</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>TreeRequest</name></type> <name>request</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>MerkleTree</name></type> <name>tree</name></decl>;</decl_stmt>
+
+        <comment type="line">// null when all rows with the min token have been consumed</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>transient</specifier> <name>long</name></type> <name>validated</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>transient</specifier> <name><name>MerkleTree</name>.<name>TreeRange</name></name></type> <name>range</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>transient</specifier> <name><name>MerkleTree</name>.<name>TreeRangeIterator</name></name></type> <name>ranges</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>transient</specifier> <name>DecoratedKey</name></type> <name>lastKey</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name><name>MerkleTree</name>.<name>RowHash</name></name></type> <name>EMPTY_ROW</name> <init>= <expr>new <call><name><name>MerkleTree</name>.<name>RowHash</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr>new <name><name>byte</name><index>[<expr>0</expr>]</index></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <name>ValidatorSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>ValidatorSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>Validator</name><parameter_list>(<param><decl><type><name>TreeRequest</name></type> <name>request</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>request</name></expr></argument>,
+                 <comment type="line">// TODO: memory usage (maxsize) should either be tunable per</comment>
+                 <comment type="line">// CF, globally, or as shared for all CFs in a cluster</comment>
+                 <argument><expr>new <call><name>MerkleTree</name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>request</name>.<name>range</name></name></expr></argument>, <argument><expr><name><name>MerkleTree</name>.<name>RECOMMENDED_DEPTH</name></name></expr></argument>, <argument><expr>(<name>int</name>)<call><name><name>Math</name>.<name>pow</name></name><argument_list>(<argument><expr>2</expr></argument>, <argument><expr>15</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <constructor><name>Validator</name><parameter_list>(<param><decl><type><name>TreeRequest</name></type> <name>request</name></decl></param>, <param><decl><type><name>MerkleTree</name></type> <name>tree</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>request</name></name> = <name>request</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>tree</name></name> = <name>tree</name></expr>;</expr_stmt>
+            <comment type="line">// Reestablishing the range because we don't serialize it (for bad</comment>
+            <comment type="line">// reason - see MerkleTree for details)</comment>
+            <expr_stmt><expr><name><name>this</name>.<name>tree</name>.<name>fullRange</name></name> = <name><name>this</name>.<name>request</name>.<name>range</name></name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>validated</name> = 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>range</name> = null</expr>;</expr_stmt>
+            <expr_stmt><expr><name>ranges</name> = null</expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>prepare</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>tree</name>.<name>partitioner</name></name><argument_list>()</argument_list></call> instanceof <name>RandomPartitioner</name></expr>)</condition><then>
+            <block>{
+                <comment type="line">// You can't beat an even tree distribution for md5</comment>
+                <expr_stmt><expr><call><name><name>tree</name>.<name>init</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>&gt;</argument_list></name></type> <name>keys</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>DecoratedKey</name></type> <name>sample</name> <range>: <expr><call><name><name>cfs</name>.<name>keySamples</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>range</name></name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <assert>assert <expr><call><name><name>request</name>.<name>range</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>sample</name>.<name>token</name></name></expr></argument>)</argument_list></call>: "Token " + <name><name>sample</name>.<name>token</name></name> + " is not within range " + <name><name>request</name>.<name>range</name></name></expr>;</assert>
+                    <expr_stmt><expr><call><name><name>keys</name>.<name>add</name></name><argument_list>(<argument><expr><name>sample</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+
+                <if>if <condition>(<expr><call><name><name>keys</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// use an even tree distribution</comment>
+                    <expr_stmt><expr><call><name><name>tree</name>.<name>init</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <decl_stmt><decl><type><name>int</name></type> <name>numkeys</name> <init>= <expr><call><name><name>keys</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>Random</name></type> <name>random</name> <init>= <expr>new <call><name>Random</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <comment type="line">// sample the column family using random keys from the index</comment>
+                    <while>while <condition>(<expr>true</expr>)</condition>
+                    <block>{
+                        <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>dk</name> <init>= <expr><call><name><name>keys</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>random</name>.<name>nextInt</name></name><argument_list>(<argument><expr><name>numkeys</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <if>if <condition>(<expr>!<call><name><name>tree</name>.<name>split</name></name><argument_list>(<argument><expr><name><name>dk</name>.<name>token</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                            <break>break;</break></then></if>
+                    }</block></while>
+                }</block></else></if>
+            }</block></else></if>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Prepared AEService tree of size " + <call><name><name>tree</name>.<name>size</name></name><argument_list>()</argument_list></call> + " for " + <name>request</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>ranges</name> = <call><name><name>tree</name>.<name>invalids</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Called (in order) for every row present in the CF.
+         * Hashes the row, and adds it to the tree being built.
+         *
+         * There are four possible cases:
+         *  1. Token is greater than range.right (we haven't generated a range for it yet),
+         *  2. Token is less than/equal to range.left (the range was valid),
+         *  3. Token is contained in the range (the range is in progress),
+         *  4. No more invalid ranges exist.
+         *
+         * TODO: Because we only validate completely empty trees at the moment, we
+         * do not bother dealing with case 2 and case 4 should result in an error.
+         *
+         * Additionally, there is a special case for the minimum token, because
+         * although it sorts first, it is contained in the last possible range.
+         *
+         * @param row The row.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name>AbstractCompactedRow</name></type> <name>row</name></decl></param>)</parameter_list>
+        <block>{
+            <assert>assert <expr><call><name><name>request</name>.<name>range</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name>.<name>token</name></name></expr></argument>)</argument_list></call> : <name><name>row</name>.<name>key</name>.<name>token</name></name> + " is not contained in " + <name><name>request</name>.<name>range</name></name></expr>;</assert>
+            <assert>assert <expr><name>lastKey</name> == null || <call><name><name>lastKey</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name></name></expr></argument>)</argument_list></call> &lt; 0
+                   : "row " + <name><name>row</name>.<name>key</name></name> + " received out of order wrt " + <name>lastKey</name></expr>;</assert>
+            <expr_stmt><expr><name>lastKey</name> = <name><name>row</name>.<name>key</name></name></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>range</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>range</name> = <call><name><name>ranges</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <comment type="line">// generate new ranges as long as case 1 is true</comment>
+            <while>while <condition>(<expr>!<call><name><name>range</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name>.<name>token</name></name></expr></argument>)</argument_list></call></expr>)</condition>
+            <block>{
+                <comment type="line">// add the empty hash, and move to the next range</comment>
+                <expr_stmt><expr><call><name><name>range</name>.<name>addHash</name></name><argument_list>(<argument><expr><name>EMPTY_ROW</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>range</name> = <call><name><name>ranges</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></while>
+
+            <comment type="line">// case 3 must be true: mix in the hashed row</comment>
+            <expr_stmt><expr><call><name><name>range</name>.<name>addHash</name></name><argument_list>(<argument><expr><call><name>rowHash</name><argument_list>(<argument><expr><name>row</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name><name>MerkleTree</name>.<name>RowHash</name></name></type> <name>rowHash</name><parameter_list>(<param><decl><type><name>AbstractCompactedRow</name></type> <name>row</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>validated</name>++</expr>;</expr_stmt>
+            <comment type="line">// MerkleTree uses XOR internally, so we want lots of output bits here</comment>
+            <decl_stmt><decl><type><name>MessageDigest</name></type> <name>digest</name> <init>= <expr><call><name><name>FBUtilities</name>.<name>newMessageDigest</name></name><argument_list>(<argument><expr>"SHA-256"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>row</name>.<name>update</name></name><argument_list>(<argument><expr><name>digest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>new <call><name><name>MerkleTree</name>.<name>RowHash</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name>.<name>token</name></name></expr></argument>, <argument><expr><call><name><name>digest</name>.<name>digest</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Registers the newly created tree for rendezvous in Stage.ANTIENTROPY.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>complete</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>completeTree</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>ANTI_ENTROPY</name></name></expr></argument>)</argument_list></call>.<call><name>execute</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Validated " + <name>validated</name> + " rows into AEService tree for " + <name>request</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><name>void</name></type> <name>completeTree</name><parameter_list>()</parameter_list>
+        <block>{
+            <assert>assert <expr><name>ranges</name> != null : "Validator was not prepared()"</expr>;</assert>
+
+            <if>if <condition>(<expr><name>range</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>range</name>.<name>addHash</name></name><argument_list>(<argument><expr><name>EMPTY_ROW</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <while>while <condition>(<expr><call><name><name>ranges</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <expr_stmt><expr><name>range</name> = <call><name><name>ranges</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>range</name>.<name>addHash</name></name><argument_list>(<argument><expr><name>EMPTY_ROW</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></while>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Called after the validation lifecycle to respond with the now valid tree. Runs in Stage.ANTIENTROPY.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+        <block>{
+            <comment type="line">// respond to the request that triggered this validation</comment>
+            <expr_stmt><expr><call><name><name>AntiEntropyService</name>.<name>instance</name>.<name>respond</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>MessageOut</name><argument_list>&lt;<argument><name>Validator</name></argument>&gt;</argument_list></name></type> <name>createMessage</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>new <call><name><name>MessageOut</name><argument_list>&lt;<argument><name>Validator</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>TREE_RESPONSE</name></name></expr></argument>, <argument><expr><name>this</name></expr></argument>, <argument><expr><name><name>Validator</name>.<name>serializer</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <class><specifier>public</specifier> <specifier>static</specifier> class <name>ValidatorSerializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>Validator</name></argument>&gt;</argument_list></name></implements></super>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>Validator</name></type> <name>validator</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <expr_stmt><expr><call><name><name>TreeRequest</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>validator</name>.<name>request</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>MerkleTree</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>validator</name>.<name>tree</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>Validator</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <decl_stmt><decl><type><specifier>final</specifier> <name>TreeRequest</name></type> <name>request</name> <init>= <expr><call><name><name>TreeRequest</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <return>return <expr>new <call><name>Validator</name><argument_list>(<argument><expr><name>request</name></expr></argument>, <argument><expr><call><name><name>MerkleTree</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+                }</block>
+                <catch>catch<parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>Validator</name></type> <name>validator</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>TreeRequest</name>.<name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name><name>validator</name>.<name>request</name></name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call>
+                       + <call><name><name>MerkleTree</name>.<name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name><name>validator</name>.<name>tree</name></name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Handler for requests from remote nodes to generate a valid tree.
+     * The payload is a CFPair representing the columnfamily to validate.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>TreeRequestVerbHandler</name> <super><implements>implements <name><name>IVerbHandler</name><argument_list>&lt;<argument><name>TreeRequest</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <comment type="block" format="javadoc">/**
+         * Trigger a validation compaction which will return the tree upon completion.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>doVerb</name><parameter_list>(<param><decl><type><name><name>MessageIn</name><argument_list>&lt;<argument><name>TreeRequest</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>TreeRequest</name></type> <name>remotereq</name> <init>= <expr><name><name>message</name>.<name>payload</name></name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TreeRequest</name></type> <name>request</name> <init>= <expr>new <call><name>TreeRequest</name><argument_list>(<argument><expr><name><name>remotereq</name>.<name>sessionid</name></name></expr></argument>, <argument><expr><name><name>message</name>.<name>from</name></name></expr></argument>, <argument><expr><name><name>remotereq</name>.<name>range</name></name></expr></argument>, <argument><expr><name><name>remotereq</name>.<name>cf</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// trigger read-only compaction</comment>
+            <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>store</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>cf</name>.<name>left</name></name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name><name>request</name>.<name>cf</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>Validator</name></type> <name>validator</name> <init>= <expr>new <call><name>Validator</name><argument_list>(<argument><expr><name>request</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Queueing validation compaction for " + <name>request</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>CompactionManager</name>.<name>instance</name>.<name>submitValidation</name></name><argument_list>(<argument><expr><name>store</name></expr></argument>, <argument><expr><name>validator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Handler for responses from remote nodes which contain a valid tree.
+     * The payload is a completed Validator object from the remote endpoint.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>TreeResponseVerbHandler</name> <super><implements>implements <name><name>IVerbHandler</name><argument_list>&lt;<argument><name>Validator</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>doVerb</name><parameter_list>(<param><decl><type><name><name>MessageIn</name><argument_list>&lt;<argument><name>Validator</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// deserialize the remote tree, and register it</comment>
+            <decl_stmt><decl><type><name>Validator</name></type> <name>response</name> <init>= <expr><name><name>message</name>.<name>payload</name></name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TreeRequest</name></type> <name>request</name> <init>= <expr>new <call><name>TreeRequest</name><argument_list>(<argument><expr><name><name>response</name>.<name>request</name>.<name>sessionid</name></name></expr></argument>, <argument><expr><name><name>message</name>.<name>from</name></name></expr></argument>, <argument><expr><name><name>response</name>.<name>request</name>.<name>range</name></name></expr></argument>, <argument><expr><name><name>response</name>.<name>request</name>.<name>cf</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>AntiEntropyService</name>.<name>instance</name>.<name>rendezvous</name></name><argument_list>(<argument><expr><name>request</name></expr></argument>, <argument><expr><name><name>response</name>.<name>tree</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * A tuple of table and cf.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>CFPair</name> <super><extends>extends <name><name>Pair</name><argument_list>&lt;<argument><name>String</name></argument>,<argument><name>String</name></argument>&gt;</argument_list></name></extends></super>
+    <block>{
+        <constructor><specifier>public</specifier> <name>CFPair</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name>String</name></type> <name>cf</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <assert>assert <expr><name>table</name> != null &amp;&amp; <name>cf</name> != null</expr>;</assert>
+        }</block></constructor>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * A tuple of table, cf, address and range that represents a location we have an outstanding TreeRequest for.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>TreeRequest</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>TreeRequestSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>TreeRequestSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>String</name></type> <name>sessionid</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>endpoint</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>CFPair</name></type> <name>cf</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>TreeRequest</name><parameter_list>(<param><decl><type><name>String</name></type> <name>sessionid</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>, <param><decl><type><name>CFPair</name></type> <name>cf</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>sessionid</name></name> = <name>sessionid</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>endpoint</name></name> = <name>endpoint</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>cf</name></name> = <name>cf</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>range</name></name> = <name>range</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <specifier>final</specifier> <name>int</name></type> <name>hashCode</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>Objects</name>.<name>hashCode</name></name><argument_list>(<argument><expr><name>sessionid</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>equals</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if<condition>(<expr>!(<name>o</name> instanceof <name>TreeRequest</name>)</expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+            <decl_stmt><decl><type><name>TreeRequest</name></type> <name>that</name> <init>= <expr>(<name>TreeRequest</name>)<name>o</name></expr></init></decl>;</decl_stmt>
+            <comment type="line">// handles nulls properly</comment>
+            <return>return <expr><call><name><name>Objects</name>.<name>equal</name></name><argument_list>(<argument><expr><name>sessionid</name></expr></argument>, <argument><expr><name><name>that</name>.<name>sessionid</name></name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>Objects</name>.<name>equal</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name><name>that</name>.<name>endpoint</name></name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>Objects</name>.<name>equal</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name><name>that</name>.<name>cf</name></name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>Objects</name>.<name>equal</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name><name>that</name>.<name>range</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>"#&lt;TreeRequest " + <name>sessionid</name> + ", " + <name>endpoint</name> + ", " + <name>cf</name> + ", " + <name>range</name> + "&gt;"</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>MessageOut</name><argument_list>&lt;<argument><name>TreeRequest</name></argument>&gt;</argument_list></name></type> <name>createMessage</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>new <call><name><name>MessageOut</name><argument_list>&lt;<argument><name>TreeRequest</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>TREE_REQUEST</name></name></expr></argument>, <argument><expr><name>this</name></expr></argument>, <argument><expr><name><name>TreeRequest</name>.<name>serializer</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <class><specifier>public</specifier> <specifier>static</specifier> class <name>TreeRequestSerializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>TreeRequest</name></argument>&gt;</argument_list></name></implements></super>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>TreeRequest</name></type> <name>request</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>sessionid</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>endpoint</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>cf</name>.<name>left</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>cf</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>AbstractBounds</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>range</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>TreeRequest</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>sessId</name> <init>= <expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>InetAddress</name></type> <name>endpoint</name> <init>= <expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>CFPair</name></type> <name>cfpair</name> <init>= <expr>new <call><name>CFPair</name><argument_list>(<argument><expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl>;</decl_stmt>
+                <expr_stmt><expr><name>range</name> = (<name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name>) <call><name><name>AbstractBounds</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <return>return <expr>new <call><name>TreeRequest</name><argument_list>(<argument><expr><name>sessId</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>range</name></expr></argument>, <argument><expr><name>cfpair</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>TreeRequest</name></type> <name>request</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>sessionid</name></name></expr></argument>)</argument_list></call>
+                     + <call><name><name>CompactEndpointSerializationHelper</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>endpoint</name></name></expr></argument>)</argument_list></call>
+                     + <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>cf</name>.<name>left</name></name></expr></argument>)</argument_list></call>
+                     + <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>cf</name>.<name>right</name></name></expr></argument>)</argument_list></call>
+                     + <call><name><name>AbstractBounds</name>.<name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name><name>request</name>.<name>range</name></name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Triggers repairs with all neighbors for the given table, cfs and range.
+     * Typical lifecycle is: start() then join(). Executed in client threads.
+     */</comment>
+    <class><specifier>static</specifier> class <name>RepairSession</name> <super><extends>extends <name>WrappedRunnable</name></extends> <implements>implements <name>IEndpointStateChangeSubscriber</name>, <name>IFailureDetectionEventListener</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>sessionName</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>isSequential</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>tablename</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name><index>[]</index></type> <name>cfnames</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>Exception</name></type> <name>exception</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>AtomicBoolean</name></type> <name>isFailed</name> <init>= <expr>new <call><name>AtomicBoolean</name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>Queue</name><argument_list>&lt;<argument><name>RepairJob</name></argument>&gt;</argument_list></name></type> <name>jobs</name> <init>= <expr>new <call><name><name>ConcurrentLinkedQueue</name><argument_list>&lt;<argument><name>RepairJob</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>RepairJob</name></argument>&gt;</argument_list></name></type> <name>activeJobs</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>RepairJob</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>SimpleCondition</name></type> <name>completed</name> <init>= <expr>new <call><name>SimpleCondition</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Condition</name></type> <name>differencingDone</name> <init>= <expr>new <call><name>SimpleCondition</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>boolean</name></type> <name>terminated</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>RepairSession</name><parameter_list>(<param><decl><type><name>TreeRequest</name></type> <name>req</name></decl></param>, <param><decl><type><name>String</name></type> <name>tablename</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>cfnames</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name><name>req</name>.<name>sessionid</name></name></expr></argument>, <argument><expr><name><name>req</name>.<name>range</name></name></expr></argument>, <argument><expr><name>tablename</name></expr></argument>, <argument><expr>false</expr></argument>, <argument><expr>false</expr></argument>, <argument><expr><name>cfnames</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>AntiEntropyService</name>.<name>instance</name>.<name>sessions</name>.<name>put</name></name><argument_list>(<argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <constructor><specifier>public</specifier> <name>RepairSession</name><parameter_list>(<param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>, <param><decl><type><name>String</name></type> <name>tablename</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isSequential</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isLocal</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>cfnames</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><call><name><name>UUIDGen</name>.<name>getTimeUUID</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>range</name></expr></argument>, <argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>isSequential</name></expr></argument>, <argument><expr><name>isLocal</name></expr></argument>, <argument><expr><name>cfnames</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <constructor><specifier>private</specifier> <name>RepairSession</name><parameter_list>(<param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>, <param><decl><type><name>String</name></type> <name>tablename</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isSequential</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isLocal</name></decl></param>, <param><decl><type><name><name>String</name><index>[]</index></name></type> <name>cfnames</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>sessionName</name></name> = <name>id</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>isSequential</name></name> = <name>isSequential</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>tablename</name></name> = <name>tablename</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>cfnames</name></name> = <name>cfnames</name></expr>;</expr_stmt>
+            <assert>assert <expr><name><name>cfnames</name>.<name>length</name></name> &gt; 0 : "Repairing no column families seems pointless, doesn't it"</expr>;</assert>
+            <expr_stmt><expr><name><name>this</name>.<name>range</name></name> = <name>range</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>endpoints</name></name> = <call><name><name>AntiEntropyService</name>.<name>getNeighbors</name></name><argument_list>(<argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>range</name></expr></argument>, <argument><expr><name>isLocal</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>String</name></type> <name>getName</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>sessionName</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>getRange</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>range</name></expr>;</return>
+        }</block></function>
+
+        <function><type><name>RepairFuture</name></type> <name>getFuture</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>new <call><name>RepairFuture</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>String</name></type> <name>repairedNodes</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name>InetAddress</name></type> <name>ep</name> <range>: <expr><name>endpoints</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <comment type="line">// we don't care about the return value but care about it throwing exception</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] new session: will sync %s on range %s for %s.%s"</expr></argument>, <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>repairedNodes</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>range</name></expr></argument>, <argument><expr><name>tablename</name></expr></argument>, <argument><expr><call><name><name>Arrays</name>.<name>toString</name></name><argument_list>(<argument><expr><name>cfnames</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><call><name><name>endpoints</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>differencingDone</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] No neighbors to repair with on range %s: session completed"</expr></argument>, <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+
+            <comment type="line">// Checking all nodes are live</comment>
+            <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>endpoints</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr>!<call><name><name>FailureDetector</name>.<name>instance</name>.<name>isAlive</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>differencingDone</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] Cannot proceed on repair because a neighbor (%s) is dead: session failed"</expr></argument>, <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <return>return;</return>
+                }</block></then></if>
+
+                <if>if <condition>(<expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getVersion</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &lt; <name><name>MessagingService</name>.<name>VERSION_11</name></name> &amp;&amp; <name>isSequential</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] Cannot repair using snapshots as node %s is pre-1.1"</expr></argument>, <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <return>return;</return>
+                }</block></then></if>
+            }</block></for>
+
+            <expr_stmt><expr><call><name><name>AntiEntropyService</name>.<name>instance</name>.<name>sessions</name>.<name>put</name></name><argument_list>(<argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>register</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>FailureDetector</name>.<name>instance</name>.<name>registerFailureDetectionEventListener</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <try>try
+            <block>{
+                <comment type="line">// Create and queue a RepairJob for each column family</comment>
+                <for>for (<init><decl><type><name>String</name></type> <name>cfname</name> <range>: <expr><name>cfnames</name></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>RepairJob</name></type> <name>job</name> <init>= <expr>new <call><name>RepairJob</name><argument_list>(<argument><expr><name>cfname</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>jobs</name>.<name>offer</name></name><argument_list>(<argument><expr><name>job</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>activeJobs</name>.<name>put</name></name><argument_list>(<argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>job</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+
+                <expr_stmt><expr><call><name><name>jobs</name>.<name>peek</name></name><argument_list>()</argument_list></call>.<call><name>sendTreeRequests</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+                <comment type="line">// block whatever thread started this session until all requests have been returned:</comment>
+                <comment type="line">// if this thread dies, the session will still complete in the background</comment>
+                <expr_stmt><expr><call><name><name>completed</name>.<name>await</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>exception</name> == null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] session completed successfully"</expr></argument>, <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] session completed with the following error"</expr></argument>, <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>exception</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <throw>throw <expr><name>exception</name></expr>;</throw>
+                }</block></else></if>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Interrupted while waiting for repair."</expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+            <finally>finally
+            <block>{
+                <comment type="line">// mark this session as terminated</comment>
+                <expr_stmt><expr><call><name>terminate</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>FailureDetector</name>.<name>instance</name>.<name>unregisterFailureDetectionEventListener</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>unregister</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>AntiEntropyService</name>.<name>instance</name>.<name>sessions</name>.<name>remove</name></name><argument_list>(<argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></finally></try>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * @return wheather this session is terminated
+         */</comment>
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>terminated</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>terminated</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>terminate</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>terminated</name> = true</expr>;</expr_stmt>
+            <for>for (<init><decl><type><name>RepairJob</name></type> <name>job</name> <range>: <expr><name>jobs</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>job</name>.<name>terminate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><call><name><name>jobs</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>activeJobs</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * clear all RepairJobs and terminate this session.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>forceShutdown</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>differencingDone</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>completed</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><name>void</name></type> <name>completed</name><parameter_list>(<param><decl><type><name>Differencer</name></type> <name>differencer</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] Repair completed between %s and %s on %s"</expr></argument>,
+                                       <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>,
+                                       <argument><expr><name><name>differencer</name>.<name>r1</name>.<name>endpoint</name></name></expr></argument>,
+                                       <argument><expr><name><name>differencer</name>.<name>r2</name>.<name>endpoint</name></name></expr></argument>,
+                                       <argument><expr><name><name>differencer</name>.<name>cfname</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>RepairJob</name></type> <name>job</name> <init>= <expr><call><name><name>activeJobs</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>differencer</name>.<name>cfname</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>job</name> == null</expr>)</condition><then>
+            <block>{
+                <assert>assert <expr><name>terminated</name></expr>;</assert>
+                <return>return;</return>
+            }</block></then></if>
+
+            <if>if <condition>(<expr><call><name><name>job</name>.<name>completedSynchronization</name></name><argument_list>(<argument><expr><name>differencer</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>activeJobs</name>.<name>remove</name></name><argument_list>(<argument><expr><name><name>differencer</name>.<name>cfname</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>String</name></type> <name>remaining</name> <init>= <expr><call><name><name>activeJobs</name>.<name>size</name></name><argument_list>()</argument_list></call> == 0 ? "" : <call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>" (%d remaining column family to sync for this session)"</expr></argument>, <argument><expr><call><name><name>activeJobs</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] %s is fully synced%s"</expr></argument>, <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>differencer</name>.<name>cfname</name></name></expr></argument>, <argument><expr><name>remaining</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>activeJobs</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>completed</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></then></if>
+        }</block></function>
+
+        <function><type><name>void</name></type> <name>failedNode</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>remote</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>errorMsg</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Endpoint %s died"</expr></argument>, <argument><expr><name>remote</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>exception</name> = new <call><name>IOException</name><argument_list>(<argument><expr><name>errorMsg</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// If a node failed, we stop everything (though there could still be some activity in the background)</comment>
+            <expr_stmt><expr><call><name>forceShutdown</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>onJoin</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>epState</name></decl></param>)</parameter_list> <block>{}</block></function>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>onChange</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>ApplicationState</name></type> <name>state</name></decl></param>, <param><decl><type><name>VersionedValue</name></type> <name>value</name></decl></param>)</parameter_list> <block>{}</block></function>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>onAlive</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>state</name></decl></param>)</parameter_list> <block>{}</block></function>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>onDead</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>state</name></decl></param>)</parameter_list> <block>{}</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>onRemove</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>convict</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name><name>Double</name>.<name>MAX_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>onRestart</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>epState</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>convict</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name><name>Double</name>.<name>MAX_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>convict</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>double</name></type> <name>phi</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>endpoints</name>.<name>contains</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <comment type="line">// We want a higher confidence in the failure detection than usual because failing a repair wrongly has a high cost.</comment>
+            <if>if <condition>(<expr><name>phi</name> &lt; 2 * <call><name><name>DatabaseDescriptor</name>.<name>getPhiConvictThreshold</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <comment type="line">// Though unlikely, it is possible to arrive here multiple time and we</comment>
+            <comment type="line">// want to avoid print an error message twice</comment>
+            <if>if <condition>(<expr>!<call><name><name>isFailed</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr>false</expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <expr_stmt><expr><call><name>failedNode</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <class>class <name>RepairJob</name>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>cfname</name></decl>;</decl_stmt>
+            <comment type="line">// first we send tree requests.  this tracks the endpoints remaining to hear from</comment>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>RequestCoordinator</name><argument_list>&lt;<argument><name>TreeRequest</name></argument>&gt;</argument_list></name></type> <name>treeRequests</name></decl>;</decl_stmt>
+            <comment type="line">// tree responses are then tracked here</comment>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>TreeResponse</name></argument>&gt;</argument_list></name></type> <name>trees</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>TreeResponse</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call> + 1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// once all responses are received, each tree is compared with each other, and differencer tasks</comment>
+            <comment type="line">// are submitted.  the job is done when all differencers are complete.</comment>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>RequestCoordinator</name><argument_list>&lt;<argument><name>Differencer</name></argument>&gt;</argument_list></name></type> <name>differencers</name></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Condition</name></type> <name>requestsSent</name> <init>= <expr>new <call><name>SimpleCondition</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <name>CountDownLatch</name></type> <name>snapshotLatch</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+            <constructor><specifier>public</specifier> <name>RepairJob</name><parameter_list>(<param><decl><type><name>String</name></type> <name>cfname</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><name><name>this</name>.<name>cfname</name></name> = <name>cfname</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>treeRequests</name></name> = new <class><super><name><name>RequestCoordinator</name><argument_list>&lt;<argument><name>TreeRequest</name></argument>&gt;</argument_list></name></super><argument_list>(<argument><expr><name>isSequential</name></expr></argument>)</argument_list>
+                <block>{
+                    <function><type><specifier>public</specifier> <name>void</name></type> <name>send</name><parameter_list>(<param><decl><type><name>TreeRequest</name></type> <name>r</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendOneWay</name><argument_list>(<argument><expr><call><name><name>r</name>.<name>createMessage</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>r</name>.<name>endpoint</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></function>
+                }</block></class></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>differencers</name></name> = new <class><super><name><name>RequestCoordinator</name><argument_list>&lt;<argument><name>Differencer</name></argument>&gt;</argument_list></name></super><argument_list>(<argument><expr><name>isSequential</name></expr></argument>)</argument_list>
+                <block>{
+                    <function><type><specifier>public</specifier> <name>void</name></type> <name>send</name><parameter_list>(<param><decl><type><name>Differencer</name></type> <name>d</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>ANTI_ENTROPY</name></name></expr></argument>)</argument_list></call>.<call><name>execute</name><argument_list>(<argument><expr><name>d</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></function>
+                }</block></class></expr>;</expr_stmt>
+            }</block></constructor>
+
+            <comment type="block" format="javadoc">/**
+             * Send merkle tree request to every involved neighbor.
+             */</comment>
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>sendTreeRequests</name><parameter_list>()</parameter_list>
+            <block>{
+                <comment type="line">// send requests to all nodes</comment>
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>allEndpoints</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>endpoints</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>allEndpoints</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <if>if <condition>(<expr><name>isSequential</name></expr>)</condition><then>
+                    <expr_stmt><expr><call><name>makeSnapshots</name><argument_list>(<argument><expr><name>endpoints</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>allEndpoints</name></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>treeRequests</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>TreeRequest</name><argument_list>(<argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>range</name></expr></argument>, <argument><expr>new <call><name>CFPair</name><argument_list>(<argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] requesting merkle trees for %s (to %s)"</expr></argument>, <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>allEndpoints</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>treeRequests</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>requestsSent</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>makeSnapshots</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name></decl></param>)</parameter_list>
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>snapshotLatch</name> = new <call><name>CountDownLatch</name><argument_list>(<argument><expr><call><name><name>endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <decl_stmt><decl><type><name>IAsyncCallback</name></type> <name>callback</name> <init>= <expr>new <class><super><name>IAsyncCallback</name></super><argument_list>()</argument_list>
+                    <block>{
+                        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isLatencyForSnitch</name><parameter_list>()</parameter_list>
+                        <block>{
+                            <return>return <expr>false</expr>;</return>
+                        }</block></function>
+
+                        <function><type><specifier>public</specifier> <name>void</name></type> <name>response</name><parameter_list>(<param><decl><type><name>MessageIn</name></type> <name>msg</name></decl></param>)</parameter_list>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>RepairJob</name>.<name>this</name>.<name>snapshotLatch</name>.<name>countDown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        }</block></function>
+                    }</block></class></expr></init></decl>;</decl_stmt>
+                    <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>endpoints</name></expr></range></decl></init>)
+                        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendRR</name><argument_list>(<argument><expr>new <call><name>SnapshotCommand</name><argument_list>(<argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>sessionName</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call>.<call><name>createMessage</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>callback</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                    <expr_stmt><expr><call><name><name>snapshotLatch</name>.<name>await</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>snapshotLatch</name> = null</expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></function>
+
+            <comment type="block" format="javadoc">/**
+             * Add a new received tree and return the number of remaining tree to
+             * be received for the job to be complete.
+             *
+             * Callers may assume exactly one addTree call will result in zero remaining endpoints.
+             */</comment>
+            <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name>int</name></type> <name>addTree</name><parameter_list>(<param><decl><type><name>TreeRequest</name></type> <name>request</name></decl></param>, <param><decl><type><name>MerkleTree</name></type> <name>tree</name></decl></param>)</parameter_list>
+            <block>{
+                <comment type="line">// Wait for all request to have been performed (see #3400)</comment>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name><name>requestsSent</name>.<name>await</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr>"Interrupted while waiting for requests to be sent"</expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+
+                <assert>assert <expr><call><name><name>request</name>.<name>cf</name>.<name>right</name>.<name>equals</name></name><argument_list>(<argument><expr><name>cfname</name></expr></argument>)</argument_list></call></expr>;</assert>
+                <expr_stmt><expr><call><name><name>trees</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>TreeResponse</name><argument_list>(<argument><expr><name><name>request</name>.<name>endpoint</name></name></expr></argument>, <argument><expr><name>tree</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><call><name><name>treeRequests</name>.<name>completed</name></name><argument_list>(<argument><expr><name>request</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+
+            <comment type="block" format="javadoc">/**
+             * Submit differencers for running.
+             * All tree *must* have been received before this is called.
+             */</comment>
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>submitDifferencers</name><parameter_list>()</parameter_list>
+            <block>{
+                <comment type="line">// We need to difference all trees one against another</comment>
+                <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>trees</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+                <block>{
+                    <decl_stmt><decl><type><name>TreeResponse</name></type> <name>r1</name> <init>= <expr><call><name><name>trees</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <for>for (<init><decl><type><name>int</name></type> <name>j</name> <init>= <expr><name>i</name> + 1</expr></init></decl>;</init> <condition><expr><name>j</name> &lt; <call><name><name>trees</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr>++<name>j</name></expr></incr>)
+                    <block>{
+                        <decl_stmt><decl><type><name>TreeResponse</name></type> <name>r2</name> <init>= <expr><call><name><name>trees</name>.<name>get</name></name><argument_list>(<argument><expr><name>j</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <decl_stmt><decl><type><name>Differencer</name></type> <name>differencer</name> <init>= <expr>new <call><name>Differencer</name><argument_list>(<argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>r1</name></expr></argument>, <argument><expr><name>r2</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Queueing comparison {}"</expr></argument>, <argument><expr><name>differencer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>differencers</name>.<name>add</name></name><argument_list>(<argument><expr><name>differencer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></for>
+                }</block></for>
+                <expr_stmt><expr><call><name><name>differencers</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>trees</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// allows gc to do its thing</comment>
+            }</block></function>
+
+            <comment type="block" format="javadoc">/**
+             * @return true if the @param differencer was the last remaining
+             */</comment>
+            <function><type><specifier>synchronized</specifier> <name>boolean</name></type> <name>completedSynchronization</name><parameter_list>(<param><decl><type><name>Differencer</name></type> <name>differencer</name></decl></param>)</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>differencers</name>.<name>completed</name></name><argument_list>(<argument><expr><name>differencer</name></expr></argument>)</argument_list></call> == 0</expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>terminate</name><parameter_list>()</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><name>snapshotLatch</name> != null</expr>)</condition><then>
+                <block>{
+                    <while>while <condition>(<expr><call><name><name>snapshotLatch</name>.<name>getCount</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition>
+                        <expr_stmt><expr><call><name><name>snapshotLatch</name>.<name>countDown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></while>
+                }</block></then></if>
+            }</block></function>
+        }</block></class>
+
+        <comment type="block" format="javadoc">/**
+         * Runs on the node that initiated a request to compare two trees, and launch repairs for disagreeing ranges.
+         */</comment>
+        <class>class <name>Differencer</name> <super><implements>implements <name>Runnable</name></implements></super>
+        <block>{
+            <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>String</name></type> <name>cfname</name></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>TreeResponse</name></type> <name>r1</name></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>TreeResponse</name></type> <name>r2</name></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>differences</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <constructor><name>Differencer</name><parameter_list>(<param><decl><type><name>String</name></type> <name>cfname</name></decl></param>, <param><decl><type><name>TreeResponse</name></type> <name>r1</name></decl></param>, <param><decl><type><name>TreeResponse</name></type> <name>r2</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><name><name>this</name>.<name>cfname</name></name> = <name>cfname</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>r1</name></name> = <name>r1</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>r2</name></name> = <name>r2</name></expr>;</expr_stmt>
+            }</block></constructor>
+
+            <comment type="block" format="javadoc">/**
+             * Compares our trees, and triggers repairs for any ranges that mismatch.
+             */</comment>
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <comment type="line">// restore partitioners (in case we were serialized)</comment>
+                <if>if <condition>(<expr><call><name><name>r1</name>.<name>tree</name>.<name>partitioner</name></name><argument_list>()</argument_list></call> == null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>r1</name>.<name>tree</name>.<name>partitioner</name></name><argument_list>(<argument><expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>r2</name>.<name>tree</name>.<name>partitioner</name></name><argument_list>()</argument_list></call> == null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>r2</name>.<name>tree</name>.<name>partitioner</name></name><argument_list>(<argument><expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <comment type="line">// compare trees, and collect differences</comment>
+                <expr_stmt><expr><call><name><name>differences</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>MerkleTree</name>.<name>difference</name></name><argument_list>(<argument><expr><name><name>r1</name>.<name>tree</name></name></expr></argument>, <argument><expr><name><name>r2</name>.<name>tree</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <comment type="line">// choose a repair method based on the significance of the difference</comment>
+                <decl_stmt><decl><type><name>String</name></type> <name>format</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[repair #%s] Endpoints %s and %s %%s for %s"</expr></argument>, <argument><expr><call><name>getName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>r1</name>.<name>endpoint</name></name></expr></argument>, <argument><expr><name><name>r2</name>.<name>endpoint</name></name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>differences</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr><name>format</name></expr></argument>, <argument><expr>"are consistent"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>completed</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <return>return;</return>
+                }</block></then></if>
+
+                <comment type="line">// non-0 difference: perform streaming repair</comment>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr><name>format</name></expr></argument>, <argument><expr>"have " + <call><name><name>differences</name>.<name>size</name></name><argument_list>()</argument_list></call> + " range(s) out of sync"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>performStreamingRepair</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <comment type="block" format="javadoc">/**
+             * Starts sending/receiving our list of differences to/from the remote endpoint: creates a callback
+             * that will be called out of band once the streams complete.
+             */</comment>
+            <function><type><name>void</name></type> <name>performStreamingRepair</name><parameter_list>()</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>Runnable</name></type> <name>callback</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+                <block>{
+                    <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name>completed</name><argument_list>(<argument><expr><name><name>Differencer</name>.<name>this</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></function>
+                }</block></class></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>StreamingRepairTask</name></type> <name>task</name> <init>= <expr><call><name><name>StreamingRepairTask</name>.<name>create</name></name><argument_list>(<argument><expr><name><name>r1</name>.<name>endpoint</name></name></expr></argument>, <argument><expr><name><name>r2</name>.<name>endpoint</name></name></expr></argument>, <argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>differences</name></expr></argument>, <argument><expr><name>callback</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <comment type="line">// Pre 1.0, nodes don't know how to handle forwarded streaming task so don't bother</comment>
+                <if>if <condition>(<expr><call><name><name>task</name>.<name>isLocalTask</name></name><argument_list>()</argument_list></call> || <call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getVersion</name><argument_list>(<argument><expr><name><name>task</name>.<name>dst</name></name></expr></argument>)</argument_list></call> &gt;= <name><name>MessagingService</name>.<name>VERSION_10</name></name></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>task</name>.<name>run</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr>"#&lt;Differencer " + <name><name>r1</name>.<name>endpoint</name></name> + "&lt;-&gt;" + <name><name>r2</name>.<name>endpoint</name></name> + "/" + <name>range</name> + "&gt;"</expr>;</return>
+            }</block></function>
+        }</block></class>
+    }</block></class>
+
+    <class><specifier>static</specifier> class <name>TreeResponse</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>endpoint</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>MerkleTree</name></type> <name>tree</name></decl>;</decl_stmt>
+
+        <constructor><name>TreeResponse</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>MerkleTree</name></type> <name>tree</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>endpoint</name></name> = <name>endpoint</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>tree</name></name> = <name>tree</name></expr>;</expr_stmt>
+        }</block></constructor>
+    }</block></class>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>RepairFuture</name> <super><extends>extends <name>FutureTask</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>RepairSession</name></type> <name>session</name></decl>;</decl_stmt>
+
+        <constructor><name>RepairFuture</name><parameter_list>(<param><decl><type><name>RepairSession</name></type> <name>session</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>session</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>session</name></name> = <name>session</name></expr>;</expr_stmt>
+        }</block></constructor>
+    }</block></class>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> <specifier>abstract</specifier> class <name><name>RequestCoordinator</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Order</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name></type> <name>orderer</name></decl>;</decl_stmt>
+
+        <constructor><specifier>protected</specifier> <name>RequestCoordinator</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>isSequential</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>orderer</name></name> = <name>isSequential</name> ? new <call><name>SequentialOrder</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call> : new <call><name>ParallelOrder</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>send</name><parameter_list>(<param><decl><type><name>R</name></type> <name>request</name></decl></param>)</parameter_list>;</function_decl>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name>R</name></type> <name>request</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>orderer</name>.<name>add</name></name><argument_list>(<argument><expr><name>request</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>orderer</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="line">// Returns how many request remains</comment>
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>completed</name><parameter_list>(<param><decl><type><name>R</name></type> <name>request</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>orderer</name>.<name>completed</name></name><argument_list>(<argument><expr><name>request</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <class><specifier>private</specifier> <specifier>static</specifier> <specifier>abstract</specifier> class <name><name>Order</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name>
+        <block>{
+            <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>RequestCoordinator</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name></type> <name>coordinator</name></decl>;</decl_stmt>
+
+            <constructor><name>Order</name><parameter_list>(<param><decl><type><name><name>RequestCoordinator</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name></type> <name>coordinator</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><name><name>this</name>.<name>coordinator</name></name> = <name>coordinator</name></expr>;</expr_stmt>
+            }</block></constructor>
+
+            <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name>R</name></type> <name>request</name></decl></param>)</parameter_list>;</function_decl>
+            <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>start</name><parameter_list>()</parameter_list>;</function_decl>
+            <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>int</name></type> <name>completed</name><parameter_list>(<param><decl><type><name>R</name></type> <name>request</name></decl></param>)</parameter_list>;</function_decl>
+        }</block></class>
+
+        <class><specifier>private</specifier> <specifier>static</specifier> class <name><name>SequentialOrder</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name> <super><extends>extends <name><name>Order</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name></extends></super>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Queue</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name></type> <name>requests</name> <init>= <expr>new <call><name><name>LinkedList</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <constructor><name>SequentialOrder</name><parameter_list>(<param><decl><type><name><name>RequestCoordinator</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name></type> <name>coordinator</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>coordinator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></constructor>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name>R</name></type> <name>request</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>requests</name>.<name>add</name></name><argument_list>(<argument><expr><name>request</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>()</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>requests</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <return>return;</return></then></if>
+
+                <expr_stmt><expr><call><name><name>coordinator</name>.<name>send</name></name><argument_list>(<argument><expr><call><name><name>requests</name>.<name>peek</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>int</name></type> <name>completed</name><parameter_list>(<param><decl><type><name>R</name></type> <name>request</name></decl></param>)</parameter_list>
+            <block>{
+                <assert>assert <expr><call><name><name>request</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>requests</name>.<name>peek</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</assert>
+                <expr_stmt><expr><call><name><name>requests</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>remaining</name> <init>= <expr><call><name><name>requests</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>remaining</name> != 0</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>coordinator</name>.<name>send</name></name><argument_list>(<argument><expr><call><name><name>requests</name>.<name>peek</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <return>return <expr><name>remaining</name></expr>;</return>
+            }</block></function>
+        }</block></class>
+
+        <class><specifier>private</specifier> <specifier>static</specifier> class <name><name>ParallelOrder</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name> <super><extends>extends <name><name>Order</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name></extends></super>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name></type> <name>requests</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <constructor><name>ParallelOrder</name><parameter_list>(<param><decl><type><name><name>RequestCoordinator</name><argument_list>&lt;<argument><name>R</name></argument>&gt;</argument_list></name></type> <name>coordinator</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>coordinator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></constructor>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name>R</name></type> <name>request</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>requests</name>.<name>add</name></name><argument_list>(<argument><expr><name>request</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>()</parameter_list>
+            <block>{
+                <for>for (<init><decl><type><name>R</name></type> <name>request</name> <range>: <expr><name>requests</name></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>coordinator</name>.<name>send</name></name><argument_list>(<argument><expr><name>request</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>int</name></type> <name>completed</name><parameter_list>(<param><decl><type><name>R</name></type> <name>request</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>requests</name>.<name>remove</name></name><argument_list>(<argument><expr><name>request</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><call><name><name>requests</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class>
+
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,38 @@
+public CqlResult execute(ClientState state, List<ByteBuffer> variables) throws InvalidRequestException, UnavailableException, TimedOutException
+    {
+        List<Row> rows;
+        if (isKeyRange())
+        {
+            rows = multiRangeSlice(variables);
+        }
+        else
+        {
+            rows = getSlice(variables);
+        }
+
+        CqlResult result = new CqlResult();
+        result.type = CqlResultType.ROWS;
+
+        // Even for count, we need to process the result as it'll group some column together in sparse column families
+        CqlMetadata schema = createSchema();
+        List<CqlRow> cqlRows = process(rows, schema, variables);
+
+        // count resultset is a single column named "count"
+        if (parameters.isCount)
+        {
+            result.schema = new CqlMetadata(Collections.<ByteBuffer, String>emptyMap(),
+                                            Collections.<ByteBuffer, String>emptyMap(),
+                                            "AsciiType",
+                                            "LongType");
+            List<Column> columns = Collections.singletonList(new Column(countColumn).setValue(ByteBufferUtil.bytes((long) cqlRows.size())));
+            result.rows = Collections.singletonList(new CqlRow(countColumn, columns));
+            return result;
+        }
+        else
+        {
+            // otherwise create resultset from query results
+            result.schema = schema;
+            result.rows = cqlRows;
+            return result;
+        }
+    }

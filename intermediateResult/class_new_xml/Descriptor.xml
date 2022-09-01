@@ -1,0 +1,341 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\io\sstable\Descriptor.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>StringTokenizer</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Objects</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FilterFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+
+<import>import static <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>Component</name>.<name>separator</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * A SSTable is described by the keyspace and column family it contains data
+ * for, a generation (where higher generations contain more recent data) and
+ * an alphabetic version string.
+ *
+ * A descriptor can be marked as temporary, which influences generated filenames.
+ */</comment>
+<class><specifier>public</specifier> class <name>Descriptor</name>
+<block>{
+    <comment type="line">// versions are denoted as [major][minor].  Minor versions must be forward-compatible:</comment>
+    <comment type="line">// new fields are allowed in e.g. the metadata component, but fields can't be removed</comment>
+    <comment type="line">// or have their size changed.</comment>
+    <comment type="line">//</comment>
+    <comment type="line">// Minor versions were introduced with version "hb" for Cassandra 1.0.3; prior to that,</comment>
+    <comment type="line">// we always incremented the major version.  In particular, versions g and h are</comment>
+    <comment type="line">// forwards-compatible with version f, so if the above convention had been followed,</comment>
+    <comment type="line">// we would have labeled them fb and fc.</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>Version</name>
+    <block>{
+        <comment type="line">// This needs to be at the begining for initialization sake</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>current_version</name> <init>= <expr>"ib"</expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Version</name></type> <name>LEGACY</name> <init>= <expr>new <call><name>Version</name><argument_list>(<argument><expr>"a"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// "pre-history"</comment>
+        <comment type="line">// b (0.7.0): added version to sstable filenames</comment>
+        <comment type="line">// c (0.7.0): bloom filter component computes hashes over raw key bytes instead of strings</comment>
+        <comment type="line">// d (0.7.0): row size in data component becomes a long instead of int</comment>
+        <comment type="line">// e (0.7.0): stores undecorated keys in data and index components</comment>
+        <comment type="line">// f (0.7.0): switched bloom filter implementations in data component</comment>
+        <comment type="line">// g (0.8): tracks flushed-at context in metadata component</comment>
+        <comment type="line">// h (1.0): tracks max client timestamp in metadata component</comment>
+        <comment type="line">// hb (1.0.3): records compression ration in metadata component</comment>
+        <comment type="line">// hc (1.0.4): records partitioner in metadata component</comment>
+        <comment type="line">// hd (1.0.10): includes row tombstones in maxtimestamp</comment>
+        <comment type="line">// he (1.1.3): includes ancestors generation in metadata component</comment>
+        <comment type="line">// hf (1.1.6): marker that replay position corresponds to 1.1.5+ millis-based id (see CASSANDRA-4782)</comment>
+        <comment type="line">// ia (1.2.0): column indexes are promoted to the index file</comment>
+        <comment type="line">//             records estimated histogram of deletion times in tombstones</comment>
+        <comment type="line">//             bloom filter (keys and columns) upgraded to Murmur3</comment>
+        <comment type="line">// ib (1.2.1): tracks min client timestamp in metadata component</comment>
+
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Version</name></type> <name>CURRENT</name> <init>= <expr>new <call><name>Version</name><argument_list>(<argument><expr><name>current_version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>version</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>hasStringsInBloomFilter</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>hasIntRowSize</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>hasEncodedKeys</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>isLatestVersion</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>metadataIncludesReplayPosition</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>metadataIncludesModernReplayPosition</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>tracksMaxTimestamp</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>tracksMinTimestamp</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>hasCompressionRatio</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>hasPartitioner</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>tracksTombstones</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>hasPromotedIndexes</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>FilterFactory</name>.<name>Type</name></name></type> <name>filterType</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>hasAncestors</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>Version</name><parameter_list>(<param><decl><type><name>String</name></type> <name>version</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>version</name></name> = <name>version</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>hasStringsInBloomFilter</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"c"</expr></argument>)</argument_list></call> &lt; 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>hasIntRowSize</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"d"</expr></argument>)</argument_list></call> &lt; 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>hasEncodedKeys</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"e"</expr></argument>)</argument_list></call> &lt; 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>metadataIncludesReplayPosition</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"g"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>hasCompressionRatio</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"hb"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>hasPartitioner</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"hc"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>tracksMaxTimestamp</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"hd"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>tracksMinTimestamp</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"ib"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>hasAncestors</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"he"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>metadataIncludesModernReplayPosition</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"hf"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>tracksTombstones</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"ia"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>hasPromotedIndexes</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"ia"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</expr_stmt>
+            <expr_stmt><expr><name>isLatestVersion</name> = <call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name>current_version</name></expr></argument>)</argument_list></call> == 0</expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"f"</expr></argument>)</argument_list></call> &lt; 0</expr>)</condition><then>
+                <expr_stmt><expr><name>filterType</name> = <name><name>FilterFactory</name>.<name>Type</name>.<name>SHA</name></name></expr>;</expr_stmt></then>
+            <else>else <if>if <condition>(<expr><call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"ia"</expr></argument>)</argument_list></call> &lt; 0</expr>)</condition><then>
+                <expr_stmt><expr><name>filterType</name> = <name><name>FilterFactory</name>.<name>Type</name>.<name>MURMUR2</name></name></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><name>filterType</name> = <name><name>FilterFactory</name>.<name>Type</name>.<name>MURMUR3</name></name></expr>;</expr_stmt></else></if></else></if>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/**
+         * @param ver SSTable version
+         * @return True if the given version string matches the format.
+         * @see #version
+         */</comment>
+        <function><type><specifier>static</specifier> <name>boolean</name></type> <name>validate</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ver</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><name>ver</name> != null &amp;&amp; <call><name><name>ver</name>.<name>matches</name></name><argument_list>(<argument><expr>"[a-z]+"</expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isCompatible</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>version</name>.<name>charAt</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call> &lt;= <call><name><name>CURRENT</name>.<name>version</name>.<name>charAt</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isStreamCompatible</name><parameter_list>()</parameter_list>
+        <block>{
+            <comment type="line">// we could add compatibility for earlier versions with the new single-pass streaming</comment>
+            <comment type="line">// (see SSTableWriter.appendFromStream) but versions earlier than 0.7.1 don't have the</comment>
+            <comment type="line">// MessagingService version awareness anyway so there's no point.</comment>
+            <return>return <expr><call><name>isCompatible</name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>version</name>.<name>charAt</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call> &gt;= 'i'</expr>;</return>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Versions [h..hc] contained a timestamp value that was computed incorrectly, ignoring row tombstones.
+         * containsTimestamp returns true if there is a timestamp value in the metadata file; to know if it
+         * actually contains a *correct* timestamp, see tracksMaxTimestamp.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>containsTimestamp</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>version</name>.<name>compareTo</name></name><argument_list>(<argument><expr>"h"</expr></argument>)</argument_list></call> &gt;= 0</expr>;</return>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>version</name></expr>;</return>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>boolean</name></type> <name>equals</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>o</name> == <name>this</name></expr>)</condition><then>
+                <return>return <expr>true</expr>;</return></then></if>
+            <if>if <condition>(<expr>!(<name>o</name> instanceof <name>Version</name>)</expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+            <return>return <expr><call><name><name>version</name>.<name>equals</name></name><argument_list>(<argument><expr>((<name>Version</name>)<name>o</name>).<name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>int</name></type> <name>hashCode</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>version</name>.<name>hashCode</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>File</name></type> <name>directory</name></decl>;</decl_stmt>
+    <comment type="block" format="javadoc">/** version has the following format: &lt;code&gt;[a-z]+&lt;/code&gt; */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Version</name></type> <name>version</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>String</name></type> <name>ksname</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>String</name></type> <name>cfname</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>int</name></type> <name>generation</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>temporary</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>hashCode</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * A descriptor that assumes CURRENT_VERSION.
+     */</comment>
+    <constructor><specifier>public</specifier> <name>Descriptor</name><parameter_list>(<param><decl><type><name>File</name></type> <name>directory</name></decl></param>, <param><decl><type><name>String</name></type> <name>ksname</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfname</name></decl></param>, <param><decl><type><name>int</name></type> <name>generation</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>temp</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name><name>Version</name>.<name>CURRENT</name></name></expr></argument>, <argument><expr><name>directory</name></expr></argument>, <argument><expr><name>ksname</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>generation</name></expr></argument>, <argument><expr><name>temp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>Descriptor</name><parameter_list>(<param><decl><type><name>String</name></type> <name>version</name></decl></param>, <param><decl><type><name>File</name></type> <name>directory</name></decl></param>, <param><decl><type><name>String</name></type> <name>ksname</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfname</name></decl></param>, <param><decl><type><name>int</name></type> <name>generation</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>temp</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr>new <call><name>Version</name><argument_list>(<argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>directory</name></expr></argument>, <argument><expr><name>ksname</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>generation</name></expr></argument>, <argument><expr><name>temp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>Descriptor</name><parameter_list>(<param><decl><type><name>Version</name></type> <name>version</name></decl></param>, <param><decl><type><name>File</name></type> <name>directory</name></decl></param>, <param><decl><type><name>String</name></type> <name>ksname</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfname</name></decl></param>, <param><decl><type><name>int</name></type> <name>generation</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>temp</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>version</name> != null &amp;&amp; <name>directory</name> != null &amp;&amp; <name>ksname</name> != null &amp;&amp; <name>cfname</name> != null</expr>;</assert>
+        <expr_stmt><expr><name><name>this</name>.<name>version</name></name> = <name>version</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>directory</name></name> = <name>directory</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>ksname</name></name> = <name>ksname</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>cfname</name></name> = <name>cfname</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>generation</name></name> = <name>generation</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>temporary</name> = <name>temp</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>hashCode</name> = <call><name><name>Objects</name>.<name>hashCode</name></name><argument_list>(<argument><expr><name>directory</name></expr></argument>, <argument><expr><name>generation</name></expr></argument>, <argument><expr><name>ksname</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>Descriptor</name></type> <name>withGeneration</name><parameter_list>(<param><decl><type><name>int</name></type> <name>newGeneration</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>Descriptor</name><argument_list>(<argument><expr><name>version</name></expr></argument>, <argument><expr><name>directory</name></expr></argument>, <argument><expr><name>ksname</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>newGeneration</name></expr></argument>, <argument><expr><name>temporary</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>filenameFor</name><parameter_list>(<param><decl><type><name>Component</name></type> <name>component</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>filenameFor</name><argument_list>(<argument><expr><call><name><name>component</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>baseFilename</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>buff</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr><name>directory</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name><name>File</name>.<name>separatorChar</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr><name>ksname</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>separator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr><name>cfname</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>separator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>temporary</name></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>TEMPFILE_MARKER</name></name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>separator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr>!<call><name><name>Version</name>.<name>LEGACY</name>.<name>equals</name></name><argument_list>(<argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr><name>version</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>separator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr><name>generation</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>buff</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @param suffix A component suffix, such as 'Data.db'/'Index.db'/etc
+     * @return A filename for this descriptor with the given suffix.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>filenameFor</name><parameter_list>(<param><decl><type><name>String</name></type> <name>suffix</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>baseFilename</name><argument_list>()</argument_list></call> + <name>separator</name> + <name>suffix</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @see #fromFilename(File directory, String name)
+     * @param filename The SSTable filename
+     * @return Descriptor of the SSTable initialized from filename
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Descriptor</name></type> <name>fromFilename</name><parameter_list>(<param><decl><type><name>String</name></type> <name>filename</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>file</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>filename</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name>fromFilename</name><argument_list>(<argument><expr><call><name><name>file</name>.<name>getParentFile</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>file</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<name>left</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Filename of the form "&lt;ksname&gt;-&lt;cfname&gt;-[tmp-][&lt;version&gt;-]&lt;gen&gt;-&lt;component&gt;"
+     *
+     * @param directory The directory of the SSTable files
+     * @param name The name of the SSTable file
+     *
+     * @return A Descriptor for the SSTable, and the Component remainder.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Pair</name><argument_list>&lt;<argument><name>Descriptor</name></argument>,<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>fromFilename</name><parameter_list>(<param><decl><type><name>File</name></type> <name>directory</name></decl></param>, <param><decl><type><name>String</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// tokenize the filename</comment>
+        <decl_stmt><decl><type><name>StringTokenizer</name></type> <name>st</name> <init>= <expr>new <call><name>StringTokenizer</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><call><name><name>String</name>.<name>valueOf</name></name><argument_list>(<argument><expr><name>separator</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>nexttok</name></decl>;</decl_stmt>
+
+        <comment type="line">// all filenames must start with keyspace and column family</comment>
+        <decl_stmt><decl><type><name>String</name></type> <name>ksname</name> <init>= <expr><call><name><name>st</name>.<name>nextToken</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>cfname</name> <init>= <expr><call><name><name>st</name>.<name>nextToken</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// optional temporary marker</comment>
+        <expr_stmt><expr><name>nexttok</name> = <call><name><name>st</name>.<name>nextToken</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>temporary</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>nexttok</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>TEMPFILE_MARKER</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>temporary</name> = true</expr>;</expr_stmt>
+            <expr_stmt><expr><name>nexttok</name> = <call><name><name>st</name>.<name>nextToken</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <comment type="line">// optional version string</comment>
+        <decl_stmt><decl><type><name>Version</name></type> <name>version</name> <init>= <expr><name><name>Version</name>.<name>LEGACY</name></name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>Version</name>.<name>validate</name></name><argument_list>(<argument><expr><name>nexttok</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>version</name> = new <call><name>Version</name><argument_list>(<argument><expr><name>nexttok</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>nexttok</name> = <call><name><name>st</name>.<name>nextToken</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <decl_stmt><decl><type><name>int</name></type> <name>generation</name> <init>= <expr><call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><name>nexttok</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// component suffix</comment>
+        <decl_stmt><decl><type><name>String</name></type> <name>component</name> <init>= <expr><call><name><name>st</name>.<name>nextToken</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>directory</name> = <name>directory</name> != null ? <name>directory</name> : new <call><name>File</name><argument_list>(<argument><expr>"."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>Pair</name>.<name>create</name></name><argument_list>(<argument><expr>new <call><name>Descriptor</name><argument_list>(<argument><expr><name>version</name></expr></argument>, <argument><expr><name>directory</name></expr></argument>, <argument><expr><name>ksname</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>generation</name></expr></argument>, <argument><expr><name>temporary</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>component</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @param temporary temporary flag
+     * @return A clone of this descriptor with the given 'temporary' status.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>Descriptor</name></type> <name>asTemporary</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>temporary</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>Descriptor</name><argument_list>(<argument><expr><name>version</name></expr></argument>, <argument><expr><name>directory</name></expr></argument>, <argument><expr><name>ksname</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>generation</name></expr></argument>, <argument><expr><name>temporary</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if the current Cassandra version can read the given sstable version
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isCompatible</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>version</name>.<name>isCompatible</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if the current Cassandra version can stream the given sstable version
+     * from another node.  This is stricter than opening it locally [isCompatible] because
+     * streaming needs to rebuild all the non-data components, and it only knows how to write
+     * the latest version.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isStreamCompatible</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>version</name>.<name>isStreamCompatible</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>baseFilename</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>boolean</name></type> <name>equals</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>o</name> == <name>this</name></expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+        <if>if <condition>(<expr>!(<name>o</name> instanceof <name>Descriptor</name>)</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+        <decl_stmt><decl><type><name>Descriptor</name></type> <name>that</name> <init>= <expr>(<name>Descriptor</name>)<name>o</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>that</name>.<name>directory</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>directory</name></name></expr></argument>)</argument_list></call> &amp;&amp; <name><name>that</name>.<name>generation</name></name> == <name><name>this</name>.<name>generation</name></name> &amp;&amp; <call><name><name>that</name>.<name>ksname</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>ksname</name></name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>that</name>.<name>cfname</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>cfname</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>int</name></type> <name>hashCode</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>hashCode</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

@@ -1,0 +1,565 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\DataTracker.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>CopyOnWriteArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicReference</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>OperationType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>metrics</name>.<name>StorageMetrics</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>notifications</name>.<name>INotification</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>notifications</name>.<name>INotificationConsumer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>notifications</name>.<name>SSTableAddedNotification</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>notifications</name>.<name>SSTableListChangedNotification</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Interval</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>IntervalTree</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>DataTracker</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>DataTracker</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>INotificationConsumer</name></argument>&gt;</argument_list></name></type> <name>subscribers</name> <init>= <expr>new <call><name><name>CopyOnWriteArrayList</name><argument_list>&lt;<argument><name>INotificationConsumer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>cfstore</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>AtomicReference</name><argument_list>&lt;<argument><name>View</name></argument>&gt;</argument_list></name></type> <name>view</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>DataTracker</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfstore</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>cfstore</name></name> = <name>cfstore</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>view</name></name> = new <call><name><name>AtomicReference</name><argument_list>&lt;<argument><name>View</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>this</name>.<name>init</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>Memtable</name></type> <name>getMemtable</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call>.<name>memtable</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Memtable</name></argument>&gt;</argument_list></name></type> <name>getMemtablesPendingFlush</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call>.<name>memtablesPendingFlush</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>getSSTables</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call>.<name>sstables</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>getUncompactingSSTables</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call>.<call><name>nonCompactingSStables</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>View</name></type> <name>getView</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Switch the current memtable.
+     * This atomically adds the current memtable to the memtables pending
+     * flush and replace it with a fresh memtable.
+     *
+     * @return the previous current memtable (the one added to the pending
+     * flush)
+     */</comment>
+    <function><type><specifier>public</specifier> <name>Memtable</name></type> <name>switchMemtable</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// atomically change the current memtable</comment>
+        <decl_stmt><decl><type><name>Memtable</name></type> <name>newMemtable</name> <init>= <expr>new <call><name>Memtable</name><argument_list>(<argument><expr><name>cfstore</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Memtable</name></type> <name>toFlushMemtable</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>View</name></type> <name>currentView</name></decl>, <decl><type ref="prev"/><name>newView</name></decl>;</decl_stmt>
+        <do>do
+        <block>{
+            <expr_stmt><expr><name>currentView</name> = <call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>toFlushMemtable</name> = <name><name>currentView</name>.<name>memtable</name></name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>newView</name> = <call><name><name>currentView</name>.<name>switchMemtable</name></name><argument_list>(<argument><expr><name>newMemtable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        while <condition>(<expr>!<call><name><name>view</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentView</name></expr></argument>, <argument><expr><name>newView</name></expr></argument>)</argument_list></call></expr>)</condition>;</do>
+
+        <return>return <expr><name>toFlushMemtable</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Renew the current memtable without putting the old one for a flush.
+     * Used when we flush but a memtable is clean (in which case we must
+     * change it because it was frozen).
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>renewMemtable</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Memtable</name></type> <name>newMemtable</name> <init>= <expr>new <call><name>Memtable</name><argument_list>(<argument><expr><name>cfstore</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>View</name></type> <name>currentView</name></decl>, <decl><type ref="prev"/><name>newView</name></decl>;</decl_stmt>
+        <do>do
+        <block>{
+            <expr_stmt><expr><name>currentView</name> = <call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>newView</name> = <call><name><name>currentView</name>.<name>renewMemtable</name></name><argument_list>(<argument><expr><name>newMemtable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        while <condition>(<expr>!<call><name><name>view</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentView</name></expr></argument>, <argument><expr><name>newView</name></expr></argument>)</argument_list></call></expr>)</condition>;</do>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>replaceFlushed</name><parameter_list>(<param><decl><type><name>Memtable</name></type> <name>memtable</name></decl></param>, <param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// sstable may be null if we flushed batchlog and nothing needed to be retained</comment>
+
+        <if>if <condition>(<expr>!<call><name><name>cfstore</name>.<name>isValid</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>View</name></type> <name>currentView</name></decl>, <decl><type ref="prev"/><name>newView</name></decl>;</decl_stmt>
+            <do>do
+            <block>{
+                <expr_stmt><expr><name>currentView</name> = <call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>newView</name> = <call><name><name>currentView</name>.<name>replaceFlushed</name></name><argument_list>(<argument><expr><name>memtable</name></expr></argument>, <argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>sstable</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><name>newView</name> = <call><name><name>newView</name>.<name>replace</name></name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block>
+            while <condition>(<expr>!<call><name><name>view</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentView</name></expr></argument>, <argument><expr><name>newView</name></expr></argument>)</argument_list></call></expr>)</condition>;</do>
+            <return>return;</return>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>View</name></type> <name>currentView</name></decl>, <decl><type ref="prev"/><name>newView</name></decl>;</decl_stmt>
+        <do>do
+        <block>{
+            <expr_stmt><expr><name>currentView</name> = <call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>newView</name> = <call><name><name>currentView</name>.<name>replaceFlushed</name></name><argument_list>(<argument><expr><name>memtable</name></expr></argument>, <argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        while <condition>(<expr>!<call><name><name>view</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentView</name></expr></argument>, <argument><expr><name>newView</name></expr></argument>)</argument_list></call></expr>)</condition>;</do>
+
+        <if>if <condition>(<expr><name>sstable</name> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>addNewSSTablesSize</name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>notifyAdded</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>incrementallyBackup</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>incrementallyBackup</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>SSTableReader</name></type> <name>sstable</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>DatabaseDescriptor</name>.<name>isIncrementalBackupsEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>File</name></type> <name>backupsDir</name> <init>= <expr><call><name><name>Directories</name>.<name>getBackupsDirectory</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>sstable</name>.<name>createLinks</name></name><argument_list>(<argument><expr><call><name><name>FileUtils</name>.<name>getCanonicalPath</name></name><argument_list>(<argument><expr><name>backupsDir</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>tasks</name>.<name>execute</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if we are able to mark the given @param sstables as compacted, before anyone else
+     *
+     * Note that we could acquire references on the marked sstables and release them in
+     * unmarkCompacting, but since we will never call markCompacted on a sstable marked
+     * as compacting (unless there is a serious bug), we can skip this.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>markCompacting</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>sstables</name> != null &amp;&amp; !<call><name><name>sstables</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+
+        <decl_stmt><decl><type><name>View</name></type> <name>currentView</name> <init>= <expr><call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>inactive</name> <init>= <expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>currentView</name>.<name>compacting</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>inactive</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; <call><name><name>sstables</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>View</name></type> <name>newView</name> <init>= <expr><call><name><name>currentView</name>.<name>markCompacting</name></name><argument_list>(<argument><expr><name>inactive</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>view</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentView</name></expr></argument>, <argument><expr><name>newView</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Removes files from compacting status: this is different from 'markCompacted'
+     * because it should be run regardless of whether a compaction succeeded.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>unmarkCompacting</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>unmark</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>cfstore</name>.<name>isValid</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <comment type="line">// We don't know if the original compaction suceeded or failed, which makes it difficult to know</comment>
+            <comment type="line">// if the sstable reference has already been released.</comment>
+            <comment type="line">// A "good enough" approach is to mark the sstables involved compacted, which if compaction succeeded</comment>
+            <comment type="line">// is harmlessly redundant, and if it failed ensures that at least the sstable will get deleted on restart.</comment>
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>unmark</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>sstable</name>.<name>markCompacted</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>View</name></type> <name>currentView</name></decl>, <decl><type ref="prev"/><name>newView</name></decl>;</decl_stmt>
+        <do>do
+        <block>{
+            <expr_stmt><expr><name>currentView</name> = <call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>newView</name> = <call><name><name>currentView</name>.<name>unmarkCompacting</name></name><argument_list>(<argument><expr><name>unmark</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        while <condition>(<expr>!<call><name><name>view</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentView</name></expr></argument>, <argument><expr><name>newView</name></expr></argument>)</argument_list></call></expr>)</condition>;</do>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>markCompacted</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>compactionType</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>replace</name><argument_list>(<argument><expr><name>sstables</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>notifySSTablesChanged</name><argument_list>(<argument><expr><name>sstables</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>compactionType</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>replaceCompactedSSTables</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>replacements</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>compactionType</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>replace</name><argument_list>(<argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>replacements</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>notifySSTablesChanged</name><argument_list>(<argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>replacements</name></expr></argument>, <argument><expr><name>compactionType</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addInitialSSTables</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>replace</name><argument_list>(<argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// no notifications or backup necessary</comment>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addSSTables</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>replace</name><argument_list>(<argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name>incrementallyBackup</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>notifyAdded</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * removes all sstables that are not busy compacting.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>unreferenceSSTables</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>notCompacting</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>View</name></type> <name>currentView</name></decl>, <decl><type ref="prev"/><name>newView</name></decl>;</decl_stmt>
+        <do>do
+        <block>{
+            <expr_stmt><expr><name>currentView</name> = <call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>notCompacting</name> = <call><name><name>currentView</name>.<name>nonCompactingSStables</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>newView</name> = <call><name><name>currentView</name>.<name>replace</name></name><argument_list>(<argument><expr><name>notCompacting</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptySet</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        while <condition>(<expr>!<call><name><name>view</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentView</name></expr></argument>, <argument><expr><name>newView</name></expr></argument>)</argument_list></call></expr>)</condition>;</do>
+
+        <if>if <condition>(<expr><call><name><name>notCompacting</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <comment type="line">// notifySSTablesChanged -&gt; LeveledManifest.promote doesn't like a no-op "promotion"</comment>
+            <return>return;</return>
+        }</block></then></if>
+        <expr_stmt><expr><call><name>notifySSTablesChanged</name><argument_list>(<argument><expr><name>notCompacting</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptySet</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>OperationType</name>.<name>UNKNOWN</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>postReplace</name><argument_list>(<argument><expr><name>notCompacting</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptySet</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Removes every SSTable in the directory from the DataTracker's view.
+     * @param directory the unreadable directory, possibly with SSTables in it, but not necessarily.
+     */</comment>
+    <function><type><name>void</name></type> <name>removeUnreadableSSTables</name><parameter_list>(<param><decl><type><name>File</name></type> <name>directory</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>View</name></type> <name>currentView</name></decl>, <decl><type ref="prev"/><name>newView</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>remaining</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <do>do
+        <block>{
+            <expr_stmt><expr><name>currentView</name> = <call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>r</name> <range>: <expr><call><name><name>currentView</name>.<name>nonCompactingSStables</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr>!<call><name><name>r</name>.<name>descriptor</name>.<name>directory</name>.<name>equals</name></name><argument_list>(<argument><expr><name>directory</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>remaining</name>.<name>add</name></name><argument_list>(<argument><expr><name>r</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></for>
+
+            <if>if <condition>(<expr><call><name><name>remaining</name>.<name>size</name></name><argument_list>()</argument_list></call> == <call><name><name>currentView</name>.<name>nonCompactingSStables</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <expr_stmt><expr><name>newView</name> = <call><name><name>currentView</name>.<name>replace</name></name><argument_list>(<argument><expr><name><name>currentView</name>.<name>sstables</name></name></expr></argument>, <argument><expr><name>remaining</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        while <condition>(<expr>!<call><name><name>view</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentView</name></expr></argument>, <argument><expr><name>newView</name></expr></argument>)</argument_list></call></expr>)</condition>;</do>
+        <expr_stmt><expr><call><name>notifySSTablesChanged</name><argument_list>(<argument><expr><name>remaining</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptySet</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>OperationType</name>.<name>UNKNOWN</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** (Re)initializes the tracker, purging all references. */</comment>
+    <function><type><name>void</name></type> <name>init</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>view</name>.<name>set</name></name><argument_list>(<argument><expr>new <call><name>View</name><argument_list>(<argument><expr>new <call><name>Memtable</name><argument_list>(<argument><expr><name>cfstore</name></expr></argument>)</argument_list></call></expr></argument>,
+                          <argument><expr><name><name>Collections</name>.</name>&lt;<name>Memtable</name>&gt;<call><name>emptySet</name><argument_list>()</argument_list></call></expr></argument>,
+                          <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptySet</name><argument_list>()</argument_list></call></expr></argument>,
+                          <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptySet</name><argument_list>()</argument_list></call></expr></argument>,
+                          <argument><expr><call><name><name>SSTableIntervalTree</name>.<name>empty</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>replace</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>oldSSTables</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>replacements</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>cfstore</name>.<name>isValid</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>removeOldSSTablesSize</name><argument_list>(<argument><expr><name>replacements</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>replacements</name> = <call><name><name>Collections</name>.<name>emptyList</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>View</name></type> <name>currentView</name></decl>, <decl><type ref="prev"/><name>newView</name></decl>;</decl_stmt>
+        <do>do
+        <block>{
+            <expr_stmt><expr><name>currentView</name> = <call><name><name>view</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>newView</name> = <call><name><name>currentView</name>.<name>replace</name></name><argument_list>(<argument><expr><name>oldSSTables</name></expr></argument>, <argument><expr><name>replacements</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        while <condition>(<expr>!<call><name><name>view</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentView</name></expr></argument>, <argument><expr><name>newView</name></expr></argument>)</argument_list></call></expr>)</condition>;</do>
+
+        <expr_stmt><expr><call><name>postReplace</name><argument_list>(<argument><expr><name>oldSSTables</name></expr></argument>, <argument><expr><name>replacements</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>postReplace</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>oldSSTables</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>replacements</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>addNewSSTablesSize</name><argument_list>(<argument><expr><name>replacements</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>removeOldSSTablesSize</name><argument_list>(<argument><expr><name>oldSSTables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>addNewSSTablesSize</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>newSSTables</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>newSSTables</name></expr></range></decl></init>)
+        <block>{
+            <assert>assert <expr><call><name><name>sstable</name>.<name>getKeySamples</name></name><argument_list>()</argument_list></call> != null</expr>;</assert>
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"adding %s to list of files tracked for %s.%s"</expr></argument>,
+                            <argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>, <argument><expr><name><name>cfstore</name>.<name>table</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name><name>cfstore</name>.<name>getColumnFamilyName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><call><name><name>sstable</name>.<name>bytesOnDisk</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>StorageMetrics</name>.<name>load</name>.<name>inc</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>cfstore</name>.<name>metric</name>.<name>liveDiskSpaceUsed</name>.<name>inc</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>cfstore</name>.<name>metric</name>.<name>totalDiskSpaceUsed</name>.<name>inc</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sstable</name>.<name>setTrackedBy</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>removeOldSSTablesSize</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>oldSSTables</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>oldSSTables</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"removing %s from list of files tracked for %s.%s"</expr></argument>,
+                            <argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>, <argument><expr><name><name>cfstore</name>.<name>table</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name><name>cfstore</name>.<name>getColumnFamilyName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><call><name><name>sstable</name>.<name>bytesOnDisk</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>StorageMetrics</name>.<name>load</name>.<name>dec</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>cfstore</name>.<name>metric</name>.<name>liveDiskSpaceUsed</name>.<name>dec</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>firstToCompact</name> <init>= <expr><call><name><name>sstable</name>.<name>markCompacted</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><name>firstToCompact</name> : <name>sstable</name> + " was already marked compacted"</expr>;</assert>
+            <expr_stmt><expr><call><name><name>sstable</name>.<name>releaseReference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>spaceReclaimed</name><parameter_list>(<param><decl><type><name>long</name></type> <name>size</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>cfstore</name>.<name>metric</name>.<name>totalDiskSpaceUsed</name>.<name>dec</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>estimatedKeys</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><call><name>getSSTables</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><name>n</name> += <call><name><name>sstable</name>.<name>estimatedKeys</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>n</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getMeanColumns</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>sum</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>count</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><call><name>getSSTables</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><name>sum</name> += <call><name><name>sstable</name>.<name>getEstimatedColumnCount</name></name><argument_list>()</argument_list></call>.<call><name>mean</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>count</name>++</expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>count</name> &gt; 0 ? <call>(<name>int</name>) <argument_list>(<argument><expr><name>sum</name> / <name>count</name></expr></argument>)</argument_list></call> : 0</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>double</name></type> <name>getDroppableTombstoneRatio</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>double</name></type> <name>allDroppable</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>allColumns</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>localTime</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call>/1000</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><call><name>getSSTables</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><name>allDroppable</name> += <call><name><name>sstable</name>.<name>getDroppableTombstonesBefore</name></name><argument_list>(<argument><expr><name>localTime</name> - <call><name><name>sstable</name>.<name>metadata</name>.<name>getGcGraceSeconds</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>allColumns</name> += <call><name><name>sstable</name>.<name>getEstimatedColumnCount</name></name><argument_list>()</argument_list></call>.<call><name>mean</name><argument_list>()</argument_list></call> * <call><name><name>sstable</name>.<name>getEstimatedColumnCount</name></name><argument_list>()</argument_list></call>.<call><name>count</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <if>if <condition>(<expr><name>allColumns</name> &gt; 0</expr>)</condition><then>
+        <block>{
+            <return>return <expr><name>allDroppable</name> / <name>allColumns</name></expr>;</return>
+        }</block></then></if>
+        <return>return <expr>0</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>notifySSTablesChanged</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>removed</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>added</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>compactionType</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>INotificationConsumer</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>INotification</name></type> <name>notification</name> <init>= <expr>new <call><name>SSTableListChangedNotification</name><argument_list>(<argument><expr><name>added</name></expr></argument>, <argument><expr><name>removed</name></expr></argument>, <argument><expr><name>compactionType</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>handleNotification</name></name><argument_list>(<argument><expr><name>notification</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>notifyAdded</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>added</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>INotificationConsumer</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>INotification</name></type> <name>notification</name> <init>= <expr>new <call><name>SSTableAddedNotification</name><argument_list>(<argument><expr><name>added</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>handleNotification</name></name><argument_list>(<argument><expr><name>notification</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>subscribe</name><parameter_list>(<param><decl><type><name>INotificationConsumer</name></type> <name>consumer</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>subscribers</name>.<name>add</name></name><argument_list>(<argument><expr><name>consumer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>unsubscribe</name><parameter_list>(<param><decl><type><name>INotificationConsumer</name></type> <name>consumer</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>boolean</name></type> <name>found</name> <init>= <expr><call><name><name>subscribers</name>.<name>remove</name></name><argument_list>(<argument><expr><name>consumer</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>found</name> : <name>consumer</name> + " not subscribed"</expr>;</assert>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>SSTableIntervalTree</name></type> <name>buildIntervalTree</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Interval</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>intervals</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Interval</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>intervals</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>Interval</name>.</name>&lt;<name>RowPosition</name></expr></argument>, <argument><expr><name>SSTableReader</name>&gt;<call><name>create</name><argument_list>(<argument><expr><name><name>sstable</name>.<name>first</name></name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>last</name></name></expr></argument>, <argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr>new <call><name>SSTableIntervalTree</name><argument_list>(<argument><expr><name>intervals</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>getCompacting</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getView</name><argument_list>()</argument_list></call>.<name>compacting</name></expr>;</return>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>SSTableIntervalTree</name> <super><extends>extends <name><name>IntervalTree</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>SSTableReader</name></argument>, <argument><name><name>Interval</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>SSTableIntervalTree</name></type> <name>EMPTY</name> <init>= <expr>new <call><name>SSTableIntervalTree</name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <constructor><specifier>private</specifier> <name>SSTableIntervalTree</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Interval</name><argument_list>&lt;<argument><name>RowPosition</name></argument>, <argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>intervals</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>intervals</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <specifier>static</specifier> <name>SSTableIntervalTree</name></type> <name>empty</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>EMPTY</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * An immutable structure holding the current memtable, the memtables pending
+     * flush, the sstables for a column family, and the sstables that are active
+     * in compaction (a subset of the sstables).
+     */</comment>
+    <class><specifier>static</specifier> class <name>View</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Memtable</name></type> <name>memtable</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Memtable</name></argument>&gt;</argument_list></name></type> <name>memtablesPendingFlush</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>compacting</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>SSTableIntervalTree</name></type> <name>intervalTree</name></decl>;</decl_stmt>
+
+        <constructor><name>View</name><parameter_list>(<param><decl><type><name>Memtable</name></type> <name>memtable</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Memtable</name></argument>&gt;</argument_list></name></type> <name>pendingFlush</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>compacting</name></decl></param>, <param><decl><type><name>SSTableIntervalTree</name></type> <name>intervalTree</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>memtable</name></name> = <name>memtable</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>memtablesPendingFlush</name></name> = <name>pendingFlush</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>sstables</name></name> = <name>sstables</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>compacting</name></name> = <name>compacting</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>intervalTree</name></name> = <name>intervalTree</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name><name>Sets</name>.<name><name>SetView</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></name></type> <name>nonCompactingSStables</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>compacting</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>View</name></type> <name>switchMemtable</name><parameter_list>(<param><decl><type><name>Memtable</name></type> <name>newMemtable</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Memtable</name></argument>&gt;</argument_list></name></type> <name>newPending</name> <init>= <expr><name><name>ImmutableSet</name>.</name>&lt;<name>Memtable</name>&gt;<call><name>builder</name><argument_list>()</argument_list></call>.<call><name>addAll</name><argument_list>(<argument><expr><name>memtablesPendingFlush</name></expr></argument>)</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>memtable</name></expr></argument>)</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>new <call><name>View</name><argument_list>(<argument><expr><name>newMemtable</name></expr></argument>, <argument><expr><name>newPending</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>compacting</name></expr></argument>, <argument><expr><name>intervalTree</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>View</name></type> <name>renewMemtable</name><parameter_list>(<param><decl><type><name>Memtable</name></type> <name>newMemtable</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>new <call><name>View</name><argument_list>(<argument><expr><name>newMemtable</name></expr></argument>, <argument><expr><name>memtablesPendingFlush</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>compacting</name></expr></argument>, <argument><expr><name>intervalTree</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>View</name></type> <name>replaceFlushed</name><parameter_list>(<param><decl><type><name>Memtable</name></type> <name>flushedMemtable</name></decl></param>, <param><decl><type><name>SSTableReader</name></type> <name>newSSTable</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Memtable</name></argument>&gt;</argument_list></name></type> <name>newPending</name> <init>= <expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><name>memtablesPendingFlush</name></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name>flushedMemtable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>newSSTables</name> <init>= <expr><name>newSSTable</name> == null
+                                            ? <name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptySet</name><argument_list>()</argument_list></call>
+                                            : <call><name>newSSTables</name><argument_list>(<argument><expr><name>newSSTable</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>SSTableIntervalTree</name></type> <name>intervalTree</name> <init>= <expr><call><name>buildIntervalTree</name><argument_list>(<argument><expr><name>newSSTables</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>new <call><name>View</name><argument_list>(<argument><expr><name>memtable</name></expr></argument>, <argument><expr><name>newPending</name></expr></argument>, <argument><expr><name>newSSTables</name></expr></argument>, <argument><expr><name>compacting</name></expr></argument>, <argument><expr><name>intervalTree</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>View</name></type> <name>replace</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>oldSSTables</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>replacements</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>newSSTables</name> <init>= <expr><call><name>newSSTables</name><argument_list>(<argument><expr><name>oldSSTables</name></expr></argument>, <argument><expr><name>replacements</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>SSTableIntervalTree</name></type> <name>intervalTree</name> <init>= <expr><call><name>buildIntervalTree</name><argument_list>(<argument><expr><name>newSSTables</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>new <call><name>View</name><argument_list>(<argument><expr><name>memtable</name></expr></argument>, <argument><expr><name>memtablesPendingFlush</name></expr></argument>, <argument><expr><name>newSSTables</name></expr></argument>, <argument><expr><name>compacting</name></expr></argument>, <argument><expr><name>intervalTree</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>View</name></type> <name>markCompacting</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>tomark</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>compactingNew</name> <init>= <expr><name><name>ImmutableSet</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>builder</name><argument_list>()</argument_list></call>.<call><name>addAll</name><argument_list>(<argument><expr><name>compacting</name></expr></argument>)</argument_list></call>.<call><name>addAll</name><argument_list>(<argument><expr><name>tomark</name></expr></argument>)</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>new <call><name>View</name><argument_list>(<argument><expr><name>memtable</name></expr></argument>, <argument><expr><name>memtablesPendingFlush</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>compactingNew</name></expr></argument>, <argument><expr><name>intervalTree</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>View</name></type> <name>unmarkCompacting</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>tounmark</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>compactingNew</name> <init>= <expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><name>compacting</name></expr></argument>, <argument><expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><name>tounmark</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>new <call><name>View</name><argument_list>(<argument><expr><name>memtable</name></expr></argument>, <argument><expr><name>memtablesPendingFlush</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>compactingNew</name></expr></argument>, <argument><expr><name>intervalTree</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>newSSTables</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>newSSTable</name></decl></param>)</parameter_list>
+        <block>{
+            <assert>assert <expr><name>newSSTable</name> != null</expr>;</assert>
+            <comment type="line">// not performance-sensitive, don't obsess over doing a selection merge here</comment>
+            <return>return <expr><call><name>newSSTables</name><argument_list>(<argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>newSSTable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>newSSTables</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>oldSSTables</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>replacements</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>ImmutableSet</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>oldSet</name> <init>= <expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><name>oldSSTables</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>newSSTablesSize</name> <init>= <expr><call><name><name>sstables</name>.<name>size</name></name><argument_list>()</argument_list></call> - <call><name><name>oldSSTables</name>.<name>size</name></name><argument_list>()</argument_list></call> + <call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name>replacements</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><name>newSSTablesSize</name> &gt;= <call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name>replacements</name></expr></argument>)</argument_list></call> : <call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Incoherent new size %d replacing %s by %s in %s"</expr></argument>, <argument><expr><name>newSSTablesSize</name></expr></argument>, <argument><expr><name>oldSSTables</name></expr></argument>, <argument><expr><name>replacements</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</assert>
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>newSSTables</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>newSSTablesSize</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr>!<call><name><name>oldSet</name>.<name>contains</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>newSSTables</name>.<name>add</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></for>
+            <expr_stmt><expr><call><name><name>Iterables</name>.<name>addAll</name></name><argument_list>(<argument><expr><name>newSSTables</name></expr></argument>, <argument><expr><name>replacements</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <assert>assert <expr><call><name><name>newSSTables</name>.<name>size</name></name><argument_list>()</argument_list></call> == <name>newSSTablesSize</name> : <call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Expecting new size of %d, got %d while replacing %s by %s in %s"</expr></argument>, <argument><expr><name>newSSTablesSize</name></expr></argument>, <argument><expr><call><name><name>newSSTables</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>oldSSTables</name></expr></argument>, <argument><expr><name>replacements</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</assert>
+            <return>return <expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><name>newSSTables</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"View(pending_count=%d, sstables=%s, compacting=%s)"</expr></argument>, <argument><expr><call><name><name>memtablesPendingFlush</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>compacting</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,437 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\tools\SSTableExport.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tools</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>PrintStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>cli</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>IPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>codehaus</name>.<name>jackson</name>.<name>JsonGenerator</name></name>;</import>
+<import>import <name><name>org</name>.<name>codehaus</name>.<name>jackson</name>.<name>map</name>.<name>ObjectMapper</name></name>;</import>
+
+<import>import static <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name>.<name>bytesToHex</name></name>;</import>
+<import>import static <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name>.<name>hexToBytes</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Export SSTables to JSON format.
+ */</comment>
+<class><specifier>public</specifier> class <name>SSTableExport</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>ObjectMapper</name></type> <name>jsonMapper</name> <init>= <expr>new <call><name>ObjectMapper</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>KEY_OPTION</name> <init>= <expr>"k"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>EXCLUDEKEY_OPTION</name> <init>= <expr>"x"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>ENUMERATEKEYS_OPTION</name> <init>= <expr>"e"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Options</name></type> <name>options</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>CommandLine</name></type> <name>cmd</name></decl>;</decl_stmt>
+
+    <expr_stmt><expr>static
+    <block>{
+        <expr><name>options</name> = new <call><name>Options</name><argument_list>()</argument_list></call></expr>;
+
+        <expr><name>Option</name> <name>optKey</name> = new <call><name>Option</name><argument_list>(<argument><expr><name>KEY_OPTION</name></expr></argument>, <argument><expr>true</expr></argument>, <argument><expr>"Row key"</expr></argument>)</argument_list></call></expr>;
+        <comment type="line">// Number of times -k &lt;key&gt; can be passed on the command line.</comment>
+        <expr><call><name><name>optKey</name>.<name>setArgs</name></name><argument_list>(<argument><expr>500</expr></argument>)</argument_list></call></expr>;
+        <expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr><name>optKey</name></expr></argument>)</argument_list></call></expr>;
+
+        <expr><name>Option</name> <name>excludeKey</name> = new <call><name>Option</name><argument_list>(<argument><expr><name>EXCLUDEKEY_OPTION</name></expr></argument>, <argument><expr>true</expr></argument>, <argument><expr>"Excluded row key"</expr></argument>)</argument_list></call></expr>;
+        <comment type="line">// Number of times -x &lt;key&gt; can be passed on the command line.</comment>
+        <expr><call><name><name>excludeKey</name>.<name>setArgs</name></name><argument_list>(<argument><expr>500</expr></argument>)</argument_list></call></expr>;
+        <expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr><name>excludeKey</name></expr></argument>)</argument_list></call></expr>;
+
+        <expr><name>Option</name> <name>optEnumerate</name> = new <call><name>Option</name><argument_list>(<argument><expr><name>ENUMERATEKEYS_OPTION</name></expr></argument>, <argument><expr>false</expr></argument>, <argument><expr>"enumerate keys only"</expr></argument>)</argument_list></call></expr>;
+        <expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr><name>optEnumerate</name></expr></argument>)</argument_list></call></expr>;
+
+        <comment type="line">// disabling auto close of the stream</comment>
+        <expr><call><name><name>jsonMapper</name>.<name>configure</name></name><argument_list>(<argument><expr><name><name>JsonGenerator</name>.<name>Feature</name>.<name>AUTO_CLOSE_TARGET</name></name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;
+    }</block>
+
+    <comment type="block" format="javadoc">/**
+     * JSON Hash Key serializer
+     *
+     * @param out The output steam to write data
+     * @param value value to set as a key
+     */</comment>
+    private static <name>void</name> <call><name>writeKey</name><argument_list>(<argument><expr><name>PrintStream</name> <name>out</name></expr></argument>, <argument><expr><name>String</name> <name>value</name></expr></argument>)</argument_list></call>
+    <block>{
+        <expr><call><name>writeJSON</name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;
+        <expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr>": "</expr></argument>)</argument_list></call></expr>;
+    }</block>
+
+    <comment type="block" format="javadoc">/**
+     * Serialize columns using given column iterator
+     *
+     * @param columns column iterator
+     * @param out output stream
+     * @param comparator columns comparator
+     * @param cfMetaData Column Family metadata (to get validator)
+     */</comment>
+    private static <name>void</name> <call><name>serializeColumns</name><argument_list>(<argument><expr><name><name>Iterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name> <name>columns</name></expr></argument>, <argument><expr><name>PrintStream</name> <name>out</name></expr></argument>, <argument><expr><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name> <name>comparator</name></expr></argument>, <argument><expr><name>CFMetaData</name> <name>cfMetaData</name></expr></argument>)</argument_list></call>
+    <block>{
+        <while>while <condition>(<expr><call><name><name>columns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <expr_stmt><expr><call><name>writeJSON</name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr><call><name>serializeColumn</name><argument_list>(<argument><expr><call><name><name>columns</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>comparator</name></expr></argument>, <argument><expr><name>cfMetaData</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><call><name><name>columns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <expr_stmt/></block></while>}</block></expr></expr_stmt>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Serialize a given column to the JSON format
+     *
+     * @param column column presentation
+     * @param comparator columns comparator
+     * @param cfMetaData Column Family metadata (to get validator)
+     *
+     * @return column as serialized list
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name></type> <name>serializeColumn</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>column</name></decl></param>, <param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl></param>, <param><decl><type><name>CFMetaData</name></type> <name>cfMetaData</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name></type> <name>serializedColumn</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>name</name> <init>= <expr><call><name><name>ByteBufferUtil</name>.<name>clone</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>value</name> <init>= <expr><call><name><name>ByteBufferUtil</name>.<name>clone</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>comparator</name>.<name>getString</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>column</name> instanceof <name>DeletedColumn</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>validator</name> <init>= <expr><call><name><name>cfMetaData</name>.<name>getValueValidator</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>validator</name>.<name>getString</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>column</name> instanceof <name>DeletedColumn</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr>"d"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else <if>if <condition>(<expr><name>column</name> instanceof <name>ExpiringColumn</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr>"e"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr>((<name>ExpiringColumn</name>) <name>column</name>).<call><name>getTimeToLive</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>getLocalDeletionTime</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else <if>if <condition>(<expr><name>column</name> instanceof <name>CounterColumn</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr>"c"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>serializedColumn</name>.<name>add</name></name><argument_list>(<argument><expr>((<name>CounterColumn</name>) <name>column</name>).<call><name>timestampOfLastDelete</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if></else></if></else></if>
+
+        <return>return <expr><name>serializedColumn</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Get portion of the columns and serialize in loop while not more columns left in the row
+     * @param row SSTableIdentityIterator row representation with Column Family
+     * @param key Decorated Key for the required row
+     * @param out output stream
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>serializeRow</name><parameter_list>(<param><decl><type><name>SSTableIdentityIterator</name></type> <name>row</name></decl></param>, <param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>PrintStream</name></type> <name>out</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>columnFamily</name> <init>= <expr><call><name><name>row</name>.<name>getColumnFamily</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>isSuperCF</name> <init>= <expr><call><name><name>columnFamily</name>.<name>isSuper</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>CFMetaData</name></type> <name>cfMetaData</name> <init>= <expr><call><name><name>columnFamily</name>.<name>metadata</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr><call><name><name>columnFamily</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name>writeKey</name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr><call><name>bytesToHex</name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr><name>isSuperCF</name> ? "{" : "["</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>isSuperCF</name></expr>)</condition><then>
+        <block>{
+            <while>while <condition>(<expr><call><name><name>row</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>row</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <expr_stmt><expr><call><name>writeKey</name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr><call><name><name>comparator</name>.<name>getString</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr>"{"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>writeKey</name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr>"deletedAt"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>getMarkedForDeleteAt</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>writeKey</name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr>"subColumns"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr>"["</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>serializeColumns</name><argument_list>(<argument><expr><call><name><name>column</name>.<name>getSubColumns</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>out</name></expr></argument>, <argument><expr><call><name><name>columnFamily</name>.<name>getSubComparator</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cfMetaData</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr>"]"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr>"}"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <if>if <condition>(<expr><call><name><name>row</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></while>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name>serializeColumns</name><argument_list>(<argument><expr><name>row</name></expr></argument>, <argument><expr><name>out</name></expr></argument>, <argument><expr><name>comparator</name></expr></argument>, <argument><expr><name>cfMetaData</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <expr_stmt><expr><call><name><name>out</name>.<name>print</name></name><argument_list>(<argument><expr><name>isSuperCF</name> ? "}" : "]"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Enumerate row keys from an SSTableReader and write the result to a PrintStream.
+     *
+     * @param desc the descriptor of the file to export the rows from
+     * @param outs PrintStream to write the output to
+     * @throws IOException on failure to read/write input/output
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>enumeratekeys</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>, <param><decl><type><name>PrintStream</name></type> <name>outs</name></decl></param>)</parameter_list>
+    <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>KeyIterator</name></type> <name>iter</name> <init>= <expr>new <call><name>KeyIterator</name><argument_list>(<argument><expr><name>desc</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>lastKey</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>key</name> <init>= <expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// validate order of the keys in the sstable</comment>
+            <if>if <condition>(<expr><name>lastKey</name> != null &amp;&amp; <call><name><name>lastKey</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call> &gt; 0</expr> )</condition><then>
+                <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Key out of order! " + <name>lastKey</name> + " &gt; " + <name>key</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><name>lastKey</name> = <name>key</name></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>outs</name>.<name>println</name></name><argument_list>(<argument><expr><call><name>bytesToHex</name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></while>
+        <expr_stmt><expr><call><name><name>iter</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>outs</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Export specific rows from an SSTable and write the resulting JSON to a PrintStream.
+     *
+     * @param desc the descriptor of the sstable table to read from
+     * @param outs PrintStream to write the output to
+     * @param toExport the keys corresponding to the rows to export
+     * @param excludes keys to exclude from export
+     * @throws IOException on failure to read/write input/output
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>export</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>, <param><decl><type><name>PrintStream</name></type> <name>outs</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>toExport</name></decl></param>, <param><decl><type><name><name>String</name><index>[]</index></name></type> <name>excludes</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>SSTableReader</name></type> <name>reader</name> <init>= <expr><call><name><name>SSTableReader</name>.<name>open</name></name><argument_list>(<argument><expr><name>desc</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SSTableScanner</name></type> <name>scanner</name> <init>= <expr><call><name><name>reader</name>.<name>getDirectScanner</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>IPartitioner</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>partitioner</name> <init>= <expr><name><name>reader</name>.<name>partitioner</name></name></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>excludes</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>toExport</name>.<name>removeAll</name></name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>excludes</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name><name>outs</name>.<name>println</name></name><argument_list>(<argument><expr>"{"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// last key to compare order</comment>
+        <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>lastKey</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>String</name></type> <name>key</name> <range>: <expr><name>toExport</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>decoratedKey</name> <init>= <expr><call><name><name>partitioner</name>.<name>decorateKey</name></name><argument_list>(<argument><expr><call><name>hexToBytes</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>lastKey</name> != null &amp;&amp; <call><name><name>lastKey</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name>decoratedKey</name></expr></argument>)</argument_list></call> &gt; 0</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Key out of order! " + <name>lastKey</name> + " &gt; " + <name>decoratedKey</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <expr_stmt><expr><name>lastKey</name> = <name>decoratedKey</name></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>scanner</name>.<name>seekTo</name></name><argument_list>(<argument><expr><name>decoratedKey</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr>!<call><name><name>scanner</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <decl_stmt><decl><type><name>SSTableIdentityIterator</name></type> <name>row</name> <init>= <expr>(<name>SSTableIdentityIterator</name>) <call><name><name>scanner</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>!<call><name><name>row</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>decoratedKey</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <expr_stmt><expr><call><name>serializeRow</name><argument_list>(<argument><expr><name>row</name></expr></argument>, <argument><expr><name>decoratedKey</name></expr></argument>, <argument><expr><name>outs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>i</name> != 0</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>outs</name>.<name>println</name></name><argument_list>(<argument><expr>","</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <expr_stmt><expr><name>i</name>++</expr>;</expr_stmt>
+        }</block></for>
+
+        <expr_stmt><expr><call><name><name>outs</name>.<name>println</name></name><argument_list>(<argument><expr>"\n}"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>outs</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>scanner</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="line">// This is necessary to accommodate the test suite since you cannot open a Reader more</comment>
+    <comment type="line">// than once from within the same process.</comment>
+    <function><type><specifier>static</specifier> <name>void</name></type> <name>export</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>reader</name></decl></param>, <param><decl><type><name>PrintStream</name></type> <name>outs</name></decl></param>, <param><decl><type><name><name>String</name><index>[]</index></name></type> <name>excludes</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>excludeSet</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>excludes</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><name>excludeSet</name> = new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>excludes</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+
+        <decl_stmt><decl><type><name>SSTableIdentityIterator</name></type> <name>row</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SSTableScanner</name></type> <name>scanner</name> <init>= <expr><call><name><name>reader</name>.<name>getDirectScanner</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>outs</name>.<name>println</name></name><argument_list>(<argument><expr>"{"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// collecting keys to export</comment>
+        <while>while <condition>(<expr><call><name><name>scanner</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <expr_stmt><expr><name>row</name> = (<name>SSTableIdentityIterator</name>) <call><name><name>scanner</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>String</name></type> <name>currentKey</name> <init>= <expr><call><name>bytesToHex</name><argument_list>(<argument><expr><call><name><name>row</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><call><name><name>excludeSet</name>.<name>contains</name></name><argument_list>(<argument><expr><name>currentKey</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then>
+            <else>else <if>if <condition>(<expr><name>i</name> != 0</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>outs</name>.<name>println</name></name><argument_list>(<argument><expr>","</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if></else></if>
+
+            <expr_stmt><expr><call><name>serializeRow</name><argument_list>(<argument><expr><name>row</name></expr></argument>, <argument><expr><call><name><name>row</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>outs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><name>i</name>++</expr>;</expr_stmt>
+        }</block></while>
+
+        <expr_stmt><expr><call><name><name>outs</name>.<name>println</name></name><argument_list>(<argument><expr>"\n}"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>outs</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>scanner</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Export an SSTable and write the resulting JSON to a PrintStream.
+     *
+     * @param desc the descriptor of the sstable table to read from
+     * @param outs PrintStream to write the output to
+     * @param excludes keys to exclude from export
+     *
+     * @throws IOException on failure to read/write input/output
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>export</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>, <param><decl><type><name>PrintStream</name></type> <name>outs</name></decl></param>, <param><decl><type><name><name>String</name><index>[]</index></name></type> <name>excludes</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>export</name><argument_list>(<argument><expr><call><name><name>SSTableReader</name>.<name>open</name></name><argument_list>(<argument><expr><name>desc</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>outs</name></expr></argument>, <argument><expr><name>excludes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Export an SSTable and write the resulting JSON to standard out.
+     *
+     * @param desc the descriptor of the sstable table to read from
+     * @param excludes keys to exclude from export
+     *
+     * @throws IOException on failure to read/write SSTable/standard out
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>export</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>, <param><decl><type><name><name>String</name><index>[]</index></name></type> <name>excludes</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>export</name><argument_list>(<argument><expr><name>desc</name></expr></argument>, <argument><expr><name><name>System</name>.<name>out</name></name></expr></argument>, <argument><expr><name>excludes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Given arguments specifying an SSTable, and optionally an output file,
+     * export the contents of the SSTable to JSON.
+     *
+     * @param args command lines arguments
+     *
+     * @throws IOException on failure to open/read/write files or output streams
+     * @throws ConfigurationException on configuration failure (wrong params given)
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>main</name><parameter_list>(<param><decl><type><name><name>String</name><index>[]</index></name></type> <name>args</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>usage</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Usage: %s &lt;sstable&gt; [-k key [-k key [...]] -x key [-x key [...]]]%n"</expr></argument>, <argument><expr><call><name><name>SSTableExport</name>.<name><name>class</name>.<name>getName</name></name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>CommandLineParser</name></type> <name>parser</name> <init>= <expr>new <call><name>PosixParser</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>cmd</name> = <call><name><name>parser</name>.<name>parse</name></name><argument_list>(<argument><expr><name>options</name></expr></argument>, <argument><expr><name>args</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ParseException</name></type> <name>e1</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>e1</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><name>usage</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+
+
+        <if>if <condition>(<expr><call><name><name>cmd</name>.<name>getArgs</name></name><argument_list>()</argument_list></call>.<name>length</name> != 1</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr>"You must supply exactly one sstable"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><name>usage</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+
+        <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>keys</name> <init>= <expr><call><name><name>cmd</name>.<name>getOptionValues</name></name><argument_list>(<argument><expr><name>KEY_OPTION</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>excludes</name> <init>= <expr><call><name><name>cmd</name>.<name>getOptionValues</name></name><argument_list>(<argument><expr><name>EXCLUDEKEY_OPTION</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>ssTableFileName</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>cmd</name>.<name>getArgs</name></name><argument_list>()</argument_list></call><index>[<expr>0</expr>]</index></expr></argument>)</argument_list></call>.<call><name>getAbsolutePath</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>loadSchemas</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getNonSystemTables</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> &lt; 1</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>msg</name> <init>= <expr>"no non-system tables are defined"</expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><name>msg</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><name>msg</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+        <decl_stmt><decl><type><name>Descriptor</name></type> <name>descriptor</name> <init>= <expr><call><name><name>Descriptor</name>.<name>fromFilename</name></name><argument_list>(<argument><expr><name>ssTableFileName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"The provided column family is not part of this cassandra database: keyspace = %s, column family = %s"</expr></argument>,
+                                             <argument><expr><name><name>descriptor</name>.<name>ksname</name></name></expr></argument>, <argument><expr><name><name>descriptor</name>.<name>cfname</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>ENUMERATEKEYS_OPTION</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>enumeratekeys</name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>, <argument><expr><name><name>System</name>.<name>out</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <if>if <condition>(<expr>(<name>keys</name> != null) &amp;&amp; (<name><name>keys</name>.<name>length</name></name> &gt; 0)</expr>)</condition><then>
+                <expr_stmt><expr><call><name>export</name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>, <argument><expr><name><name>System</name>.<name>out</name></name></expr></argument>, <argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>keys</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>excludes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name>export</name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>, <argument><expr><name>excludes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></else></if>
+
+        <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>writeJSON</name><parameter_list>(<param><decl><type><name>PrintStream</name></type> <name>out</name></decl></param>, <param><decl><type><name>Object</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>jsonMapper</name>.<name>writeValue</name></name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+}
+</unit>

@@ -1,0 +1,90 @@
+public Future<?> maybeSwitchMemtable(Memtable oldMemtable, final boolean writeCommitLog)
+    {
+        if (oldMemtable.isFrozen())
+        {
+            logger.debug("memtable is already frozen; another thread must be flushing it");
+            return null;
+        }
+
+        /*
+         * If we can get the writelock, that means no new updates can come in and
+         * all ongoing updates to memtables have completed. We can get the tail
+         * of the log and use it as the starting position for log replay on recovery.
+         *
+         * This is why we Table.switchLock needs to be global instead of per-Table:
+         * we need to schedule discardCompletedSegments calls in the same order as their
+         * contexts (commitlog position) were read, even though the flush executor
+         * is multithreaded.
+         */
+        Table.switchLock.writeLock().lock();
+        try
+        {
+            if (oldMemtable.isFrozen())
+            {
+                logger.debug("memtable is already frozen; another thread must be flushing it");
+                return null;
+            }
+
+            assert getMemtableThreadSafe() == oldMemtable;
+            final Future<ReplayPosition> ctx = writeCommitLog ? CommitLog.instance.getContext() : Futures.immediateFuture(ReplayPosition.NONE);
+
+            // submit the memtable for any indexed sub-cfses, and our own.
+            final List<ColumnFamilyStore> icc = new ArrayList<ColumnFamilyStore>();
+            // don't assume that this.memtable is dirty; forceFlush can bring us here during index build even if it is not
+            for (ColumnFamilyStore cfs : concatWithIndexes())
+            {
+                Memtable mt = cfs.getMemtableThreadSafe();
+                if (!mt.isClean() && !mt.isFrozen())
+                {
+                    // We need to freeze indexes too because they can be concurrently flushed too (#3547)
+                    mt.freeze();
+                    icc.add(cfs);
+                }
+            }
+            final CountDownLatch latch = new CountDownLatch(icc.size());
+            for (ColumnFamilyStore cfs : icc)
+            {
+                Memtable memtable = cfs.data.switchMemtable();
+                logger.info("Enqueuing flush of {}", memtable);
+                memtable.flushAndSignal(latch, flushWriter, ctx);
+            }
+
+            if (memtableSwitchCount == Integer.MAX_VALUE)
+                memtableSwitchCount = 0;
+            memtableSwitchCount++;
+
+            // when all the memtables have been written, including for indexes, mark the flush in the commitlog header.
+            // a second executor makes sure the onMemtableFlushes get called in the right order,
+            // while keeping the wait-for-flush (future.get) out of anything latency-sensitive.
+            return postFlushExecutor.submit(new WrappedRunnable()
+            {
+                public void runMayThrow() throws InterruptedException, IOException, ExecutionException
+                {
+                    latch.await();
+
+                    if (!icc.isEmpty())
+                    {
+                        //only valid when memtables exist
+
+                        for (SecondaryIndex index : indexManager.getIndexesNotBackedByCfs())
+                        {
+                            // flush any non-cfs backed indexes
+                            logger.info("Flushing SecondaryIndex {}", index);
+                            index.forceBlockingFlush();
+                        }
+                    }
+
+                    if (writeCommitLog)
+                    {
+                        // if we're not writing to the commit log, we are replaying the log, so marking
+                        // the log header with "you can discard anything written before the context" is not valid
+                        CommitLog.instance.discardCompletedSegments(metadata.cfId, ctx.get());
+                    }
+                }
+            });
+        }
+        finally
+        {
+            Table.switchLock.writeLock().unlock();
+        }
+    }

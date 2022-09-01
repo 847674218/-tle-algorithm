@@ -1,0 +1,23 @@
+public void apply(DecoratedKey key, ColumnFamily columnFamily)
+    {
+        long start = System.nanoTime();
+
+        Memtable mt = getMemtableThreadSafe();
+        mt.put(key, columnFamily);
+        updateRowCache(key, columnFamily);
+        writeStats.addNano(System.nanoTime() - start);
+
+        // recompute liveRatio, if we have doubled the number of ops since last calculated
+        while (true)
+        {
+            long last = liveRatioComputedAt.get();
+            long operations = writeStats.getOpCount();
+            if (operations < 2 * last)
+                break;
+            if (liveRatioComputedAt.compareAndSet(last, operations))
+            {
+                logger.debug("computing liveRatio of {} at {} ops", this, operations);
+                mt.updateLiveRatio();
+            }
+        }
+    }

@@ -1,0 +1,109 @@
+private void executeList(Tree statement)
+            throws TException, InvalidRequestException, NotFoundException, IllegalAccessException, InstantiationException, NoSuchFieldException, UnavailableException, TimedOutException, CharacterCodingException
+    {
+        if (!CliMain.isConnected() || !hasKeySpace())
+            return;
+
+        long startTime = System.nanoTime();
+
+        // extract column family
+        String columnFamily = CliCompiler.getColumnFamily(statement, currentCfDefs());
+
+        String rawStartKey = "";
+        String rawEndKey = "";
+        int limitCount = Integer.MAX_VALUE; // will reset to default later if it's not specified
+        int columnCount = Integer.MAX_VALUE; // will reset to default later if it's not specified
+        boolean reversed = false;
+
+        // optional arguments: key range and limit
+        for (int i = 1; i < statement.getChildCount(); i++)
+        {
+            Tree child = statement.getChild(i);
+            if (child.getType() == CliParser.NODE_KEY_RANGE)
+            {
+                if (child.getChildCount() > 0)
+                {
+                    rawStartKey = CliUtils.unescapeSQLString(child.getChild(0).getText());
+                    if (child.getChildCount() > 1)
+                        rawEndKey = CliUtils.unescapeSQLString(child.getChild(1).getText());
+                }
+            }
+            else if (child.getType() == CliParser.NODE_LIMIT)
+            {
+                if (child.getChildCount() != 1)
+                {
+                    sessionState.out.println("Invalid limit clause");
+                    return;
+                }
+
+                limitCount = Integer.parseInt(child.getChild(0).getText());
+                if (limitCount <= 0)
+                {
+                    sessionState.out.println("Invalid limit " + limitCount);
+                    return;
+                }
+            }
+            else if (child.getType() == CliParser.NODE_COLUMNS)
+            {
+                if ((child.getChildCount() < 1) || (child.getChildCount() > 2))
+                {
+                    sessionState.err.println("Invalid columns clause.");
+                    return;
+                }
+
+                String columns = child.getChild(0).getText();
+
+                try
+                {
+                    columnCount = Integer.parseInt(columns);
+                    if (columnCount < 0)
+                    {
+                        sessionState.err.println("Invalid column limit: " + columnCount);
+                        return;
+                    }
+
+                    if (child.getChildCount() == 2)
+                        reversed = child.getChild(1).getType() == CliParser.NODE_REVERSED;
+                }
+                catch (NumberFormatException nfe)
+                {
+                    sessionState.err.println("Invalid column number format: " + columns);
+                    return;
+                }
+            }
+        }
+
+        if (limitCount == Integer.MAX_VALUE)
+        {
+            limitCount = 100;
+            sessionState.out.println("Using default limit of 100");
+        }
+        if (columnCount == Integer.MAX_VALUE)
+        {
+            columnCount = 100;
+            sessionState.out.println("Using default column limit of 100");
+        }
+
+
+        CfDef columnFamilyDef = getCfDef(columnFamily);
+
+        // read all columns and superColumns
+        SlicePredicate predicate = new SlicePredicate();
+        SliceRange sliceRange = new SliceRange();
+        sliceRange.setStart(new byte[0]).setFinish(new byte[0]);
+        sliceRange.setCount(columnCount);
+        sliceRange.setReversed(reversed);
+        predicate.setSlice_range(sliceRange);
+
+        // set the key range
+        KeyRange range = new KeyRange(limitCount);
+        AbstractType<?> keyComparator = this.cfKeysComparators.get(columnFamily);
+        ByteBuffer startKey = rawStartKey.isEmpty() ? ByteBufferUtil.EMPTY_BYTE_BUFFER : getBytesAccordingToType(rawStartKey, keyComparator);
+        ByteBuffer endKey = rawEndKey.isEmpty() ? ByteBufferUtil.EMPTY_BYTE_BUFFER : getBytesAccordingToType(rawEndKey, keyComparator);
+        range.setStart_key(startKey).setEnd_key(endKey);
+
+        ColumnParent columnParent = new ColumnParent(columnFamily);
+        List<KeySlice> keySlices = thriftClient.get_range_slices(columnParent, predicate, range, consistencyLevel);
+        printSliceList(columnFamilyDef, keySlices);
+        elapsedTime(startTime);
+    }

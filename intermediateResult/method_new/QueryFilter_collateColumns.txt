@@ -1,0 +1,50 @@
+public void collateColumns(final ColumnFamily returnCF, List<? extends CloseableIterator<IColumn>> toCollate, final int gcBefore)
+    {
+        IDiskAtomFilter topLevelFilter = (superFilter == null ? filter : superFilter);
+
+        Comparator<IColumn> fcomp = topLevelFilter.getColumnComparator(returnCF.getComparator());
+        // define a 'reduced' iterator that merges columns w/ the same name, which
+        // greatly simplifies computing liveColumns in the presence of tombstones.
+        MergeIterator.Reducer<IColumn, IColumn> reducer = new MergeIterator.Reducer<IColumn, IColumn>()
+        {
+            ColumnFamily curCF = returnCF.cloneMeShallow();
+
+            public void reduce(IColumn current)
+            {
+                if (curCF.isSuper() && curCF.isEmpty())
+                {
+                    // If it is the first super column we add, we must clone it since other super column may modify
+                    // it otherwise and it could be aliased in a memtable somewhere. We'll also don't have to care about what
+                    // consumers make of the result (for instance CFS.getColumnFamily() call removeDeleted() on the
+                    // result which removes column; which shouldn't be done on the original super column).
+                    assert current instanceof SuperColumn;
+                    curCF.addColumn(((SuperColumn) current).cloneMe());
+                }
+                else
+                {
+                    curCF.addColumn(current);
+                }
+            }
+
+            protected IColumn getReduced()
+            {
+                IColumn c = curCF.iterator().next();
+                if (superFilter != null)
+                {
+                    // filterSuperColumn only looks at immediate parent (the supercolumn) when determining if a subcolumn
+                    // is still live, i.e., not shadowed by the parent's tombstone.  so, bump it up temporarily to the tombstone
+                    // time of the cf, if that is greater.
+                    DeletionInfo delInfo = ((SuperColumn) c).deletionInfo();
+                    ((SuperColumn) c).delete(returnCF.deletionInfo());
+                    c = filter.filterSuperColumn((SuperColumn) c, gcBefore);
+                    ((SuperColumn) c).setDeletionInfo(delInfo); // reset sc tombstone time to what it should be
+                }
+                curCF.clear();
+
+                return c;
+            }
+        };
+        Iterator<IColumn> reduced = MergeIterator.get(toCollate, fcomp, reducer);
+
+        topLevelFilter.collectReducedColumns(returnCF, reduced, gcBefore);
+    }

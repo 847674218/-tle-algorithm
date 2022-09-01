@@ -1,0 +1,59 @@
+private static SSTableReader open(Descriptor descriptor,
+                                      Set<Component> components,
+                                      Set<DecoratedKey> savedKeys,
+                                      CFMetaData metadata,
+                                      IPartitioner partitioner,
+                                      boolean validate) throws IOException
+    {
+        assert partitioner != null;
+        // Minimum components without which we can't do anything
+        assert components.contains(Component.DATA) : "Data component is missing for sstable" + descriptor;
+        assert components.contains(Component.PRIMARY_INDEX) : "Primary index component is missing for sstable " + descriptor;
+
+        long start = System.currentTimeMillis();
+        logger.info("Opening {} ({} bytes)", descriptor, new File(descriptor.filenameFor(COMPONENT_DATA)).length());
+
+        SSTableMetadata sstableMetadata = components.contains(Component.STATS)
+                                        ? SSTableMetadata.serializer.deserialize(descriptor)
+                                        : SSTableMetadata.createDefaultInstance();
+
+        // Check if sstable is created using same partitioner.
+        // Partitioner can be null, which indicates older version of sstable or no stats available.
+        // In that case, we skip the check.
+        String partitionerName = partitioner.getClass().getCanonicalName();
+        if (sstableMetadata.partitioner != null && !partitionerName.equals(sstableMetadata.partitioner))
+            throw new RuntimeException(String.format("Cannot open %s because partitioner does not match %s",
+                                                     descriptor, partitionerName));
+
+        SSTableReader sstable = new SSTableReader(descriptor,
+                                                  components,
+                                                  metadata,
+                                                  partitioner,
+                                                  null,
+                                                  null,
+                                                  null,
+                                                  null,
+                                                  System.currentTimeMillis(),
+                                                  sstableMetadata);
+        // versions before 'c' encoded keys as utf-16 before hashing to the filter
+        if (descriptor.hasStringsInBloomFilter)
+        {
+            sstable.load(true, savedKeys);
+        }
+        else
+        {
+            sstable.load(false, savedKeys);
+            sstable.loadBloomFilter();
+        }
+
+        if (validate)
+            sstable.validate();
+
+        if (logger.isDebugEnabled())
+            logger.debug("INDEX LOAD TIME for " + descriptor + ": " + (System.currentTimeMillis() - start) + " ms.");
+
+        if (logger.isDebugEnabled() && sstable.getKeyCache() != null)
+            logger.debug(String.format("key cache contains %s/%s keys", sstable.getKeyCache().size(), sstable.getKeyCache().getCapacity()));
+
+        return sstable;
+    }

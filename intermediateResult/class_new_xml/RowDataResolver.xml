@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\service\RowDataResolver.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>IdentityQueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>IDiskAtomFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryPath</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>SliceQueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>IAsyncResult</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessageIn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessageOut</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>CloseableIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>IFilter</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>RowDataResolver</name> <super><extends>extends <name>AbstractRowResolver</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>maxLiveCount</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IAsyncResult</name></argument>&gt;</argument_list></name></type> <name>repairResults</name> <init>= <expr><call><name><name>Collections</name>.<name>emptyList</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>IDiskAtomFilter</name></type> <name>filter</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>RowDataResolver</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name>IDiskAtomFilter</name></type> <name>qFilter</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>table</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>filter</name></name> = <name>qFilter</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block">/*
+    * This method handles the following scenario:
+    *
+    * there was a mismatch on the initial read, so we redid the digest requests
+    * as full data reads.  In this case we need to compute the most recent version
+    * of each column, and send diffs to out-of-date replicas.
+    */</comment>
+    <function><type><specifier>public</specifier> <name>Row</name></type> <name>resolve</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>DigestMismatchException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"resolving " + <call><name><name>replies</name>.<name>size</name></name><argument_list>()</argument_list></call> + " responses"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <decl_stmt><decl><type><name>long</name></type> <name>startTime</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>resolved</name></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>replies</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 1</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>versions</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>replies</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>replies</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name><name>MessageIn</name><argument_list>&lt;<argument><name>ReadResponse</name></argument>&gt;</argument_list></name></type> <name>message</name> <range>: <expr><name>replies</name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>ReadResponse</name></type> <name>response</name> <init>= <expr><name><name>message</name>.<name>payload</name></name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>response</name>.<name>row</name></name><argument_list>()</argument_list></call>.<name>cf</name></expr></init></decl>;</decl_stmt>
+                <assert>assert <expr>!<call><name><name>response</name>.<name>isDigestQuery</name></name><argument_list>()</argument_list></call> : "Received digest response to repair read from " + <name><name>message</name>.<name>from</name></name></expr>;</assert>
+                <expr_stmt><expr><call><name><name>versions</name>.<name>add</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>endpoints</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>message</name>.<name>from</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <comment type="line">// compute maxLiveCount to prevent short reads -- see https://issues.apache.org/jira/browse/CASSANDRA-2643</comment>
+                <decl_stmt><decl><type><name>int</name></type> <name>liveCount</name> <init>= <expr><name>cf</name> == null ? 0 : <call><name><name>filter</name>.<name>getLiveCount</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>liveCount</name> &gt; <name>maxLiveCount</name></expr>)</condition><then>
+                    <expr_stmt><expr><name>maxLiveCount</name> = <name>liveCount</name></expr>;</expr_stmt></then></if>
+            }</block></for>
+
+            <expr_stmt><expr><name>resolved</name> = <call><name>resolveSuperset</name><argument_list>(<argument><expr><name>versions</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"versions merged"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <comment type="line">// send updates to any replica that was missing part of the full row</comment>
+            <comment type="line">// (resolved can be null even if versions doesn't have all nulls because of the call to removeDeleted in resolveSuperSet)</comment>
+            <if>if <condition>(<expr><name>resolved</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><name>repairResults</name> = <call><name>scheduleRepairs</name><argument_list>(<argument><expr><name>resolved</name></expr></argument>, <argument><expr><name>table</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>versions</name></expr></argument>, <argument><expr><name>endpoints</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name>resolved</name> = <call><name><name>replies</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call>.<call><name><name>payload</name>.<name>row</name></name><argument_list>()</argument_list></call>.<name>cf</name></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"resolve: " + (<call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>startTime</name>) + " ms."</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <return>return <expr>new <call><name>Row</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>resolved</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * For each row version, compare with resolved (the superset of all row versions);
+     * if it is missing anything, send a mutation to the endpoint it come from.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IAsyncResult</name></argument>&gt;</argument_list></name></type> <name>scheduleRepairs</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>resolved</name></decl></param>, <param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>versions</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IAsyncResult</name></argument>&gt;</argument_list></name></type> <name>results</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>IAsyncResult</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>versions</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>versions</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>diffCf</name> <init>= <expr><call><name><name>ColumnFamily</name>.<name>diff</name></name><argument_list>(<argument><expr><call><name><name>versions</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>resolved</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>diffCf</name> == null</expr>)</condition><then> <comment type="line">// no repair needs to happen</comment>
+                <continue>continue;</continue></then></if>
+
+            <comment type="line">// create and send the row mutation message based on the diff</comment>
+            <decl_stmt><decl><type><name>RowMutation</name></type> <name>rowMutation</name> <init>= <expr>new <call><name>RowMutation</name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>rowMutation</name>.<name>add</name></name><argument_list>(<argument><expr><name>diffCf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>MessageOut</name></type> <name>repairMessage</name></decl>;</decl_stmt>
+            <comment type="line">// use a separate verb here because we don't want these to be get the white glove hint-</comment>
+            <comment type="line">// on-timeout behavior that a "real" mutation gets</comment>
+            <expr_stmt><expr><name>repairMessage</name> = <call><name><name>rowMutation</name>.<name>createMessage</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>READ_REPAIR</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>results</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendRR</name><argument_list>(<argument><expr><name>repairMessage</name></expr></argument>, <argument><expr><call><name><name>endpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <return>return <expr><name>results</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>static</specifier> <name>ColumnFamily</name></type> <name>resolveSuperset</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>versions</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name>versions</name></expr></argument>)</argument_list></call> &gt; 0</expr>;</assert>
+
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>resolved</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ColumnFamily</name></type> <name>cf</name> <range>: <expr><name>versions</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name>cf</name> == null</expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <if>if <condition>(<expr><name>resolved</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>resolved</name> = <call><name><name>cf</name>.<name>cloneMeShallow</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name><name>resolved</name>.<name>delete</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></for>
+        <if>if <condition>(<expr><name>resolved</name> == null</expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+
+        <comment type="line">// mimic the collectCollatedColumn + removeDeleted path that getColumnFamily takes.</comment>
+        <comment type="line">// this will handle removing columns and subcolumns that are supressed by a row or</comment>
+        <comment type="line">// supercolumn tombstone.</comment>
+        <decl_stmt><decl><type><name>QueryFilter</name></type> <name>filter</name> <init>= <expr>new <call><name>QueryFilter</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><call><name><name>resolved</name>.<name>metadata</name></name><argument_list>()</argument_list></call>.<name>cfName</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>new <call><name>IdentityQueryFilter</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>CloseableIterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>iters</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>CloseableIterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ColumnFamily</name></type> <name>version</name> <range>: <expr><name>versions</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name>version</name> == null</expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+            <expr_stmt><expr><call><name><name>iters</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>closeableIterator</name></name><argument_list>(<argument><expr><call><name><name>version</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <expr_stmt><expr><call><name><name>filter</name>.<name>collateColumns</name></name><argument_list>(<argument><expr><name>resolved</name></expr></argument>, <argument><expr><name>iters</name></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MIN_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>ColumnFamilyStore</name>.<name>removeDeleted</name></name><argument_list>(<argument><expr><name>resolved</name></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MIN_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Row</name></type> <name>getData</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name><name>replies</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call>.<call><name><name>payload</name>.<name>row</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isDataPresent</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>!<call><name><name>replies</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getMaxLiveCount</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>maxLiveCount</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

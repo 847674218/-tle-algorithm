@@ -1,0 +1,348 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\thrift\CustomTHsHaServer.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>SelectionKey</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>Selector</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>spi</name>.<name>SelectorProvider</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashSet</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Iterator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Set</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutorService</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>RejectedExecutionException</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>SocketSessionManagementService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>server</name>.<name>TNonblockingServer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TNonblockingServerTransport</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TNonblockingSocket</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TNonblockingTransport</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TTransportException</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * This is a interim solution till THRIFT-1167 gets committed...
+ *
+ * The idea here is to avoid sticking to one CPU for IO's. For better throughput
+ * it is spread across multiple threads. Number of selector thread can be the
+ * number of CPU available.
+ */</comment>
+<class><specifier>public</specifier> class <name>CustomTHsHaServer</name> <super><extends>extends <name>TNonblockingServer</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>LOGGER</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><call><name><name>CustomTHsHaServer</name>.<name><name>class</name>.<name>getName</name></name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SelectorThread</name></argument>&gt;</argument_list></name></type> <name>ioThreads</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>SelectorThread</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>boolean</name></type> <name>stopped_</name> <init>= <expr>true</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ExecutorService</name></type> <name>invoker</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * All the arguments to Non Blocking Server will apply here. In addition,
+     * executor pool will be responsible for creating the internal threads which
+     * will process the data. threads for selection usually are equal to the
+     * number of cpu's
+     */</comment>
+    <constructor><specifier>public</specifier> <name>CustomTHsHaServer</name><parameter_list>(<param><decl><type><name>Args</name></type> <name>args</name></decl></param>, <param><decl><type><name>ExecutorService</name></type> <name>invoker</name></decl></param>, <param><decl><type><name>int</name></type> <name>threadCount</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>args</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>invoker</name></name> = <name>invoker</name></expr>;</expr_stmt>
+        <comment type="line">// Create all the Network IO Threads.</comment>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>threadCount</name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+            <expr_stmt><expr><call><name><name>ioThreads</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>SelectorThread</name><argument_list>(<argument><expr>"Selector-Thread-" + <name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/** @inheritDoc */</comment>
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>serve</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name>startListening</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+        <if>if <condition>(<expr>!<call><name>startThreads</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+        <expr_stmt><expr><call><name>setServing</name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>joinSelector</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>invoker</name>.<name>shutdown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>setServing</name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>stopListening</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Save the remote socket as a thead local for future use of client state.
+     */</comment>
+    <class><specifier>protected</specifier> class <name>Invocation</name> <super><implements>implements <name>Runnable</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>FrameBuffer</name></type> <name>frameBuffer</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>SelectorThread</name></type> <name>thread</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>Invocation</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>FrameBuffer</name></type> <name>frameBuffer</name></decl></param>, <param><decl><type><name>SelectorThread</name></type> <name>thread</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>frameBuffer</name></name> = <name>frameBuffer</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>thread</name></name> = <name>thread</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>TNonblockingSocket</name></type> <name>socket</name> <init>= <expr>(<name>TNonblockingSocket</name>) <name><name>frameBuffer</name>.<name>trans_</name></name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>SocketSessionManagementService</name>.<name>remoteSocket</name>.<name>set</name></name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getSocketChannel</name></name><argument_list>()</argument_list></call>.<call><name>socket</name><argument_list>()</argument_list></call>.<call><name>getRemoteSocketAddress</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>frameBuffer</name>.<name>invoke</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// this is how we let the same selector thread change the selection type.</comment>
+            <expr_stmt><expr><call><name><name>thread</name>.<name>requestSelectInterestChange</name></name><argument_list>(<argument><expr><name>frameBuffer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>startThreads</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>stopped_</name> = false</expr>;</expr_stmt>
+        <comment type="line">// start all the threads.</comment>
+        <for>for (<init><decl><type><name>SelectorThread</name></type> <name>thread</name> <range>: <expr><name>ioThreads</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>thread</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>protected</specifier> <name>void</name></type> <name>joinSelector</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <comment type="line">// wait till all done with stuff's</comment>
+            <for>for (<init><decl><type><name>SelectorThread</name></type> <name>thread</name> <range>: <expr><name>ioThreads</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>thread</name>.<name>join</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>LOGGER</name>.<name>error</name></name><argument_list>(<argument><expr>"Interrupted while joining threads!"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Stop serving and shut everything down.
+     */</comment>
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>stop</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>stopListening</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>stopped_</name> = true</expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>SelectorThread</name></type> <name>thread</name> <range>: <expr><name>ioThreads</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>thread</name>.<name>wakeupSelector</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        <expr_stmt><expr><call><name>joinSelector</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * IO Threads will perform expensive IO operations...
+     */</comment>
+    <class><specifier>protected</specifier> class <name>SelectorThread</name> <super><extends>extends <name>Thread</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Selector</name></type> <name>selector</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>TNonblockingServerTransport</name></type> <name>serverTransport</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>FrameBuffer</name></argument>&gt;</argument_list></name></type> <name>selectInterestChanges</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>FrameBuffer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>SelectorThread</name><parameter_list>(<param><decl><type><name>String</name></type> <name>name</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name><name>this</name>.<name>selector</name></name> = <call><name><name>SelectorProvider</name>.<name>provider</name></name><argument_list>()</argument_list></call>.<call><name>openSelector</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>serverTransport</name></name> = (<name>TNonblockingServerTransport</name>) <name>serverTransport_</name></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>this</name>.<name>serverTransport</name>.<name>registerSelector</name></name><argument_list>(<argument><expr><name>selector</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>ex</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Couldnt open the NIO selector"</expr></argument>, <argument><expr><name>ex</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+        <block>{
+            <try>try
+            <block>{
+                <while>while <condition>(<expr>!<name>stopped_</name></expr>)</condition>
+                <block>{
+                    <expr_stmt><expr><call><name>select</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></while>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>t</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>LOGGER</name>.<name>error</name></name><argument_list>(<argument><expr>"Uncaught Exception: "</expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></catch>
+            <finally>finally
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name><name>selector</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// CASSANDRA-3867</comment>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <comment type="line">// ignore this exception.</comment>
+                }</block></catch></try>
+            }</block></finally></try>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>select</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>InterruptedException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <comment type="line">// wait for new keys</comment>
+            <expr_stmt><expr><call><name><name>selector</name>.<name>select</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>SelectionKey</name></argument>&gt;</argument_list></name></type> <name>keyIterator</name> <init>= <expr><call><name><name>selector</name>.<name>selectedKeys</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <while>while <condition>(<expr><call><name><name>keyIterator</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <decl_stmt><decl><type><name>SelectionKey</name></type> <name>key</name> <init>= <expr><call><name><name>keyIterator</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>keyIterator</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+                <try>try
+                <block>{
+                    <if>if <condition>(<expr>!<call><name><name>key</name>.<name>isValid</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <comment type="line">// if invalid cleanup.</comment>
+                        <expr_stmt><expr><call><name>cleanupSelectionkey</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <continue>continue;</continue>
+                    }</block></then></if>
+
+                    <if>if <condition>(<expr><call><name><name>key</name>.<name>isAcceptable</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name>handleAccept</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+                    <if>if <condition>(<expr><call><name><name>key</name>.<name>isReadable</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name>handleRead</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                    <else>else <if>if <condition>(<expr><call><name><name>key</name>.<name>isWritable</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name>handleWrite</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                    <else>else
+                        <expr_stmt><expr><call><name><name>LOGGER</name>.<name>debug</name></name><argument_list>(<argument><expr>"Unexpected state " + <call><name><name>key</name>.<name>interestOps</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if></else></if>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>io</name></decl></param>)</parameter_list>
+                <block>{
+                    <comment type="line">// just ignore (?)</comment>
+                    <expr_stmt><expr><call><name>cleanupSelectionkey</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></catch></try>
+            }</block></while>
+            <comment type="line">// process the changes which are inserted after completion.</comment>
+            <expr_stmt><expr><call><name>processInterestChanges</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>handleAccept</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>SelectionKey</name></type> <name>clientKey</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TNonblockingTransport</name></type> <name>client</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <comment type="line">// accept the connection</comment>
+                <expr_stmt><expr><name>client</name> = (<name>TNonblockingTransport</name>) <call><name><name>serverTransport</name>.<name>accept</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>clientKey</name> = <call><name><name>client</name>.<name>registerSelector</name></name><argument_list>(<argument><expr><name>selector</name></expr></argument>, <argument><expr><name><name>SelectionKey</name>.<name>OP_READ</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <comment type="line">// add this key to the map</comment>
+                <decl_stmt><decl><type><name>FrameBuffer</name></type> <name>frameBuffer</name> <init>= <expr>new <call><name>FrameBuffer</name><argument_list>(<argument><expr><name>client</name></expr></argument>, <argument><expr><name>clientKey</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>clientKey</name>.<name>attach</name></name><argument_list>(<argument><expr><name>frameBuffer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block> <catch>catch <parameter_list>(<param><decl><type><name>TTransportException</name></type> <name>ex</name></decl></param>)</parameter_list>
+            <block>{
+                <comment type="line">// ignore this might have been handled by the other threads.</comment>
+                <comment type="line">// serverTransport.accept() as it returns null as nothing to accept.</comment>
+                <return>return;</return>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>tte</name></decl></param>)</parameter_list>
+            <block>{
+                <comment type="line">// something went wrong accepting.</comment>
+                <expr_stmt><expr><call><name><name>LOGGER</name>.<name>warn</name></name><argument_list>(<argument><expr>"Exception trying to accept!"</expr></argument>, <argument><expr><name>tte</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>tte</name>.<name>printStackTrace</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>clientKey</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name>cleanupSelectionkey</name><argument_list>(<argument><expr><name>clientKey</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><name>client</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>client</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>handleRead</name><parameter_list>(<param><decl><type><name>SelectionKey</name></type> <name>key</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>FrameBuffer</name></type> <name>buffer</name> <init>= <expr>(<name>FrameBuffer</name>) <call><name><name>key</name>.<name>attachment</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>!<call><name><name>buffer</name>.<name>read</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name>cleanupSelectionkey</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+
+            <if>if <condition>(<expr><call><name><name>buffer</name>.<name>isFrameFullyRead</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr>!<call><name>requestInvoke</name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name>cleanupSelectionkey</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></then></if>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>handleWrite</name><parameter_list>(<param><decl><type><name>SelectionKey</name></type> <name>key</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>FrameBuffer</name></type> <name>buffer</name> <init>= <expr>(<name>FrameBuffer</name>) <call><name><name>key</name>.<name>attachment</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>!<call><name><name>buffer</name>.<name>write</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name>cleanupSelectionkey</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>requestSelectInterestChange</name><parameter_list>(<param><decl><type><name>FrameBuffer</name></type> <name>frameBuffer</name></decl></param>)</parameter_list>
+        <block>{
+            <synchronized>synchronized (<expr><name>selectInterestChanges</name></expr>)
+            <block>{
+                <expr_stmt><expr><call><name><name>selectInterestChanges</name>.<name>add</name></name><argument_list>(<argument><expr><name>frameBuffer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></synchronized>
+            <comment type="line">// Wake-up the selector, if it's currently blocked.</comment>
+            <expr_stmt><expr><call><name><name>selector</name>.<name>wakeup</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>processInterestChanges</name><parameter_list>()</parameter_list>
+        <block>{
+            <synchronized>synchronized (<expr><name>selectInterestChanges</name></expr>)
+            <block>{
+                <for>for (<init><decl><type><name>FrameBuffer</name></type> <name>fb</name> <range>: <expr><name>selectInterestChanges</name></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>fb</name>.<name>changeSelectInterests</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+                <expr_stmt><expr><call><name><name>selectInterestChanges</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></synchronized>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>cleanupSelectionkey</name><parameter_list>(<param><decl><type><name>SelectionKey</name></type> <name>key</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>FrameBuffer</name></type> <name>buffer</name> <init>= <expr>(<name>FrameBuffer</name>) <call><name><name>key</name>.<name>attachment</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>buffer</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>buffer</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            <comment type="line">// cancel the selection key</comment>
+            <expr_stmt><expr><call><name><name>key</name>.<name>cancel</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>wakeupSelector</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>selector</name>.<name>wakeup</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>requestInvoke</name><parameter_list>(<param><decl><type><name>FrameBuffer</name></type> <name>frameBuffer</name></decl></param>, <param><decl><type><name>SelectorThread</name></type> <name>thread</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>Runnable</name></type> <name>invocation</name> <init>= <expr>new <call><name>Invocation</name><argument_list>(<argument><expr><name>frameBuffer</name></expr></argument>, <argument><expr><name>thread</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>invoker</name>.<name>execute</name></name><argument_list>(<argument><expr><name>invocation</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>true</expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>RejectedExecutionException</name></type> <name>rx</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>LOGGER</name>.<name>warn</name></name><argument_list>(<argument><expr>"ExecutorService rejected execution!"</expr></argument>, <argument><expr><name>rx</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>false</expr>;</return>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>protected</specifier> <name>void</name></type> <name>requestSelectInterestChange</name><parameter_list>(<param><decl><type><name>FrameBuffer</name></type> <name>fb</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// Dont change the interest here, this has to be done by the selector</comment>
+        <comment type="line">// thread because the method is not synchronized with the rest of the</comment>
+        <comment type="line">// selectors threads.</comment>
+    }</block></function>
+}</block></class>
+</unit>

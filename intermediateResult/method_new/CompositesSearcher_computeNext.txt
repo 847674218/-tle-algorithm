@@ -1,0 +1,141 @@
+protected Row computeNext()
+            {
+                /*
+                 * Our internal index code is wired toward internal rows. So we need to acumulate all results for a given
+                 * row before returning from this method. Which unfortunately means that this method has to do what
+                 * CFS.filter does for KeysIndex.
+                 */
+                DecoratedKey currentKey = null;
+                ColumnFamily data = null;
+                int columnsCount = 0;
+                int limit = ((SliceQueryFilter)filter.initialFilter()).count;
+
+                while (true)
+                {
+                    // Did we got more columns that needed to respect the user limit?
+                    // (but we still need to return was fetch already)
+                    if (columnsCount > limit)
+                        return makeReturn(currentKey, data);
+
+                    if (indexColumns == null || indexColumns.isEmpty())
+                    {
+                        if (columnsRead < rowsPerQuery)
+                        {
+                            logger.trace("Read only {} (< {}) last page through, must be done", columnsRead, rowsPerQuery);
+                            return makeReturn(currentKey, data);
+                        }
+
+                        if (logger.isTraceEnabled())
+                            logger.trace("Scanning index {} starting with {}",
+                                         ((AbstractSimplePerColumnSecondaryIndex)index).expressionString(primary), indexComparator.getString(startPrefix));
+
+                        QueryFilter indexFilter = QueryFilter.getSliceFilter(indexKey,
+                                                                             new QueryPath(index.getIndexCfs().getColumnFamilyName()),
+                                                                             lastSeenPrefix,
+                                                                             endPrefix,
+                                                                             false,
+                                                                             rowsPerQuery);
+                        ColumnFamily indexRow = index.getIndexCfs().getColumnFamily(indexFilter);
+                        if (indexRow == null)
+                            return makeReturn(currentKey, data);
+
+                        Collection<IColumn> sortedColumns = indexRow.getSortedColumns();
+                        columnsRead = sortedColumns.size();
+                        indexColumns = new ArrayDeque(sortedColumns);
+                        IColumn firstColumn = sortedColumns.iterator().next();
+
+                        // Paging is racy, so it is possible the first column of a page is not the last seen one.
+                        if (lastSeenPrefix != startPrefix && lastSeenPrefix.equals(firstColumn.name()))
+                        {
+                            // skip the row we already saw w/ the last page of results
+                            indexColumns.poll();
+                            logger.trace("Skipping {}", indexComparator.getString(firstColumn.name()));
+                        }
+                        else if (range instanceof Range && !indexColumns.isEmpty() && firstColumn.name().equals(startPrefix))
+                        {
+                            // skip key excluded by range
+                            indexColumns.poll();
+                            logger.trace("Skipping first key as range excludes it");
+                        }
+                    }
+
+                    while (!indexColumns.isEmpty() && columnsCount <= limit)
+                    {
+                        IColumn column = indexColumns.poll();
+                        lastSeenPrefix = column.name();
+                        if (column.isMarkedForDelete())
+                        {
+                            logger.trace("skipping {}", column.name());
+                            continue;
+                        }
+
+                        ByteBuffer[] components = indexComparator.split(lastSeenPrefix);
+                        DecoratedKey dk = baseCfs.partitioner.decorateKey(components[0]);
+
+                        // Are we done for this row?
+                        if (currentKey == null)
+                        {
+                            currentKey = dk;
+                        }
+                        else if (!currentKey.equals(dk))
+                        {
+                            DecoratedKey previousKey = currentKey;
+                            currentKey = dk;
+
+                            // We're done with the previous row, return it if it had data, continue otherwise
+                            indexColumns.addFirst(column);
+                            if (data == null)
+                                continue;
+                            else
+                                return makeReturn(previousKey, data);
+                        }
+
+                        if (!range.right.isMinimum(baseCfs.partitioner) && range.right.compareTo(dk) < 0)
+                        {
+                            logger.trace("Reached end of assigned scan range");
+                            return endOfData();
+                        }
+                        if (!range.contains(dk))
+                        {
+                            logger.debug("Skipping entry {} outside of assigned scan range", dk.token);
+                            continue;
+                        }
+
+                        logger.trace("Adding index hit to current row for {}", indexComparator.getString(lastSeenPrefix));
+                        // For sparse composites, we're good querying the whole logical row
+                        // Obviously if this index is used for other usage, that might be inefficient
+                        CompositeType.Builder builder = baseComparator.builder();
+                        for (int i = 0; i < prefixSize; i++)
+                            builder.add(components[i + 1]);
+
+                        // Does this "row" match the user original filter
+                        ByteBuffer start = builder.copy().build();
+                        if (!originalFilter.includes(baseComparator, start))
+                            continue;
+
+                        SliceQueryFilter dataFilter = new SliceQueryFilter(start, builder.copy().buildAsEndOfRange(), false, Integer.MAX_VALUE, prefixSize);
+                        ColumnFamily newData = baseCfs.getColumnFamily(new QueryFilter(dk, path, dataFilter));
+                        if (newData != null)
+                        {
+                            ByteBuffer baseColumnName = builder.copy().add(primary.column_name).build();
+                            ByteBuffer indexedValue = indexKey.key;
+
+                            if (isIndexValueStale(newData, baseColumnName, indexedValue))
+                            {
+                                // delete the index entry w/ its own timestamp
+                                IColumn dummyColumn = new Column(baseColumnName, indexedValue, column.timestamp());
+                                ((PerColumnSecondaryIndex) index).delete(dk.key, dummyColumn);
+                                continue;
+                            }
+
+                            if (!filter.isSatisfiedBy(newData, builder))
+                                continue;
+
+                            if (data == null)
+                                data = ColumnFamily.create(baseCfs.metadata);
+                            data.resolve(newData);
+                            columnsCount += dataFilter.lastCounted();
+                        }
+                    }
+                 }
+             }

@@ -1,0 +1,66 @@
+public synchronized void loadNewSSTables()
+    {
+        logger.info("Loading new SSTables for " + table.name + "/" + columnFamily + "...");
+
+        Set<Descriptor> currentDescriptors = new HashSet<Descriptor>();
+        for (SSTableReader sstable : data.getView().sstables)
+            currentDescriptors.add(sstable.descriptor);
+        Set<SSTableReader> newSSTables = new HashSet<SSTableReader>();
+
+        Directories.SSTableLister lister = directories.sstableLister().skipTemporary(true);
+        for (Map.Entry<Descriptor, Set<Component>> entry : lister.list().entrySet())
+        {
+            Descriptor descriptor = entry.getKey();
+
+            if (currentDescriptors.contains(descriptor))
+                continue; // old (initialized) SSTable found, skipping
+            if (descriptor.temporary) // in the process of being written
+                continue;
+
+            if (!descriptor.isCompatible())
+                throw new RuntimeException(String.format("Can't open incompatible SSTable! Current version %s, found file: %s",
+                                                         Descriptor.Version.CURRENT,
+                                                         descriptor));
+
+            Descriptor newDescriptor = new Descriptor(descriptor.version,
+                                                      descriptor.directory,
+                                                      descriptor.ksname,
+                                                      descriptor.cfname,
+                                                      fileIndexGenerator.incrementAndGet(),
+                                                      false);
+            logger.info("Renaming new SSTable {} to {}", descriptor, newDescriptor);
+            SSTableWriter.rename(descriptor, newDescriptor, entry.getValue());
+
+            SSTableReader reader;
+            try
+            {
+                reader = SSTableReader.open(newDescriptor, entry.getValue(), metadata, partitioner);
+            }
+            catch (IOException e)
+            {
+                SSTableReader.logOpenException(entry.getKey(), e);
+                continue;
+            }
+            newSSTables.add(reader);
+        }
+
+        if (newSSTables.isEmpty())
+        {
+            logger.info("No new SSTables were found for " + table.name + "/" + columnFamily);
+            return;
+        }
+
+        logger.info("Loading new SSTables and building secondary indexes for " + table.name + "/" + columnFamily + ": " + newSSTables);
+        SSTableReader.acquireReferences(newSSTables);
+        data.addSSTables(newSSTables);
+        try
+        {
+            indexManager.maybeBuildSecondaryIndexes(newSSTables, indexManager.allIndexesNames());
+        }
+        finally
+        {
+            SSTableReader.releaseReferences(newSSTables);
+        }
+
+        logger.info("Done loading load new SSTables for " + table.name + "/" + columnFamily);
+    }

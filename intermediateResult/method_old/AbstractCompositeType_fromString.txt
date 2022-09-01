@@ -1,0 +1,43 @@
+public ByteBuffer fromString(String source)
+    {
+        List<String> parts = split(source);
+        List<ByteBuffer> components = new ArrayList<ByteBuffer>(parts.size());
+        List<ParsedComparator> comparators = new ArrayList<ParsedComparator>(parts.size());
+        int totalLength = 0, i = 0;
+        boolean lastByteIsOne = false;
+
+        for (String part : parts)
+        {
+            if (part.equals("!"))
+            {
+                lastByteIsOne = true;
+                break;
+            }
+
+            ParsedComparator p = parseNextComparator(i, part);
+            AbstractType<?> type = p.getAbstractType();
+            part = p.getRemainingPart();
+
+            ByteBuffer component = type.fromString(unescape(part));
+            totalLength += p.getComparatorSerializedSize() + 2 + component.remaining() + 1;
+            components.add(component);
+            comparators.add(p);
+            ++i;
+        }
+
+        ByteBuffer bb = ByteBuffer.allocate(totalLength);
+        i = 0;
+        for (ByteBuffer component : components)
+        {
+            comparators.get(i).serializeComparator(bb);
+            putShortLength(bb, component.remaining());
+            bb.put(component); // it's ok to consume component as we won't use it anymore
+            bb.put((byte)0);
+            ++i;
+        }
+        if (lastByteIsOne)
+            bb.put(bb.limit() - 1, (byte)1);
+
+        bb.rewind();
+        return bb;
+    }

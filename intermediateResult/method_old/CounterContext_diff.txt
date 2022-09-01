@@ -1,0 +1,135 @@
+public ContextRelationship diff(ByteBuffer left, ByteBuffer right)
+    {
+        ContextRelationship relationship = ContextRelationship.EQUAL;
+        ContextState leftState = new ContextState(left, headerLength(left));
+        ContextState rightState = new ContextState(right, headerLength(right));
+
+        while (leftState.hasRemaining() && rightState.hasRemaining())
+        {
+            // compare id bytes
+            int compareId = leftState.compareIdTo(rightState);
+            if (compareId == 0)
+            {
+                long leftClock  = leftState.getClock();
+                long rightClock = rightState.getClock();
+                long leftCount = leftState.getCount();
+                long rightCount = rightState.getCount();
+
+                // advance
+                leftState.moveToNext();
+                rightState.moveToNext();
+
+                // process clock comparisons
+                if (leftClock == rightClock)
+                {
+                    if (leftCount != rightCount)
+                    {
+                        // Inconsistent shard (see the corresponding code in merge()). We return DISJOINT in this
+                        // case so that it will be treated as a difference, allowing read-repair to work.
+                        return ContextRelationship.DISJOINT;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+                else if ((leftClock >= 0 && rightClock > 0 && leftClock > rightClock)
+                      || (leftClock < 0 && (rightClock > 0 || leftClock < rightClock)))
+                {
+                    if (relationship == ContextRelationship.EQUAL)
+                    {
+                        relationship = ContextRelationship.GREATER_THAN;
+                    }
+                    else if (relationship == ContextRelationship.GREATER_THAN)
+                    {
+                        continue;
+                    }
+                    else
+                    {
+                        // relationship == ContextRelationship.LESS_THAN
+                        return ContextRelationship.DISJOINT;
+                    }
+                }
+                else
+                {
+                    if (relationship == ContextRelationship.EQUAL)
+                    {
+                        relationship = ContextRelationship.LESS_THAN;
+                    }
+                    else if (relationship == ContextRelationship.GREATER_THAN)
+                    {
+                        return ContextRelationship.DISJOINT;
+                    }
+                    else
+                    {
+                        // relationship == ContextRelationship.LESS_THAN
+                        continue;
+                    }
+                }
+            }
+            else if (compareId > 0)
+            {
+                // only advance the right context
+                rightState.moveToNext();
+
+                if (relationship == ContextRelationship.EQUAL)
+                {
+                    relationship = ContextRelationship.LESS_THAN;
+                }
+                else if (relationship == ContextRelationship.GREATER_THAN)
+                {
+                    return ContextRelationship.DISJOINT;
+                }
+                else
+                {
+                    // relationship == ContextRelationship.LESS_THAN
+                    continue;
+                }
+            }
+            else // compareId < 0
+            {
+                // only advance the left context
+                leftState.moveToNext();
+
+                if (relationship == ContextRelationship.EQUAL)
+                {
+                    relationship = ContextRelationship.GREATER_THAN;
+                }
+                else if (relationship == ContextRelationship.GREATER_THAN)
+                {
+                    continue;
+                }
+                else
+                // relationship == ContextRelationship.LESS_THAN
+                {
+                    return ContextRelationship.DISJOINT;
+                }
+            }
+        }
+
+        // check final lengths
+        if (leftState.hasRemaining())
+        {
+            if (relationship == ContextRelationship.EQUAL)
+            {
+                return ContextRelationship.GREATER_THAN;
+            }
+            else if (relationship == ContextRelationship.LESS_THAN)
+            {
+                return ContextRelationship.DISJOINT;
+            }
+        }
+        else if (rightState.hasRemaining())
+        {
+            if (relationship == ContextRelationship.EQUAL)
+            {
+                return ContextRelationship.LESS_THAN;
+            }
+            else if (relationship == ContextRelationship.GREATER_THAN)
+            {
+                return ContextRelationship.DISJOINT;
+            }
+        }
+
+        return relationship;
+    }

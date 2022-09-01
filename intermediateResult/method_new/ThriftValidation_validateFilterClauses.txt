@@ -1,0 +1,46 @@
+public static boolean validateFilterClauses(CFMetaData metadata, List<IndexExpression> index_clause)
+    throws org.apache.cassandra.exceptions.InvalidRequestException
+    {
+        if (isEmpty(index_clause))
+            // no filter to apply
+            return false;
+
+        SecondaryIndexManager idxManager = Table.open(metadata.ksName).getColumnFamilyStore(metadata.cfName).indexManager;
+        AbstractType<?> nameValidator =  ColumnFamily.getComparatorFor(metadata.ksName, metadata.cfName, null);
+
+        boolean isIndexed = false;
+        for (IndexExpression expression : index_clause)
+        {
+            try
+            {
+                nameValidator.validate(expression.column_name);
+            }
+            catch (MarshalException me)
+            {
+                throw new org.apache.cassandra.exceptions.InvalidRequestException(String.format("[%s]=[%s] failed name validation (%s)",
+                                                                                  ByteBufferUtil.bytesToHex(expression.column_name),
+                                                                                  ByteBufferUtil.bytesToHex(expression.value),
+                                                                                  me.getMessage()));
+            }
+
+            if (expression.value.remaining() > 0xFFFF)
+                throw new org.apache.cassandra.exceptions.InvalidRequestException("Index expression values may not be larger than 64K");
+
+            AbstractType<?> valueValidator = Schema.instance.getValueValidator(metadata.ksName, metadata.cfName, expression.column_name);
+            try
+            {
+                valueValidator.validate(expression.value);
+            }
+            catch (MarshalException me)
+            {
+                throw new org.apache.cassandra.exceptions.InvalidRequestException(String.format("[%s]=[%s] failed value validation (%s)",
+                                                                                  ByteBufferUtil.bytesToHex(expression.column_name),
+                                                                                  ByteBufferUtil.bytesToHex(expression.value),
+                                                                                  me.getMessage()));
+            }
+
+            isIndexed |= (expression.op == IndexOperator.EQ) && idxManager.indexes(expression.column_name);
+        }
+
+        return isIndexed;
+    }

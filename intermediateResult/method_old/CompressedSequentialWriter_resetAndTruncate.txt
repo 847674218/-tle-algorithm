@@ -1,0 +1,51 @@
+@Override
+    public synchronized void resetAndTruncate(FileMark mark) throws IOException
+    {
+        assert mark instanceof CompressedFileWriterMark;
+
+        CompressedFileWriterMark realMark = ((CompressedFileWriterMark) mark);
+
+        // reset position
+        current = realMark.uncDataOffset;
+
+        if (realMark.chunkOffset == chunkOffset) // current buffer
+        {
+            // just reset a buffer offset and return
+            validBufferBytes = realMark.bufferOffset;
+            return;
+        }
+
+        // synchronize current buffer with disk
+        // because we don't want any data loss
+        syncInternal();
+
+        // setting marker as a current offset
+        chunkOffset = realMark.chunkOffset;
+
+        // compressed chunk size (- 4 bytes reserved for checksum)
+        int chunkSize = (int) (metadataWriter.chunkOffsetBy(realMark.nextChunkIndex) - chunkOffset - 4);
+        if (compressed.buffer.length < chunkSize)
+            compressed.buffer = new byte[chunkSize];
+
+        out.seek(chunkOffset);
+        out.readFully(compressed.buffer, 0, chunkSize);
+
+        // decompress data chunk and store its length
+        int validBytes = compressor.uncompress(compressed.buffer, 0, chunkSize, buffer, 0);
+
+        checksum.update(buffer, 0, validBytes);
+
+        if (out.readInt() != (int) checksum.getValue())
+            throw new CorruptedBlockException(getPath(), chunkOffset, chunkSize);
+
+        checksum.reset();
+
+        // reset buffer
+        validBufferBytes = realMark.bufferOffset;
+        bufferOffset = current - validBufferBytes;
+        chunkCount = realMark.nextChunkIndex - 1;
+
+        // truncate data and index file
+        truncate(chunkOffset);
+        metadataWriter.resetAndTruncate(realMark.nextChunkIndex);
+    }

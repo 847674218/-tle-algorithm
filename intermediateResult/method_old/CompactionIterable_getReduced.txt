@@ -1,0 +1,31 @@
+protected AbstractCompactedRow getReduced()
+        {
+            assert !rows.isEmpty();
+
+            try
+            {
+                AbstractCompactedRow compactedRow = controller.getCompactedRow(new ArrayList<SSTableIdentityIterator>(rows));
+                if (compactedRow.isEmpty())
+                {
+                    controller.invalidateCachedRow(compactedRow.key);
+                    return null;
+                }
+
+                // If the row is cached, we call removeDeleted on at read time it to have coherent query returns,
+                // but if the row is not pushed out of the cache, obsolete tombstones will persist indefinitely.
+                controller.removeDeletedInCache(compactedRow.key);
+                return compactedRow;
+            }
+            finally
+            {
+                rows.clear();
+                if ((row++ % 1000) == 0)
+                {
+                    long n = 0;
+                    for (ICompactionScanner scanner : scanners)
+                        n += scanner.getCurrentPosition();
+                    bytesRead = n;
+                    controller.mayThrottle(bytesRead);
+                }
+            }
+        }

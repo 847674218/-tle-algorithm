@@ -1,0 +1,27 @@
+public static IWriteResponseHandler mutateCounter(CounterMutation cm, String localDataCenter) throws UnavailableException, TimeoutException, IOException
+    {
+        InetAddress endpoint = findSuitableEndpoint(cm.getTable(), cm.key(), localDataCenter);
+
+        if (endpoint.equals(FBUtilities.getBroadcastAddress()))
+        {
+            return applyCounterMutationOnCoordinator(cm, localDataCenter);
+        }
+        else
+        {
+            // Exit now if we can't fulfill the CL here instead of forwarding to the leader replica
+            String table = cm.getTable();
+            AbstractReplicationStrategy rs = Table.open(table).getReplicationStrategy();
+            Collection<InetAddress> writeEndpoints = getWriteEndpoints(table, cm.key());
+
+            rs.getWriteResponseHandler(writeEndpoints, cm.consistency(), null).assureSufficientLiveNodes();
+
+            // Forward the actual update to the chosen leader replica
+            IWriteResponseHandler responseHandler = WriteResponseHandler.create(endpoint);
+
+            Message message = cm.makeMutationMessage(Gossiper.instance.getVersion(endpoint));
+            if (logger.isDebugEnabled())
+                logger.debug("forwarding counter update of key " + ByteBufferUtil.bytesToHex(cm.key()) + " to " + endpoint);
+            MessagingService.instance().sendRR(message, endpoint, responseHandler);
+            return responseHandler;
+        }
+    }

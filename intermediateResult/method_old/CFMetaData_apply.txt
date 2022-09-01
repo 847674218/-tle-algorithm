@@ -1,0 +1,82 @@
+public void apply(CFMetaData cfm) throws ConfigurationException
+    {
+        logger.debug("applying {} to {}", cfm, this);
+        // validate
+        if (!cfm.ksName.equals(ksName))
+            throw new ConfigurationException(String.format("Keyspace mismatch (found %s; expected %s)",
+                                                           cfm.ksName, ksName));
+        if (!cfm.cfName.equals(cfName))
+            throw new ConfigurationException(String.format("Column family mismatch (found %s; expected %s)",
+                                                           cfm.cfName, cfName));
+        if (!cfm.cfId.equals(cfId))
+            throw new ConfigurationException(String.format("Column family ID mismatch (found %s; expected %s)",
+                                                           cfm.cfId, cfId));
+
+        if (!cfm.cfType.equals(cfType))
+            throw new ConfigurationException("types do not match.");
+
+        if (!cfm.comparator.isCompatibleWith(comparator))
+            throw new ConfigurationException("comparators do not match or are not compatible.");
+        if (cfm.subcolumnComparator == null)
+        {
+            if (subcolumnComparator != null)
+                throw new ConfigurationException("subcolumncomparators do not match.");
+            // else, it's null and we're good.
+        }
+        else if (!cfm.subcolumnComparator.isCompatibleWith(subcolumnComparator))
+            throw new ConfigurationException("subcolumncomparators do not match or are note compatible.");
+
+        // TODO: this method should probably return a new CFMetaData so that
+        // 1) we can keep comparator and subcolumnComparator final
+        // 2) updates are applied atomically
+        comparator = cfm.comparator;
+        subcolumnComparator = cfm.subcolumnComparator;
+
+        // compaction thresholds are checked by ThriftValidation. We shouldn't be doing
+        // validation on the apply path; it's too late for that.
+
+        comment = enforceCommentNotNull(cfm.comment);
+        readRepairChance = cfm.readRepairChance;
+        dcLocalReadRepairChance = cfm.dcLocalReadRepairChance;
+        replicateOnWrite = cfm.replicateOnWrite;
+        gcGraceSeconds = cfm.gcGraceSeconds;
+        defaultValidator = cfm.defaultValidator;
+        keyValidator = cfm.keyValidator;
+        minCompactionThreshold = cfm.minCompactionThreshold;
+        maxCompactionThreshold = cfm.maxCompactionThreshold;
+        keyAlias = cfm.keyAlias;
+
+        // We don't want updates coming from thrift to erase columnAliases/valuAlias, which would be wrong, but those are not exposed throught thrift. So
+        // we just only override the value when the new has those set.
+        // Note that this doesn't remove feature on the CQL side since removing columnAliases/valuAlias is non-sensical and not allowed (actually, updating
+        // those is not allowed either but it would be possible to allow it through some ALTER RENAME later).
+        if (!cfm.columnAliases.isEmpty())
+            columnAliases = cfm.columnAliases;
+        if (cfm.valueAlias != null)
+            valueAlias = cfm.valueAlias;
+        bloomFilterFpChance = cfm.bloomFilterFpChance;
+        caching = cfm.caching;
+
+        MapDifference<ByteBuffer, ColumnDefinition> columnDiff = Maps.difference(column_metadata, cfm.column_metadata);
+        // columns that are no longer needed
+        for (ColumnDefinition cd : columnDiff.entriesOnlyOnLeft().values())
+            column_metadata.remove(cd.name);
+        // newly added columns
+        for (ColumnDefinition cd : columnDiff.entriesOnlyOnRight().values())
+            column_metadata.put(cd.name, cd);
+        // old columns with updated attributes
+        for (ByteBuffer name : columnDiff.entriesDiffering().keySet())
+        {
+            ColumnDefinition oldDef = column_metadata.get(name);
+            ColumnDefinition def = cfm.column_metadata.get(name);
+            oldDef.apply(def, getColumnDefinitionComparator(oldDef));
+        }
+
+        compactionStrategyClass = cfm.compactionStrategyClass;
+        compactionStrategyOptions = cfm.compactionStrategyOptions;
+
+        compressionParameters = cfm.compressionParameters();
+
+        updateCfDef();
+        logger.debug("application result is {}", this);
+    }

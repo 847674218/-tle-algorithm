@@ -1,0 +1,91 @@
+private void executeGetWithConditions(Tree statement)
+    {
+        if (!CliMain.isConnected() || !hasKeySpace())
+            return;
+
+        long startTime = System.nanoTime();
+
+        IndexClause clause = new IndexClause();
+        String columnFamily = CliCompiler.getColumnFamily(statement, currentCfDefs());
+        // ^(CONDITIONS ^(CONDITION $column $value) ...)
+        Tree conditions = statement.getChild(1);
+
+        // fetching column family definition
+        CfDef columnFamilyDef = getCfDef(columnFamily);
+
+        // fetching all columns
+        SlicePredicate predicate = new SlicePredicate();
+        SliceRange sliceRange = new SliceRange();
+        sliceRange.setStart(new byte[0]).setFinish(new byte[0]);
+        predicate.setSlice_range(sliceRange);
+
+        for (int i = 0; i < conditions.getChildCount(); i++)
+        {
+            // ^(CONDITION operator $column $value)
+            Tree condition = conditions.getChild(i);
+
+            // =, >, >=, <, <=
+            String operator = condition.getChild(0).getText();
+            String columnNameString  = CliUtils.unescapeSQLString(condition.getChild(1).getText());
+            // it could be a basic string or function call
+            Tree valueTree = condition.getChild(2);
+
+            try
+            {
+                ByteBuffer value;
+                ByteBuffer columnName = columnNameAsBytes(columnNameString, columnFamily);
+
+                if (valueTree.getType() == CliParser.FUNCTION_CALL)
+                {
+                    value = convertValueByFunction(valueTree, columnFamilyDef, columnName);
+                }
+                else
+                {
+                    String valueString = CliUtils.unescapeSQLString(valueTree.getText());
+                    value = columnValueAsBytes(columnName, columnFamily, valueString);
+                }
+
+                // index operator from string
+                IndexOperator idxOperator = CliUtils.getIndexOperator(operator);
+                // adding new index expression into index clause
+                clause.addToExpressions(new IndexExpression(columnName, idxOperator, value));
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        List<KeySlice> slices;
+        clause.setStart_key(new byte[] {});
+
+        // when we have ^(NODE_LIMIT Integer)
+        if (statement.getChildCount() == 3)
+        {
+            Tree limitNode = statement.getChild(2);
+            int limitValue = Integer.parseInt(limitNode.getChild(0).getText());
+
+            if (limitValue == 0)
+            {
+                throw new IllegalArgumentException("LIMIT should be greater than zero.");
+            }
+
+            clause.setCount(limitValue);
+        }
+
+        try
+        {
+            ColumnParent parent = new ColumnParent(columnFamily);
+            slices = thriftClient.get_indexed_slices(parent, clause, predicate, consistencyLevel);
+            printSliceList(columnFamilyDef, slices);
+        }
+        catch (InvalidRequestException e)
+        {
+            throw new RuntimeException(e);
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+        elapsedTime(startTime);
+    }

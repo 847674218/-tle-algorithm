@@ -1,0 +1,58 @@
+public static void sendToHintedEndpoints(final RowMutation rm,
+                                             Iterable<InetAddress> targets,
+                                             AbstractWriteResponseHandler responseHandler,
+                                             String localDataCenter,
+                                             ConsistencyLevel consistency_level)
+    throws OverloadedException
+    {
+        // Multimap that holds onto all the messages and addresses meant for a specific datacenter
+        Map<String, Multimap<MessageOut, InetAddress>> dcMessages = new HashMap<String, Multimap<MessageOut, InetAddress>>();
+
+        for (InetAddress destination : targets)
+        {
+            // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
+            // still generate hints for those if it's overloaded or simply dead but not yet known-to-be-dead.
+            // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
+            // a small number of nodes causing problems, so we should avoid shutting down writes completely to
+            // healthy nodes.  Any node with no hintsInProgress is considered healthy.
+            if (totalHintsInProgress.get() > maxHintsInProgress
+                && (hintsInProgress.get(destination).get() > 0 && shouldHint(destination)))
+            {
+                throw new OverloadedException("Too many in flight hints: " + totalHintsInProgress.get());
+            }
+
+            if (FailureDetector.instance.isAlive(destination))
+            {
+                if (destination.equals(FBUtilities.getBroadcastAddress()) && OPTIMIZE_LOCAL_REQUESTS)
+                {
+                    insertLocal(rm, responseHandler);
+                }
+                else
+                {
+                    // belongs on a different server
+                    if (logger.isTraceEnabled())
+                        logger.trace("insert writing key " + ByteBufferUtil.bytesToHex(rm.key()) + " to " + destination);
+
+                    String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(destination);
+                    Multimap<MessageOut, InetAddress> messages = dcMessages.get(dc);
+                    if (messages == null)
+                    {
+                        messages = HashMultimap.create();
+                        dcMessages.put(dc, messages);
+                    }
+
+                    messages.put(rm.createMessage(), destination);
+                }
+            }
+            else
+            {
+                if (!shouldHint(destination))
+                    continue;
+
+                // Schedule a local hint
+                submitHint(rm, destination, responseHandler, consistency_level);
+            }
+        }
+
+        sendMessages(localDataCenter, dcMessages, responseHandler);
+    }

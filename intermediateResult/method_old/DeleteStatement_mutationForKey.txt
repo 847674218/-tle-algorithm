@@ -1,0 +1,54 @@
+public RowMutation mutationForKey(CFDefinition cfDef, ClientState clientState, ByteBuffer key, ColumnNameBuilder builder, List<ByteBuffer> variables)
+    throws InvalidRequestException
+    {
+        QueryProcessor.validateKey(key);
+        RowMutation rm = new RowMutation(cfDef.cfm.ksName, key);
+
+        if (columns.isEmpty() && builder.componentCount() == 0)
+        {
+            // No columns, delete the row
+            rm.delete(new QueryPath(columnFamily()), getTimestamp(clientState));
+        }
+        else
+        {
+            for (ColumnIdentifier column : columns)
+            {
+                CFDefinition.Name name = cfDef.get(column);
+                if (name == null)
+                    throw new InvalidRequestException(String.format("Unknown identifier %s", column));
+
+                // For compact, we only have one value except the key, so the only form of DELETE that make sense is without a column
+                // list. However, we support having the value name for coherence with the static/sparse case
+                if (name.kind != CFDefinition.Name.Kind.COLUMN_METADATA && name.kind != CFDefinition.Name.Kind.VALUE_ALIAS)
+                    throw new InvalidRequestException(String.format("Invalid identifier %s for deletion (should not be a PRIMARY KEY part)", column));
+            }
+
+            if (cfDef.isCompact)
+            {
+                    ByteBuffer columnName = builder.build();
+                    QueryProcessor.validateColumnName(columnName);
+                    rm.delete(new QueryPath(columnFamily(), null, columnName), getTimestamp(clientState));
+            }
+            else
+            {
+                Iterator<ColumnIdentifier> iter;
+                if (columns.isEmpty())
+                    // It's a DELETE *, remove all columns individually (#3708 will replace that by a single range tombstone)
+                    iter = cfDef.metadata.keySet().iterator();
+                else
+                    // Delete specific columns
+                    iter = columns.iterator();
+
+                while (iter.hasNext())
+                {
+                    ColumnIdentifier column = iter.next();
+                    ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
+                    ByteBuffer columnName = b.add(column.key).build();
+                    QueryProcessor.validateColumnName(columnName);
+                    rm.delete(new QueryPath(columnFamily(), null, columnName), getTimestamp(clientState));
+                }
+            }
+        }
+
+        return rm;
+    }

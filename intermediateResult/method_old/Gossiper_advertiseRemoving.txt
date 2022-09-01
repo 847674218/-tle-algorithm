@@ -1,0 +1,27 @@
+public void advertiseRemoving(InetAddress endpoint, Token token, Token mytoken)
+    {
+        EndpointState epState = endpointStateMap.get(endpoint);
+        // remember this node's generation
+        int generation = epState.getHeartBeatState().getGeneration();
+        logger.info("Removing token: " + token);
+        logger.info("Sleeping for " + StorageService.RING_DELAY + "ms to ensure " + endpoint + " does not change");
+        try
+        {
+            Thread.sleep(StorageService.RING_DELAY);
+        }
+        catch (InterruptedException e)
+        {
+            throw new AssertionError(e);
+        }
+        // make sure it did not change
+        epState = endpointStateMap.get(endpoint);
+        if (epState.getHeartBeatState().getGeneration() != generation)
+            throw new RuntimeException("Endpoint " + endpoint + " generation changed while trying to remove it");
+        // update the other node's generation to mimic it as if it had changed it itself
+        logger.info("Advertising removal for " + endpoint);
+        epState.updateTimestamp(); // make sure we don't evict it too soon
+        epState.getHeartBeatState().forceNewerGenerationUnsafe();
+        epState.addApplicationState(ApplicationState.STATUS, StorageService.instance.valueFactory.removingNonlocal(token));
+        epState.addApplicationState(ApplicationState.REMOVAL_COORDINATOR, StorageService.instance.valueFactory.removalCoordinator(mytoken));
+        endpointStateMap.put(endpoint, epState);
+    }

@@ -1,0 +1,24 @@
+private static List<PendingFile> createPendingFiles(Iterable<SSTableReader> sstables, Collection<Range<Token>> ranges, OperationType type)
+    {
+        List<PendingFile> pending = new ArrayList<PendingFile>();
+        for (SSTableReader sstable : sstables)
+        {
+            Descriptor desc = sstable.descriptor;
+            List<Pair<Long,Long>> sections = sstable.getPositionsForRanges(ranges);
+            if (sections.isEmpty())
+            {
+                // A reference was acquired on the sstable and we won't stream it
+                sstable.releaseReference();
+                continue;
+            }
+            CompressionInfo compression = null;
+            if (sstable.compression)
+            {
+                compression = new CompressionInfo(sstable.getCompressionMetadata().getChunksForSections(sections),
+                                                  sstable.getCompressionMetadata().parameters);
+            }
+            pending.add(new PendingFile(sstable, desc, SSTable.COMPONENT_DATA, sections, type, sstable.estimatedKeysForRanges(ranges), compression));
+        }
+        logger.info("Stream context metadata {}, {} sstables.", pending, Iterables.size(sstables));
+        return pending;
+    }

@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\dht\RangeStreamer.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentHashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>CountDownLatch</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>ArrayListMultimap</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>HashMultimap</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Multimap</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>IStreamCallback</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>FailureDetector</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>IFailureDetector</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>AbstractReplicationStrategy</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>IEndpointSnitch</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>TokenMetadata</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>OperationType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>StreamIn</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Assists in streaming ranges to a node.
+ */</comment>
+<class><specifier>public</specifier> class <name>RangeStreamer</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>RangeStreamer</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>TokenMetadata</name></type> <name>metadata</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>address</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>OperationType</name></type> <name>opType</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>toFetch</name> <init>= <expr><call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>ISourceFilter</name></argument>&gt;</argument_list></name></type> <name>sourceFilters</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>ISourceFilter</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <comment type="line">// protected for testing.</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>CountDownLatch</name></type> <name>latch</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>Set</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>completed</name> <init>= <expr><call><name><name>Collections</name>.<name>newSetFromMap</name></name><argument_list>(<argument><expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * A filter applied to sources to stream from when constructing a fetch map.
+     */</comment>
+    <class type="interface"><specifier>public</specifier> <specifier>static</specifier> interface <name>ISourceFilter</name>
+    <block>{
+        <function_decl><type><specifier>public</specifier> <name>boolean</name></type> <name>shouldInclude</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>;</function_decl>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Source filter which excludes any endpoints that are not alive according to a
+     * failure detector.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>FailureDetectorSourceFilter</name> <super><implements>implements <name>ISourceFilter</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>IFailureDetector</name></type> <name>fd</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>FailureDetectorSourceFilter</name><parameter_list>(<param><decl><type><name>IFailureDetector</name></type> <name>fd</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>fd</name></name> = <name>fd</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>shouldInclude</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>fd</name>.<name>isAlive</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Source filter which excludes any endpoints that are not in a specific data center.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>SingleDatacenterFilter</name> <super><implements>implements <name>ISourceFilter</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>sourceDc</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>IEndpointSnitch</name></type> <name>snitch</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>SingleDatacenterFilter</name><parameter_list>(<param><decl><type><name>IEndpointSnitch</name></type> <name>snitch</name></decl></param>, <param><decl><type><name>String</name></type> <name>sourceDc</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>sourceDc</name></name> = <name>sourceDc</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>snitch</name></name> = <name>snitch</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>shouldInclude</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>snitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>sourceDc</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <constructor><specifier>public</specifier> <name>RangeStreamer</name><parameter_list>(<param><decl><type><name>TokenMetadata</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>address</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>opType</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>metadata</name></name> = <name>metadata</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>address</name></name> = <name>address</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>opType</name></name> = <name>opType</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addSourceFilter</name><parameter_list>(<param><decl><type><name>ISourceFilter</name></type> <name>filter</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>sourceFilters</name>.<name>add</name></name><argument_list>(<argument><expr><name>filter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addRanges</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>rangesForTable</name> <init>= <expr><call><name>getAllRangesWithSourcesFor</name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>ranges</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></name></type> <name>entry</name><range>: <expr><call><name><name>rangesForTable</name>.<name>entries</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%s: range %s exists on %s"</expr></argument>, <argument><expr><name>opType</name></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block></then></if>
+
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name>getRangeFetchMap</name><argument_list>(<argument><expr><name>rangesForTable</name></expr></argument>, <argument><expr><name>sourceFilters</name></expr></argument>)</argument_list></call>.<call><name>asMap</name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <for>for (<init><decl><type><name>Range</name></type> <name>r</name> <range>: <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%s: range %s from source %s for table %s"</expr></argument>, <argument><expr><name>opType</name></expr></argument>, <argument><expr><name>r</name></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>table</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></then></if>
+            <expr_stmt><expr><call><name><name>toFetch</name>.<name>put</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>entry</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Get a map of all ranges and their respective sources that are candidates for streaming the given ranges
+     * to us. For each range, the list of sources is sorted by proximity relative to the given destAddress.
+     */</comment>
+    <function><type><specifier>private</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getAllRangesWithSourcesFor</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>desiredRanges</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>AbstractReplicationStrategy</name></type> <name>strat</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>getReplicationStrategy</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>rangeAddresses</name> <init>= <expr><call><name><name>strat</name>.<name>getRangeAddresses</name></name><argument_list>(<argument><expr><call><name><name>metadata</name>.<name>cloneOnlyTokenMap</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>rangeSources</name> <init>= <expr><call><name><name>ArrayListMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>desiredRange</name> <range>: <expr><name>desiredRanges</name></expr></range></decl></init>)
+        <block>{
+            <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><call><name><name>rangeAddresses</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>range</name>.<name>contains</name></name><argument_list>(<argument><expr><name>desiredRange</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>preferred</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getEndpointSnitch</name></name><argument_list>()</argument_list></call>.<call><name>getSortedListByProximity</name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><call><name><name>rangeAddresses</name>.<name>get</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>rangeSources</name>.<name>putAll</name></name><argument_list>(<argument><expr><name>desiredRange</name></expr></argument>, <argument><expr><name>preferred</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                }</block></then></if>
+            }</block></for>
+
+            <if>if <condition>(<expr>!<call><name><name>rangeSources</name>.<name>keySet</name></name><argument_list>()</argument_list></call>.<call><name>contains</name><argument_list>(<argument><expr><name>desiredRange</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"No sources found for " + <name>desiredRange</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></for>
+
+        <return>return <expr><name>rangeSources</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @param rangesWithSources The ranges we want to fetch (key) and their potential sources (value)
+     * @param sourceFilters A (possibly empty) collection of source filters to apply. In addition to any filters given
+     *                      here, we always exclude ourselves.
+     * @return
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getRangeFetchMap</name><parameter_list>(<param><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>rangesWithSources</name></decl></param>,
+                                                                        <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>ISourceFilter</name></argument>&gt;</argument_list></name></type> <name>sourceFilters</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>rangeFetchMapMap</name> <init>= <expr><call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><call><name><name>rangesWithSources</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>boolean</name></type> <name>foundSource</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+            <label><name>outer</name>:</label>
+            <for>for (<init><decl><type><name>InetAddress</name></type> <name>address</name> <range>: <expr><call><name><name>rangesWithSources</name>.<name>get</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>address</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// If localhost is a source, we have found one, but we don't add it to the map to avoid streaming locally</comment>
+                    <expr_stmt><expr><name>foundSource</name> = true</expr>;</expr_stmt>
+                    <continue>continue;</continue>
+                }</block></then></if>
+
+                <for>for (<init><decl><type><name>ISourceFilter</name></type> <name>filter</name> <range>: <expr><name>sourceFilters</name></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr>!<call><name><name>filter</name>.<name>shouldInclude</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <continue>continue outer;</continue></then></if>
+                }</block></for>
+
+                <expr_stmt><expr><call><name><name>rangeFetchMapMap</name>.<name>put</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>foundSource</name> = true</expr>;</expr_stmt>
+                <break>break;</break> <comment type="line">// ensure we only stream from one other node for each range</comment>
+            }</block></for>
+
+            <if>if <condition>(<expr>!<name>foundSource</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"unable to find sufficient sources for streaming range " + <name>range</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></for>
+
+        <return>return <expr><name>rangeFetchMapMap</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getWorkMap</name><parameter_list>(<param><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>rangesWithSourceTarget</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getRangeFetchMap</name><argument_list>(<argument><expr><name>rangesWithSourceTarget</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>ISourceFilter</name>&gt;<call><name>singleton</name><argument_list>(<argument><expr>new <call><name>FailureDetectorSourceFilter</name><argument_list>(<argument><expr><name><name>FailureDetector</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// For testing purposes</comment>
+    <function><type><name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>toFetch</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>toFetch</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>fetch</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>latch</name> = new <call><name>CountDownLatch</name><argument_list>(<argument><expr><call><name><name>toFetch</name>.<name>entries</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>toFetch</name>.<name>entries</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>table</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>final</specifier> <name>InetAddress</name></type> <name>source</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getKey</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>final</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getValue</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="block">/* Send messages to respective folks to stream data over to me */</comment>
+            <decl_stmt><decl><type><name>IStreamCallback</name></type> <name>callback</name> <init>= <expr>new <class><super><name>IStreamCallback</name></super><argument_list>()</argument_list>
+            <block>{
+                <function><type><specifier>public</specifier> <name>void</name></type> <name>onSuccess</name><parameter_list>()</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>completed</name>.<name>addAll</name></name><argument_list>(<argument><expr><name>ranges</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>latch</name>.<name>countDown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Removed %s/%s as a %s source; remaining is %s"</expr></argument>,
+                                     <argument><expr><name>source</name></expr></argument>, <argument><expr><name>table</name></expr></argument>, <argument><expr><name>opType</name></expr></argument>, <argument><expr><call><name><name>latch</name>.<name>getCount</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                }</block></function>
+
+                <function><type><specifier>public</specifier> <name>void</name></type> <name>onFailure</name><parameter_list>()</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>latch</name>.<name>countDown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Streaming from " + <name>source</name> + " failed"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></function>
+            }</block></class></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"" + <name>opType</name> + "ing from " + <name>source</name> + " ranges " + <call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><name>ranges</name></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>StreamIn</name>.<name>requestRanges</name></name><argument_list>(<argument><expr><name>source</name></expr></argument>, <argument><expr><name>table</name></expr></argument>, <argument><expr><name>ranges</name></expr></argument>, <argument><expr><name>callback</name></expr></argument>, <argument><expr><name>opType</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>latch</name>.<name>await</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>toFetch</name>.<name>entries</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr>!<call><name><name>completed</name>.<name>containsAll</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getValue</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Unable to fetch range %s for keyspace %s from any hosts"</expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getValue</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            }</block></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+}</block></class>
+</unit>

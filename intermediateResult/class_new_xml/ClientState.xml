@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\service\ClientState.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>auth</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>SystemTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>AuthenticationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>UnauthorizedException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>SemanticVersion</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * State related to a client connection.
+ */</comment>
+<class><specifier>public</specifier> class <name>ClientState</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>ClientState</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>SemanticVersion</name></type> <name>DEFAULT_CQL_VERSION</name> <init>= <expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>QueryProcessor</name>.<name>CQL_VERSION</name></name></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>IResource</name></argument>&gt;</argument_list></name></type> <name>READABLE_SYSTEM_RESOURCES</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>IResource</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>5</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>IResource</name></argument>&gt;</argument_list></name></type> <name>PROTECTED_AUTH_RESOURCES</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>IResource</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <expr_stmt><expr>static
+    <block>{
+        <comment type="line">// We want these system cfs to be always readable since many tools rely on them (nodetool, cqlsh, bulkloader, etc.)</comment>
+        <expr><name><name>String</name><index>[]</index></name> <name>cfs</name> =  new <name><name>String</name><index>[]</index></name> <block>{ <expr><name><name>SystemTable</name>.<name>LOCAL_CF</name></name></expr>,
+                                       <expr><name><name>SystemTable</name>.<name>PEERS_CF</name></name></expr>,
+                                       <expr><name><name>SystemTable</name>.<name>SCHEMA_KEYSPACES_CF</name></name></expr>,
+                                       <expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNFAMILIES_CF</name></name></expr>,
+                                       <expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNS_CF</name></name></expr> }</block></expr>;
+        <for>for (<init><decl><type><name>String</name></type> <name>cf</name> <range>: <expr><name>cfs</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>READABLE_SYSTEM_RESOURCES</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>DataResource</name>.<name>columnFamily</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_KS</name></name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <call><name><name>PROTECTED_AUTH_RESOURCES</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getAuthenticator</name></name><argument_list>()</argument_list></call>.<call><name>protectedResources</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></block></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>PROTECTED_AUTH_RESOURCES</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getAuthorizer</name></name><argument_list>()</argument_list></call>.<call><name>protectedResources</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></class>
+
+    <comment type="line">// Current user for the session</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>AuthenticatedUser</name></type> <name>user</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>keyspace</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>SemanticVersion</name></type> <name>cqlVersion</name></decl>;</decl_stmt>
+
+    <comment type="line">// internalCall is used to mark ClientState as used by some internal component</comment>
+    <comment type="line">// that should have an ability to modify system keyspace</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>internalCall</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>ClientState</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Construct a new, empty ClientState
+     */</comment>
+    <constructor><specifier>public</specifier> <name>ClientState</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>internalCall</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>internalCall</name></name> = <name>internalCall</name></expr>;</expr_stmt>
+        <if>if <condition>(<expr>!<call><name><name>DatabaseDescriptor</name>.<name>getAuthenticator</name></name><argument_list>()</argument_list></call>.<call><name>requireAuthentication</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><name><name>this</name>.<name>user</name></name> = <name><name>AuthenticatedUser</name>.<name>ANONYMOUS_USER</name></name></expr>;</expr_stmt></then></if>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getRawKeyspace</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>keyspace</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getKeyspace</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>keyspace</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"no keyspace has been specified"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr><name>keyspace</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setKeyspace</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ks</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getKSMetaData</name></name><argument_list>(<argument><expr><name>ks</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Keyspace '" + <name>ks</name> + "' does not exist"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <expr_stmt><expr><name>keyspace</name> = <name>ks</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Attempts to login this client with the given credentials map.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>login</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>credentials</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>AuthenticationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>AuthenticatedUser</name></type> <name>user</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getAuthenticator</name></name><argument_list>()</argument_list></call>.<call><name>authenticate</name><argument_list>(<argument><expr><name>credentials</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr>!<call><name><name>user</name>.<name>isAnonymous</name></name><argument_list>()</argument_list></call> &amp;&amp; !<call><name><name>Auth</name>.<name>isExistingUser</name></name><argument_list>(<argument><expr><call><name><name>user</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+           <throw>throw <expr>new <call><name>AuthenticationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"User %s doesn't exist - create it with CREATE USER query first"</expr></argument>,
+                                                           <argument><expr><call><name><name>user</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><name><name>this</name>.<name>user</name></name> = <name>user</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>hasAllKeyspacesAccess</name><parameter_list>(<param><decl><type><name>Permission</name></type> <name>perm</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnauthorizedException</name></expr></argument>, <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>internalCall</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+        <expr_stmt><expr><call><name>validateLogin</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>ensureHasPermission</name><argument_list>(<argument><expr><name>perm</name></expr></argument>, <argument><expr><call><name><name>DataResource</name>.<name>root</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>hasKeyspaceAccess</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>Permission</name></type> <name>perm</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnauthorizedException</name></expr></argument>, <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>hasAccess</name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>perm</name></expr></argument>, <argument><expr><call><name><name>DataResource</name>.<name>keyspace</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>hasColumnFamilyAccess</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>String</name></type> <name>columnFamily</name></decl></param>, <param><decl><type><name>Permission</name></type> <name>perm</name></decl></param>)</parameter_list>
+    <throws>throws <argument><expr><name>UnauthorizedException</name></expr></argument>, <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>hasAccess</name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>perm</name></expr></argument>, <argument><expr><call><name><name>DataResource</name>.<name>columnFamily</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>columnFamily</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>hasAccess</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>Permission</name></type> <name>perm</name></decl></param>, <param><decl><type><name>DataResource</name></type> <name>resource</name></decl></param>)</parameter_list>
+    <throws>throws <argument><expr><name>UnauthorizedException</name></expr></argument>, <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>validateKeyspace</name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>internalCall</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+        <expr_stmt><expr><call><name>validateLogin</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>preventSystemKSSchemaModification</name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>perm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>perm</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>Permission</name>.<name>SELECT</name></name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>READABLE_SYSTEM_RESOURCES</name>.<name>contains</name></name><argument_list>(<argument><expr><name>resource</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+        <if>if <condition>(<expr><call><name><name>PROTECTED_AUTH_RESOURCES</name>.<name>contains</name></name><argument_list>(<argument><expr><name>resource</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnauthorizedException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Resource %s is inaccessible"</expr></argument>, <argument><expr><name>resource</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <expr_stmt><expr><call><name>ensureHasPermission</name><argument_list>(<argument><expr><name>perm</name></expr></argument>, <argument><expr><name>resource</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>ensureHasPermission</name><parameter_list>(<param><decl><type><name>Permission</name></type> <name>perm</name></decl></param>, <param><decl><type><name>IResource</name></type> <name>resource</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnauthorizedException</name></expr></argument></throws>
+    <block>{
+        <for>for (<init><decl><type><name>IResource</name></type> <name>r</name> <range>: <expr><call><name><name>Resources</name>.<name>chain</name></name><argument_list>(<argument><expr><name>resource</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name>authorize</name><argument_list>(<argument><expr><name>r</name></expr></argument>)</argument_list></call>.<call><name>contains</name><argument_list>(<argument><expr><name>perm</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return;</return></then></if>
+        }</block></for>
+        <throw>throw <expr>new <call><name>UnauthorizedException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"User %s has no %s permission on %s or any of its parents"</expr></argument>,
+                                                      <argument><expr><call><name><name>user</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                      <argument><expr><name>perm</name></expr></argument>,
+                                                      <argument><expr><name>resource</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>preventSystemKSSchemaModification</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>Permission</name></type> <name>perm</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnauthorizedException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>Schema</name>.<name>systemKeyspaceNames</name>.<name>contains</name></name><argument_list>(<argument><expr><call><name><name>keyspace</name>.<name>toLowerCase</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> &amp;&amp; !(<call><name><name>perm</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>Permission</name>.<name>SELECT</name></name></expr></argument>)</argument_list></call> || <call><name><name>perm</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>Permission</name>.<name>MODIFY</name></name></expr></argument>)</argument_list></call>)</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnauthorizedException</name><argument_list>(<argument><expr><name>keyspace</name> + " keyspace is not user-modifiable."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>validateLogin</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>UnauthorizedException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>user</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnauthorizedException</name><argument_list>(<argument><expr>"You have not logged in"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>ensureNotAnonymous</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>UnauthorizedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>validateLogin</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>user</name>.<name>isAnonymous</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnauthorizedException</name><argument_list>(<argument><expr>"You have to be logged in to perform this query"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateKeyspace</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>keyspace</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"You have not set a keyspace for this session"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setCQLVersion</name><parameter_list>(<param><decl><type><name>String</name></type> <name>str</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>SemanticVersion</name></type> <name>version</name></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>version</name> = new <call><name>SemanticVersion</name><argument_list>(<argument><expr><name>str</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IllegalArgumentException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <decl_stmt><decl><type><name>SemanticVersion</name></type> <name>cql</name> <init>= <expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql</name>.<name>QueryProcessor</name>.<name>CQL_VERSION</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SemanticVersion</name></type> <name>cql3</name> <init>= <expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>QueryProcessor</name>.<name>CQL_VERSION</name></name></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// We've made some backward incompatible changes between CQL3 beta1 and the final.</comment>
+        <comment type="line">// It's ok because it was a beta, but it still mean we don't support 3.0.0-beta1 so reject it.</comment>
+        <decl_stmt><decl><type><name>SemanticVersion</name></type> <name>cql3Beta</name> <init>= <expr>new <call><name>SemanticVersion</name><argument_list>(<argument><expr>"3.0.0-beta1"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>version</name>.<name>equals</name></name><argument_list>(<argument><expr><name>cql3Beta</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"There has been a few syntax breaking changes between 3.0.0-beta1 and 3.0.0 "
+                                                           + "(mainly the syntax for options of CREATE KEYSPACE and CREATE TABLE). 3.0.0-beta1 "
+                                                           + " is not supported; please upgrade to 3.0.0"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><call><name><name>version</name>.<name>isSupportedBy</name></name><argument_list>(<argument><expr><name>cql</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><name>cqlVersion</name> = <name>cql</name></expr>;</expr_stmt></then>
+        <else>else <if>if <condition>(<expr><call><name><name>version</name>.<name>isSupportedBy</name></name><argument_list>(<argument><expr><name>cql3</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><name>cqlVersion</name> = <name>cql3</name></expr>;</expr_stmt></then>
+        <else>else
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Provided version %s is not supported by this server (supported: %s)"</expr></argument>,
+                                                            <argument><expr><name>version</name></expr></argument>,
+                                                            <argument><expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><call><name>getCQLSupportedVersion</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></else></if></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>AuthenticatedUser</name></type> <name>getUser</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>user</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>SemanticVersion</name></type> <name>getCQLVersion</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>cqlVersion</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>SemanticVersion</name><index>[]</index></type> <name>getCQLSupportedVersion</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>SemanticVersion</name></type> <name>cql</name> <init>= <expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql</name>.<name>QueryProcessor</name>.<name>CQL_VERSION</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SemanticVersion</name></type> <name>cql3</name> <init>= <expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>QueryProcessor</name>.<name>CQL_VERSION</name></name></expr></init></decl>;</decl_stmt>
+
+        <return>return <expr>new <name><name>SemanticVersion</name><index>[]</index></name><block>{ <expr><name>cql</name></expr>, <expr><name>cql3</name></expr> }</block></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Permission</name></argument>&gt;</argument_list></name></type> <name>authorize</name><parameter_list>(<param><decl><type><name>IResource</name></type> <name>resource</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>DatabaseDescriptor</name>.<name>getAuthorizer</name></name><argument_list>()</argument_list></call>.<call><name>authorize</name><argument_list>(<argument><expr><name>user</name></expr></argument>, <argument><expr><name>resource</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}
+</unit>

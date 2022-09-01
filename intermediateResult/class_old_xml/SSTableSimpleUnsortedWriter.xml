@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\io\sstable\SSTableSimpleUnsortedWriter.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>TreeMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>BlockingQueue</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>SynchronousQueue</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>IPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>compress</name>.<name>CompressionParameters</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * A SSTable writer that doesn't assume rows are in sorted order.
+ * This writer buffers rows in memory and then write them all in sorted order.
+ * To avoid loading the entire data set in memory, the amount of rows buffered
+ * is configurable. Each time the threshold is met, one SSTable will be
+ * created (and the buffer be reseted).
+ *
+ * @see AbstractSSTableSimpleWriter
+ */</comment>
+<class><specifier>public</specifier> class <name>SSTableSimpleUnsortedWriter</name> <super><extends>extends <name>AbstractSSTableSimpleWriter</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Buffer</name></type> <name>SENTINEL</name> <init>= <expr>new <call><name>Buffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>Buffer</name></type> <name>buffer</name> <init>= <expr>new <call><name>Buffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>bufferSize</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>currentSize</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>BlockingQueue</name><argument_list>&lt;<argument><name>Buffer</name></argument>&gt;</argument_list></name></type> <name>writeQueue</name> <init>= <expr>new <call><name><name>SynchronousQueue</name><argument_list>&lt;<argument><name>Buffer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>DiskWriter</name></type> <name>diskWriter</name> <init>= <expr>new <call><name>DiskWriter</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Create a new buffering writer.
+     * @param directory the directory where to write the sstables
+     * @param partitioner  the partitioner
+     * @param keyspace the keyspace name
+     * @param columnFamily the column family name
+     * @param comparator the column family comparator
+     * @param subComparator the column family subComparator or null if not a Super column family.
+     * @param bufferSizeInMB the data size in MB before which a sstable is written and the buffer reseted. This correspond roughly to the written
+     * data size (i.e. the size of the create sstable). The actual size used in memory will be higher (by how much depends on the size of the
+     * columns you add). For 1GB of heap, a 128 bufferSizeInMB is probably a reasonable choice. If you experience OOM, this value should be lowered.
+     */</comment>
+    <constructor><specifier>public</specifier> <name>SSTableSimpleUnsortedWriter</name><parameter_list>(<param><decl><type><name>File</name></type> <name>directory</name></decl></param>,
+                                       <param><decl><type><name>IPartitioner</name></type> <name>partitioner</name></decl></param>,
+                                       <param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>,
+                                       <param><decl><type><name>String</name></type> <name>columnFamily</name></decl></param>,
+                                       <param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl></param>,
+                                       <param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>subComparator</name></decl></param>,
+                                       <param><decl><type><name>int</name></type> <name>bufferSizeInMB</name></decl></param>,
+                                       <param><decl><type><name>CompressionParameters</name></type> <name>compressParameters</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>directory</name></expr></argument>, <argument><expr>new <call><name>CFMetaData</name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>columnFamily</name></expr></argument>, <argument><expr><name>subComparator</name> == null ? <name><name>ColumnFamilyType</name>.<name>Standard</name></name> : <name><name>ColumnFamilyType</name>.<name>Super</name></name></expr></argument>, <argument><expr><name>comparator</name></expr></argument>, <argument><expr><name>subComparator</name></expr></argument>)</argument_list></call>.<call><name>compressionParameters</name><argument_list>(<argument><expr><name>compressParameters</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>partitioner</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>bufferSize</name></name> = <name>bufferSizeInMB</name> * 1024L * 1024L</expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>this</name>.<name>diskWriter</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>SSTableSimpleUnsortedWriter</name><parameter_list>(<param><decl><type><name>File</name></type> <name>directory</name></decl></param>,
+                                       <param><decl><type><name>IPartitioner</name></type> <name>partitioner</name></decl></param>,
+                                       <param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>,
+                                       <param><decl><type><name>String</name></type> <name>columnFamily</name></decl></param>,
+                                       <param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl></param>,
+                                       <param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>subComparator</name></decl></param>,
+                                       <param><decl><type><name>int</name></type> <name>bufferSizeInMB</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>directory</name></expr></argument>, <argument><expr><name>partitioner</name></expr></argument>, <argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>columnFamily</name></expr></argument>, <argument><expr><name>comparator</name></expr></argument>, <argument><expr><name>subComparator</name></expr></argument>, <argument><expr><name>bufferSizeInMB</name></expr></argument>, <argument><expr>new <call><name>CompressionParameters</name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>writeRow</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>columnFamily</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name>currentSize</name> += <call><name><name>key</name>.<name>key</name>.<name>remaining</name></name><argument_list>()</argument_list></call> + <call><name><name>columnFamily</name>.<name>serializedSize</name></name><argument_list>()</argument_list></call> * 1.2</expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>currentSize</name> &gt; <name>bufferSize</name></expr>)</condition><then>
+            <expr_stmt><expr><call><name>sync</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>ColumnFamily</name></type> <name>getColumnFamily</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>previous</name> <init>= <expr><call><name><name>buffer</name>.<name>get</name></name><argument_list>(<argument><expr><name>currentKey</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// If the CF already exist in memory, we'll just continue adding to it</comment>
+        <if>if <condition>(<expr><name>previous</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>previous</name> = <call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><call><name><name>TreeMapBackedSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buffer</name>.<name>put</name></name><argument_list>(<argument><expr><name>currentKey</name></expr></argument>, <argument><expr><name>previous</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <comment type="line">// We will reuse a CF that we have counted already. But because it will be easier to add the full size</comment>
+            <comment type="line">// of the CF in the next writeRow call than to find out the delta, we just remove the size until that next call</comment>
+            <expr_stmt><expr><name>currentSize</name> -= <call><name><name>currentKey</name>.<name>key</name>.<name>remaining</name></name><argument_list>()</argument_list></call> + <call><name><name>previous</name>.<name>serializedSize</name></name><argument_list>()</argument_list></call> * 1.2</expr>;</expr_stmt>
+        }</block></else></if>
+        <return>return <expr><name>previous</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>sync</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>writeQueue</name>.<name>put</name></name><argument_list>(<argument><expr><name>SENTINEL</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>diskWriter</name>.<name>join</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><call><name>checkForWriterException</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>sync</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>buffer</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name>checkForWriterException</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>writeQueue</name>.<name>put</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <expr_stmt><expr><name>buffer</name> = new <call><name>Buffer</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>currentSize</name> = 0</expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>checkForWriterException</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// slightly lame way to report exception from the writer, but that should be good enough</comment>
+        <if>if <condition>(<expr><name><name>diskWriter</name>.<name>exception</name></name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name><name>diskWriter</name>.<name>exception</name></name> instanceof <name>IOException</name></expr>)</condition><then>
+                <throw>throw <expr>(<name>IOException</name>) <name><name>diskWriter</name>.<name>exception</name></name></expr>;</throw></then>
+            <else>else
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name><name>diskWriter</name>.<name>exception</name></name></expr></argument>)</argument_list></call></expr>;</throw></else></if>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="line">// typedef</comment>
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>Buffer</name> <super><extends>extends <name><name>TreeMap</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></extends></super> <block>{}</block></class>
+
+    <class><specifier>private</specifier> class <name>DiskWriter</name> <super><extends>extends <name>Thread</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>volatile</specifier> <name>Exception</name></type> <name>exception</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>SSTableWriter</name></type> <name>writer</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <while>while <condition>(<expr>true</expr>)</condition>
+                <block>{
+                    <decl_stmt><decl><type><name>Buffer</name></type> <name>b</name> <init>= <expr><call><name><name>writeQueue</name>.<name>take</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>b</name> == <name>SENTINEL</name></expr>)</condition><then>
+                        <return>return;</return></then></if>
+
+                    <expr_stmt><expr><name>writer</name> = <call><name>getWriter</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>b</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                        <expr_stmt><expr><call><name><name>writer</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                    <expr_stmt><expr><call><name><name>writer</name>.<name>closeAndOpenReader</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></while>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><name>writer</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>writer</name>.<name>abort</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+                <expr_stmt><expr><name>exception</name> = <name>e</name></expr>;</expr_stmt>
+            }</block></catch></try>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

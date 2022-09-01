@@ -1,0 +1,37 @@
+public void prepare(ColumnFamilyStore cfs)
+        {
+            if (tree.partitioner() instanceof RandomPartitioner)
+            {
+                // You can't beat an even tree distribution for md5
+                tree.init();
+            }
+            else
+            {
+                List<DecoratedKey> keys = new ArrayList<DecoratedKey>();
+                for (DecoratedKey sample : cfs.keySamples(request.range))
+                {
+                    assert request.range.contains(sample.token): "Token " + sample.token + " is not within range " + request.range;
+                    keys.add(sample);
+                }
+
+                if (keys.isEmpty())
+                {
+                    // use an even tree distribution
+                    tree.init();
+                }
+                else
+                {
+                    int numkeys = keys.size();
+                    Random random = new Random();
+                    // sample the column family using random keys from the index
+                    while (true)
+                    {
+                        DecoratedKey dk = keys.get(random.nextInt(numkeys));
+                        if (!tree.split(dk.token))
+                            break;
+                    }
+                }
+            }
+            logger.debug("Prepared AEService tree of size " + tree.size() + " for " + request);
+            ranges = tree.invalids();
+        }

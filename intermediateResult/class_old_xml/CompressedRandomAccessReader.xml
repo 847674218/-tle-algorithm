@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\io\compress\CompressedRandomAccessReader.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>compress</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>zip</name>.<name>CRC32</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>zip</name>.<name>Checksum</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>RandomAccessReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * CRAR extends RAR to transparently uncompress blocks from the file into RAR.buffer.  Most of the RAR
+ * "read bytes from the buffer, rebuffering when necessary" machinery works unchanged after that.
+ */</comment>
+<class><specifier>public</specifier> class <name>CompressedRandomAccessReader</name> <super><extends>extends <name>RandomAccessReader</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CompressedRandomAccessReader</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>RandomAccessReader</name></type> <name>open</name><parameter_list>(<param><decl><type><name>String</name></type> <name>dataFilePath</name></decl></param>, <param><decl><type><name>CompressionMetadata</name></type> <name>metadata</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>open</name><argument_list>(<argument><expr><name>dataFilePath</name></expr></argument>, <argument><expr><name>metadata</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>RandomAccessReader</name></type> <name>open</name><parameter_list>(<param><decl><type><name>String</name></type> <name>dataFilePath</name></decl></param>, <param><decl><type><name>CompressionMetadata</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr>new <call><name>CompressedRandomAccessReader</name><argument_list>(<argument><expr><name>dataFilePath</name></expr></argument>, <argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>skipIOCache</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>CompressionMetadata</name></type> <name>metadata</name></decl>;</decl_stmt>
+
+    <comment type="line">// we read the raw compressed bytes into this buffer, then move the uncompressed ones into super.buffer.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>compressed</name></decl>;</decl_stmt>
+
+    <comment type="line">// re-use single crc object</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Checksum</name></type> <name>checksum</name> <init>= <expr>new <call><name>CRC32</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// raw checksum bytes</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ByteBuffer</name></type> <name>checksumBytes</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr>new <name><name>byte</name><index>[<expr>4</expr>]</index></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CompressedRandomAccessReader</name><parameter_list>(<param><decl><type><name>String</name></type> <name>dataFilePath</name></decl></param>, <param><decl><type><name>CompressionMetadata</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>dataFilePath</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>metadata</name>.<name>chunkLength</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>skipIOCache</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>metadata</name></name> = <name>metadata</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>compressed</name> = <call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr>new <name><name>byte</name><index>[<expr><call><name><name>metadata</name>.<name>compressor</name></name><argument_list>()</argument_list></call>.<call><name>initialCompressedBufferLength</name><argument_list>(<argument><expr><call><name><name>metadata</name>.<name>chunkLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>protected</specifier> <name>void</name></type> <name>reBuffer</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>decompressChunk</name><argument_list>(<argument><expr><call><name><name>metadata</name>.<name>chunkFor</name></name><argument_list>(<argument><expr><name>current</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>decompressChunk</name><parameter_list>(<param><decl><type><name><name>CompressionMetadata</name>.<name>Chunk</name></name></type> <name>chunk</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>channel</name>.<name>position</name></name><argument_list>()</argument_list></call> != <name><name>chunk</name>.<name>offset</name></name></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>channel</name>.<name>position</name></name><argument_list>(<argument><expr><name><name>chunk</name>.<name>offset</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><call><name><name>compressed</name>.<name>capacity</name></name><argument_list>()</argument_list></call> &lt; <name><name>chunk</name>.<name>length</name></name></expr>)</condition><then>
+            <expr_stmt><expr><name>compressed</name> = <call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr>new <name><name>byte</name><index>[<expr><name><name>chunk</name>.<name>length</name></name></expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><call><name><name>compressed</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></else></if>
+        <expr_stmt><expr><call><name><name>compressed</name>.<name>limit</name></name><argument_list>(<argument><expr><name><name>chunk</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>channel</name>.<name>read</name></name><argument_list>(<argument><expr><name>compressed</name></expr></argument>)</argument_list></call> != <name><name>chunk</name>.<name>length</name></name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"(%s) failed to read %d bytes from offset %d."</expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>chunk</name>.<name>length</name></name></expr></argument>, <argument><expr><name><name>chunk</name>.<name>offset</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <comment type="line">// technically flip() is unnecessary since all the remaining work uses the raw array, but if that changes</comment>
+        <comment type="line">// in the future this will save a lot of hair-pulling</comment>
+        <expr_stmt><expr><call><name><name>compressed</name>.<name>flip</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>validBufferBytes</name> = <call><name><name>metadata</name>.<name>compressor</name></name><argument_list>()</argument_list></call>.<call><name>uncompress</name><argument_list>(<argument><expr><call><name><name>compressed</name>.<name>array</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name><name>chunk</name>.<name>length</name></name></expr></argument>, <argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>metadata</name>.<name>parameters</name>.<name>getCrcCheckChance</name></name><argument_list>()</argument_list></call> &gt; <call><name><name>FBUtilities</name>.<name>threadLocalRandom</name></name><argument_list>()</argument_list></call>.<call><name>nextDouble</name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>checksum</name>.<name>update</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>validBufferBytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><call><name>checksum</name><argument_list>(<argument><expr><name>chunk</name></expr></argument>)</argument_list></call> != (<name>int</name>) <call><name><name>checksum</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>CorruptedBlockException</name><argument_list>(<argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>chunk</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <comment type="line">// reset checksum object back to the original (blank) state</comment>
+            <expr_stmt><expr><call><name><name>checksum</name>.<name>reset</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <comment type="line">// buffer offset is always aligned</comment>
+        <expr_stmt><expr><name>bufferOffset</name> = <name>current</name> &amp; ~(<name><name>buffer</name>.<name>length</name></name> - 1)</expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>int</name></type> <name>checksum</name><parameter_list>(<param><decl><type><name><name>CompressionMetadata</name>.<name>Chunk</name></name></type> <name>chunk</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><call><name><name>channel</name>.<name>position</name></name><argument_list>()</argument_list></call> == <name><name>chunk</name>.<name>offset</name></name> + <name><name>chunk</name>.<name>length</name></name></expr>;</assert>
+        <expr_stmt><expr><call><name><name>checksumBytes</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>channel</name>.<name>read</name></name><argument_list>(<argument><expr><name>checksumBytes</name></expr></argument>)</argument_list></call> != <call><name><name>checksumBytes</name>.<name>capacity</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"(%s) failed to read checksum of the chunk at %d of length %d."</expr></argument>,
+                                                <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>,
+                                                <argument><expr><name><name>chunk</name>.<name>offset</name></name></expr></argument>,
+                                                <argument><expr><name><name>chunk</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr><call><name><name>checksumBytes</name>.<name>getInt</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>long</name></type> <name>length</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><name><name>metadata</name>.<name>dataLength</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%s - chunk length %d, data length %d."</expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>metadata</name>.<name>chunkLength</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>metadata</name>.<name>dataLength</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

@@ -1,0 +1,336 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\index\composites\CompositesSearcher.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>composites</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>AbstractSimplePerColumnSecondaryIndex</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>PerColumnSecondaryIndex</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>SecondaryIndex</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>SecondaryIndexManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>SecondaryIndexSearcher</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>CompositeType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>AbstractBounds</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>IndexExpression</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>IndexOperator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>CompositesSearcher</name> <super><extends>extends <name>SecondaryIndexSearcher</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CompositesSearcher</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>prefixSize</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CompositesSearcher</name><parameter_list>(<param><decl><type><name>SecondaryIndexManager</name></type> <name>indexManager</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>columns</name></decl></param>, <param><decl><type><name>int</name></type> <name>prefixSize</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>indexManager</name></expr></argument>, <argument><expr><name>columns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>prefixSize</name></name> = <name>prefixSize</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <name>IndexExpression</name></type> <name>highestSelectivityPredicate</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>IndexExpression</name></type> <name>best</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>bestMeanCount</name> <init>= <expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>IndexExpression</name></type> <name>expression</name> <range>: <expr><name>clause</name></expr></range></decl></init>)
+        <block>{
+            <comment type="line">//skip columns belonging to a different index type</comment>
+            <if>if<condition>(<expr>!<call><name><name>columns</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>expression</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name> <init>= <expr><call><name><name>indexManager</name>.<name>getIndexForColumn</name></name><argument_list>(<argument><expr><name><name>expression</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>index</name> == null || (<name><name>expression</name>.<name>op</name></name> != <name><name>IndexOperator</name>.<name>EQ</name></name>)</expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+            <decl_stmt><decl><type><name>int</name></type> <name>columns</name> <init>= <expr><call><name><name>index</name>.<name>getIndexCfs</name></name><argument_list>()</argument_list></call>.<call><name>getMeanColumns</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>columns</name> &lt; <name>bestMeanCount</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>best</name> = <name>expression</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name>bestMeanCount</name> = <name>columns</name></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+        <return>return <expr><name>best</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isIndexing</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>highestSelectivityPredicate</name><argument_list>(<argument><expr><name>clause</name></expr></argument>)</argument_list></call> != null</expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>search</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>, <param><decl><type><name><name>AbstractBounds</name><argument_list>&lt;<argument><name>RowPosition</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxResults</name></decl></param>, <param><decl><type><name>IDiskAtomFilter</name></type> <name>dataFilter</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>countCQL3Rows</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>clause</name> != null &amp;&amp; !<call><name><name>clause</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+        <decl_stmt><decl><type><name>ExtendedFilter</name></type> <name>filter</name> <init>= <expr><call><name><name>ExtendedFilter</name>.<name>create</name></name><argument_list>(<argument><expr><name>baseCfs</name></expr></argument>, <argument><expr><name>dataFilter</name></expr></argument>, <argument><expr><name>clause</name></expr></argument>, <argument><expr><name>maxResults</name></expr></argument>, <argument><expr><name>countCQL3Rows</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>baseCfs</name>.<name>filter</name></name><argument_list>(<argument><expr><call><name>getIndexedIterator</name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>filter</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>filter</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>ColumnFamilyStore</name>.<name>AbstractScanIterator</name></name></type> <name>getIndexedIterator</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name><name>AbstractBounds</name><argument_list>&lt;<argument><name>RowPosition</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>ExtendedFilter</name></type> <name>filter</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// Start with the most-restrictive indexed clause, then apply remaining clauses</comment>
+        <comment type="line">// to each row matching that clause.</comment>
+        <comment type="line">// TODO: allow merge join instead of just one index + loop</comment>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>IndexExpression</name></type> <name>primary</name> <init>= <expr><call><name>highestSelectivityPredicate</name><argument_list>(<argument><expr><call><name><name>filter</name>.<name>getClause</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>SecondaryIndex</name></type> <name>index</name> <init>= <expr><call><name><name>indexManager</name>.<name>getIndexForColumn</name></name><argument_list>(<argument><expr><name><name>primary</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>index</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>DecoratedKey</name></type> <name>indexKey</name> <init>= <expr><call><name><name>index</name>.<name>getIndexKeyFor</name></name><argument_list>(<argument><expr><name><name>primary</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Most-selective indexed predicate is {}"</expr></argument>,
+                         <argument><expr>((<name>AbstractSimplePerColumnSecondaryIndex</name>) <name>index</name>).<call><name>expressionString</name><argument_list>(<argument><expr><name>primary</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <comment type="block">/*
+         * XXX: If the range requested is a token range, we'll have to start at the beginning (and stop at the end) of
+         * the indexed row unfortunately (which will be inefficient), because we have not way to intuit the small
+         * possible key having a given token. A fix would be to actually store the token along the key in the
+         * indexed row.
+         */</comment>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>startKey</name> <init>= <expr><name><name>range</name>.<name>left</name></name> instanceof <name>DecoratedKey</name> ? ((<name>DecoratedKey</name>)<name><name>range</name>.<name>left</name></name>).<name>key</name> : <name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>endKey</name> <init>= <expr><name><name>range</name>.<name>right</name></name> instanceof <name>DecoratedKey</name> ? ((<name>DecoratedKey</name>)<name><name>range</name>.<name>right</name></name>).<name>key</name> : <name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>final</specifier> <name>CompositeType</name></type> <name>baseComparator</name> <init>= <expr>(<name>CompositeType</name>)<call><name><name>baseCfs</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>CompositeType</name></type> <name>indexComparator</name> <init>= <expr>(<name>CompositeType</name>)<call><name><name>index</name>.<name>getIndexCfs</name></name><argument_list>()</argument_list></call>.<call><name>getComparator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>CompositeType</name>.<name>Builder</name></name></type> <name>builder</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>startKey</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>builder</name> = <call><name><name>indexComparator</name>.<name>builder</name></name><argument_list>()</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>startKey</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// For names filter, we have no choice but to query from the beginning of the key. This can be highly inefficient however.</comment>
+            <if>if <condition>(<expr><call><name><name>filter</name>.<name>originalFilter</name></name><argument_list>()</argument_list></call> instanceof <name>SliceQueryFilter</name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>ByteBuffer</name><index>[]</index></type> <name>components</name> <init>= <expr><call><name><name>baseComparator</name>.<name>split</name></name><argument_list>(<argument><expr>((<name>SliceQueryFilter</name>)<call><name><name>filter</name>.<name>originalFilter</name></name><argument_list>()</argument_list></call>).<call><name>start</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>prefixSize</name></expr></argument>, <argument><expr><name><name>components</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+                    <expr_stmt><expr><call><name><name>builder</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>components</name><index>[<expr><name>i</name></expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></then></if>
+        }</block></then></if>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>ByteBuffer</name></type> <name>startPrefix</name> <init>= <expr><call><name><name>startKey</name>.<name>remaining</name></name><argument_list>()</argument_list></call> == 0 ? <name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name> : <call><name><name>builder</name>.<name>build</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>endKey</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>builder</name> = <call><name><name>indexComparator</name>.<name>builder</name></name><argument_list>()</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>endKey</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// For names filter, we have no choice but to query until the end of the key. This can be highly inefficient however.</comment>
+            <if>if <condition>(<expr><call><name><name>filter</name>.<name>originalFilter</name></name><argument_list>()</argument_list></call> instanceof <name>SliceQueryFilter</name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>ByteBuffer</name><index>[]</index></type> <name>components</name> <init>= <expr><call><name><name>baseComparator</name>.<name>split</name></name><argument_list>(<argument><expr>((<name>SliceQueryFilter</name>)<call><name><name>filter</name>.<name>originalFilter</name></name><argument_list>()</argument_list></call>).<call><name>finish</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>prefixSize</name></expr></argument>, <argument><expr><name><name>components</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+                    <expr_stmt><expr><call><name><name>builder</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>components</name><index>[<expr><name>i</name></expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></then></if>
+        }</block></then></if>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>ByteBuffer</name></type> <name>endPrefix</name> <init>= <expr><call><name><name>endKey</name>.<name>remaining</name></name><argument_list>()</argument_list></call> == 0 ? <name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name> : <call><name><name>builder</name>.<name>buildAsEndOfRange</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// We will need to filter clustering keys based on the user filter. If</comment>
+        <comment type="line">// it is a names filter, we are really interested on the clustering</comment>
+        <comment type="line">// part, not the actual column name (NOTE: this is a hack that assumes CQL3).</comment>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>SliceQueryFilter</name></type> <name>originalFilter</name></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>filter</name>.<name>originalFilter</name></name><argument_list>()</argument_list></call> instanceof <name>SliceQueryFilter</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>originalFilter</name> = (<name>SliceQueryFilter</name>)<call><name><name>filter</name>.<name>originalFilter</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>first</name> <init>= <expr>((<name>NamesQueryFilter</name>)<call><name><name>filter</name>.<name>originalFilter</name></name><argument_list>()</argument_list></call>).<call><name><name>columns</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ByteBuffer</name><index>[]</index></type> <name>components</name> <init>= <expr><call><name><name>baseComparator</name>.<name>split</name></name><argument_list>(<argument><expr><name>first</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>builder</name> = <call><name><name>baseComparator</name>.<name>builder</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// All all except the last component, since it's the column name</comment>
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>components</name>.<name>length</name></name> - 1</expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+                <expr_stmt><expr><call><name><name>builder</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>components</name><index>[<expr><name>i</name></expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><name>originalFilter</name> = new <call><name>SliceQueryFilter</name><argument_list>(<argument><expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>buildAsEndOfRange</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>false</expr></argument>, <argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <return>return <expr>new <class><super><name><name>ColumnFamilyStore</name>.<name>AbstractScanIterator</name></name></super><argument_list>()</argument_list>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>lastSeenPrefix</name> <init>= <expr><name>startPrefix</name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <name><name>Deque</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>indexColumns</name></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>QueryPath</name></type> <name>path</name> <init>= <expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name><name>baseCfs</name>.<name>columnFamily</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>columnsRead</name> <init>= <expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>meanColumns</name> <init>= <expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getIndexCfs</name></name><argument_list>()</argument_list></call>.<call><name>getMeanColumns</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses</comment>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>rowsPerQuery</name> <init>= <expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><call><name><name>filter</name>.<name>maxRows</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>filter</name>.<name>maxColumns</name></name><argument_list>()</argument_list></call> / <name>meanColumns</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>2</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <function><type><specifier>public</specifier> <name>boolean</name></type> <name>needsFiltering</name><parameter_list>()</parameter_list>
+            <block>{
+                <return>return <expr>false</expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>private</specifier> <name>Row</name></type> <name>makeReturn</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>)</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><name>data</name> == null</expr>)</condition><then>
+                <block>{
+                    <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return>
+                }</block></then>
+                <else>else
+                <block>{
+                    <assert>assert <expr><name>key</name> != null</expr>;</assert>
+                    <return>return <expr>new <call><name>Row</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>data</name></expr></argument>)</argument_list></call></expr>;</return>
+                }</block></else></if>
+            }</block></function>
+
+            <function><type><specifier>protected</specifier> <name>Row</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+            <block>{
+                <comment type="block">/*
+                 * Our internal index code is wired toward internal rows. So we need to acumulate all results for a given
+                 * row before returning from this method. Which unfortunately means that this method has to do what
+                 * CFS.filter does for KeysIndex.
+                 */</comment>
+                <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>currentKey</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>data</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>columnsCount</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>limit</name> <init>= <expr>((<name>SliceQueryFilter</name>)<call><name><name>filter</name>.<name>initialFilter</name></name><argument_list>()</argument_list></call>).<name>count</name></expr></init></decl>;</decl_stmt>
+
+                <while>while <condition>(<expr>true</expr>)</condition>
+                <block>{
+                    <comment type="line">// Did we got more columns that needed to respect the user limit?</comment>
+                    <comment type="line">// (but we still need to return was fetch already)</comment>
+                    <if>if <condition>(<expr><name>columnsCount</name> &gt; <name>limit</name></expr>)</condition><then>
+                        <return>return <expr><call><name>makeReturn</name><argument_list>(<argument><expr><name>currentKey</name></expr></argument>, <argument><expr><name>data</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+
+                    <if>if <condition>(<expr><name>indexColumns</name> == null || <call><name><name>indexColumns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <if>if <condition>(<expr><name>columnsRead</name> &lt; <name>rowsPerQuery</name></expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Read only {} (&lt; {}) last page through, must be done"</expr></argument>, <argument><expr><name>columnsRead</name></expr></argument>, <argument><expr><name>rowsPerQuery</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <return>return <expr><call><name>makeReturn</name><argument_list>(<argument><expr><name>currentKey</name></expr></argument>, <argument><expr><name>data</name></expr></argument>)</argument_list></call></expr>;</return>
+                        }</block></then></if>
+
+                        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Scanning index {} starting with {}"</expr></argument>,
+                                         <argument><expr>((<name>AbstractSimplePerColumnSecondaryIndex</name>)<name>index</name>).<call><name>expressionString</name><argument_list>(<argument><expr><name>primary</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>indexComparator</name>.<name>getString</name></name><argument_list>(<argument><expr><name>startPrefix</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                        <decl_stmt><decl><type><name>QueryFilter</name></type> <name>indexFilter</name> <init>= <expr><call><name><name>QueryFilter</name>.<name>getSliceFilter</name></name><argument_list>(<argument><expr><name>indexKey</name></expr></argument>,
+                                                                             <argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getIndexCfs</name></name><argument_list>()</argument_list></call>.<call><name>getColumnFamilyName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+                                                                             <argument><expr><name>lastSeenPrefix</name></expr></argument>,
+                                                                             <argument><expr><name>endPrefix</name></expr></argument>,
+                                                                             <argument><expr>false</expr></argument>,
+                                                                             <argument><expr><name>rowsPerQuery</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>indexRow</name> <init>= <expr><call><name><name>index</name>.<name>getIndexCfs</name></name><argument_list>()</argument_list></call>.<call><name>getColumnFamily</name><argument_list>(<argument><expr><name>indexFilter</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <if>if <condition>(<expr><name>indexRow</name> == null</expr>)</condition><then>
+                            <return>return <expr><call><name>makeReturn</name><argument_list>(<argument><expr><name>currentKey</name></expr></argument>, <argument><expr><name>data</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+
+                        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>sortedColumns</name> <init>= <expr><call><name><name>indexRow</name>.<name>getSortedColumns</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <expr_stmt><expr><name>columnsRead</name> = <call><name><name>sortedColumns</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>indexColumns</name> = new <call><name>ArrayDeque</name><argument_list>(<argument><expr><name>sortedColumns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <decl_stmt><decl><type><name>IColumn</name></type> <name>firstColumn</name> <init>= <expr><call><name><name>sortedColumns</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                        <comment type="line">// Paging is racy, so it is possible the first column of a page is not the last seen one.</comment>
+                        <if>if <condition>(<expr><name>lastSeenPrefix</name> != <name>startPrefix</name> &amp;&amp; <call><name><name>lastSeenPrefix</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>firstColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <block>{
+                            <comment type="line">// skip the row we already saw w/ the last page of results</comment>
+                            <expr_stmt><expr><call><name><name>indexColumns</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Skipping {}"</expr></argument>, <argument><expr><call><name><name>indexComparator</name>.<name>getString</name></name><argument_list>(<argument><expr><call><name><name>firstColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></then>
+                        <else>else <if>if <condition>(<expr><name>range</name> instanceof <name>Range</name> &amp;&amp; !<call><name><name>indexColumns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>firstColumn</name>.<name>name</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>startPrefix</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <block>{
+                            <comment type="line">// skip key excluded by range</comment>
+                            <expr_stmt><expr><call><name><name>indexColumns</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Skipping first key as range excludes it"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></then></if></else></if>
+                    }</block></then></if>
+
+                    <while>while <condition>(<expr>!<call><name><name>indexColumns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> &amp;&amp; <name>columnsCount</name> &lt;= <name>limit</name></expr>)</condition>
+                    <block>{
+                        <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>indexColumns</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <expr_stmt><expr><name>lastSeenPrefix</name> = <call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <if>if <condition>(<expr><call><name><name>column</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"skipping {}"</expr></argument>, <argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <continue>continue;</continue>
+                        }</block></then></if>
+
+                        <decl_stmt><decl><type><name>ByteBuffer</name><index>[]</index></type> <name>components</name> <init>= <expr><call><name><name>indexComparator</name>.<name>split</name></name><argument_list>(<argument><expr><name>lastSeenPrefix</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>dk</name> <init>= <expr><call><name><name>baseCfs</name>.<name>partitioner</name>.<name>decorateKey</name></name><argument_list>(<argument><expr><name><name>components</name><index>[<expr>0</expr>]</index></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                        <comment type="line">// Are we done for this row?</comment>
+                        <if>if <condition>(<expr><name>currentKey</name> == null</expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><name>currentKey</name> = <name>dk</name></expr>;</expr_stmt>
+                        }</block></then>
+                        <else>else <if>if <condition>(<expr>!<call><name><name>currentKey</name>.<name>equals</name></name><argument_list>(<argument><expr><name>dk</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <block>{
+                            <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>previousKey</name> <init>= <expr><name>currentKey</name></expr></init></decl>;</decl_stmt>
+                            <expr_stmt><expr><name>currentKey</name> = <name>dk</name></expr>;</expr_stmt>
+
+                            <comment type="line">// We're done with the previous row, return it if it had data, continue otherwise</comment>
+                            <expr_stmt><expr><call><name><name>indexColumns</name>.<name>addFirst</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <if>if <condition>(<expr><name>data</name> == null</expr>)</condition><then>
+                                <continue>continue;</continue></then>
+                            <else>else
+                                <return>return <expr><call><name>makeReturn</name><argument_list>(<argument><expr><name>previousKey</name></expr></argument>, <argument><expr><name>data</name></expr></argument>)</argument_list></call></expr>;</return></else></if>
+                        }</block></then></if></else></if>
+
+                        <if>if <condition>(<expr>!<call><name><name>range</name>.<name>right</name>.<name>isMinimum</name></name><argument_list>(<argument><expr><name><name>baseCfs</name>.<name>partitioner</name></name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>range</name>.<name>right</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name>dk</name></expr></argument>)</argument_list></call> &lt; 0</expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Reached end of assigned scan range"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return>
+                        }</block></then></if>
+                        <if>if <condition>(<expr>!<call><name><name>range</name>.<name>contains</name></name><argument_list>(<argument><expr><name>dk</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Skipping entry {} outside of assigned scan range"</expr></argument>, <argument><expr><name><name>dk</name>.<name>token</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <continue>continue;</continue>
+                        }</block></then></if>
+
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Adding index hit to current row for {}"</expr></argument>, <argument><expr><call><name><name>indexComparator</name>.<name>getString</name></name><argument_list>(<argument><expr><name>lastSeenPrefix</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <comment type="line">// For sparse composites, we're good querying the whole logical row</comment>
+                        <comment type="line">// Obviously if this index is used for other usage, that might be inefficient</comment>
+                        <decl_stmt><decl><type><name><name>CompositeType</name>.<name>Builder</name></name></type> <name>builder</name> <init>= <expr><call><name><name>baseComparator</name>.<name>builder</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>prefixSize</name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+                            <expr_stmt><expr><call><name><name>builder</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>components</name><index>[<expr><name>i</name> + 1</expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+                        <comment type="line">// Does this "row" match the user original filter</comment>
+                        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>start</name> <init>= <expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <if>if <condition>(<expr>!<call><name><name>originalFilter</name>.<name>includes</name></name><argument_list>(<argument><expr><name>baseComparator</name></expr></argument>, <argument><expr><name>start</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                            <continue>continue;</continue></then></if>
+
+                        <decl_stmt><decl><type><name>SliceQueryFilter</name></type> <name>dataFilter</name> <init>= <expr>new <call><name>SliceQueryFilter</name><argument_list>(<argument><expr><name>start</name></expr></argument>, <argument><expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>buildAsEndOfRange</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>false</expr></argument>, <argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>, <argument><expr><name>prefixSize</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>newData</name> <init>= <expr><call><name><name>baseCfs</name>.<name>getColumnFamily</name></name><argument_list>(<argument><expr>new <call><name>QueryFilter</name><argument_list>(<argument><expr><name>dk</name></expr></argument>, <argument><expr><name>path</name></expr></argument>, <argument><expr><name>dataFilter</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <if>if <condition>(<expr><name>newData</name> != null</expr>)</condition><then>
+                        <block>{
+                            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>baseColumnName</name> <init>= <expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name><name>primary</name>.<name>column_name</name></name></expr></argument>)</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>indexedValue</name> <init>= <expr><name><name>indexKey</name>.<name>key</name></name></expr></init></decl>;</decl_stmt>
+
+                            <if>if <condition>(<expr><call><name>isIndexValueStale</name><argument_list>(<argument><expr><name>newData</name></expr></argument>, <argument><expr><name>baseColumnName</name></expr></argument>, <argument><expr><name>indexedValue</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                            <block>{
+                                <comment type="line">// delete the index entry w/ its own timestamp</comment>
+                                <decl_stmt><decl><type><name>IColumn</name></type> <name>dummyColumn</name> <init>= <expr>new <call><name>Column</name><argument_list>(<argument><expr><name>baseColumnName</name></expr></argument>, <argument><expr><name>indexedValue</name></expr></argument>, <argument><expr><call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                                <expr_stmt><expr>((<name>PerColumnSecondaryIndex</name>) <name>index</name>).<call><name>delete</name><argument_list>(<argument><expr><name><name>dk</name>.<name>key</name></name></expr></argument>, <argument><expr><name>dummyColumn</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                                <continue>continue;</continue>
+                            }</block></then></if>
+
+                            <if>if <condition>(<expr>!<call><name><name>filter</name>.<name>isSatisfiedBy</name></name><argument_list>(<argument><expr><name>newData</name></expr></argument>, <argument><expr><name>builder</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                                <continue>continue;</continue></then></if>
+
+                            <if>if <condition>(<expr><name>data</name> == null</expr>)</condition><then>
+                                <expr_stmt><expr><name>data</name> = <call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name><name>baseCfs</name>.<name>metadata</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                            <expr_stmt><expr><call><name><name>data</name>.<name>resolve</name></name><argument_list>(<argument><expr><name>newData</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><name>columnsCount</name> += <call><name><name>dataFilter</name>.<name>lastCounted</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        }</block></then></if>
+                    }</block></while>
+                 }</block></while>
+             }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws> <block>{}</block></function>
+        }</block></class></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

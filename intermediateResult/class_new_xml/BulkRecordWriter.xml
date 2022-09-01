@@ -1,0 +1,359 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\hadoop\BulkRecordWriter.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>hadoop</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeoutException</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>auth</name>.<name>IAuthenticator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Config</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>BytesType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableLoader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableSimpleUnsortedWriter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>OutputHandler</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>conf</name>.<name>Configuration</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name>.<name>RecordWriter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name>.<name>TaskAttemptContext</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>protocol</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TFramedTransport</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TSocket</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TTransport</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TTransportException</name></name>;</import>
+
+<class><specifier>final</specifier> class <name>BulkRecordWriter</name> <super><extends>extends <name><name>RecordWriter</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name><name>List</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></extends>
+<implements>implements <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name><name>RecordWriter</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name><name>List</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>OUTPUT_LOCATION</name> <init>= <expr>"mapreduce.output.bulkoutputformat.localdir"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>BUFFER_SIZE_IN_MB</name> <init>= <expr>"mapreduce.output.bulkoutputformat.buffersize"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>STREAM_THROTTLE_MBITS</name> <init>= <expr>"mapreduce.output.bulkoutputformat.streamthrottlembits"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>MAX_FAILED_HOSTS</name> <init>= <expr>"mapreduce.output.bulkoutputformat.maxfailedhosts"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Configuration</name></type> <name>conf</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>BulkRecordWriter</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>SSTableSimpleUnsortedWriter</name></type> <name>writer</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>SSTableLoader</name></type> <name>loader</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>File</name></type> <name>outputdir</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>Progressable</name></type> <name>progress</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>maxFailures</name></decl>;</decl_stmt>
+
+    <enum><specifier>private</specifier> enum <name>CFType</name>
+    <block>{
+        <decl><name>NORMAL</name></decl>,
+        <decl><name>SUPER</name></decl>,
+    }</block></enum>
+
+    <enum><specifier>private</specifier> enum <name>ColType</name>
+    <block>{
+        <decl><name>NORMAL</name></decl>,
+        <decl><name>COUNTER</name></decl>
+    }</block></enum>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>CFType</name></type> <name>cfType</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ColType</name></type> <name>colType</name></decl>;</decl_stmt>
+
+    <constructor><name>BulkRecordWriter</name><parameter_list>(<param><decl><type><name>TaskAttemptContext</name></type> <name>context</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><call><name><name>context</name>.<name>getConfiguration</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>progress</name></name> = new <call><name>Progressable</name><argument_list>(<argument><expr><name>context</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+
+    <constructor><name>BulkRecordWriter</name><parameter_list>(<param><decl><type><name>Configuration</name></type> <name>conf</name></decl></param>, <param><decl><type><name>Progressable</name></type> <name>progress</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>progress</name></name> = <name>progress</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><name>BulkRecordWriter</name><parameter_list>(<param><decl><type><name>Configuration</name></type> <name>conf</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>Config</name>.<name>setLoadYaml</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>Config</name>.<name>setOutboundBindAny</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>conf</name></name> = <name>conf</name></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>setStreamThroughputOutboundMegabitsPerSec</name></name><argument_list>(<argument><expr><call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><call><name><name>conf</name>.<name>get</name></name><argument_list>(<argument><expr><name>STREAM_THROTTLE_MBITS</name></expr></argument>, <argument><expr>"0"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>maxFailures</name> = <call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><call><name><name>conf</name>.<name>get</name></name><argument_list>(<argument><expr><name>MAX_FAILED_HOSTS</name></expr></argument>, <argument><expr>"0"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <name>String</name></type> <name>getOutputLocation</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>dir</name> <init>= <expr><call><name><name>conf</name>.<name>get</name></name><argument_list>(<argument><expr><name>OUTPUT_LOCATION</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"java.io.tmpdir"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>dir</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Output directory not defined, if hadoop is not setting java.io.tmpdir then define " + <name>OUTPUT_LOCATION</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr><name>dir</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>setTypes</name><parameter_list>(<param><decl><type><name>Mutation</name></type> <name>mutation</name></decl></param>)</parameter_list>
+    <block>{
+       <if>if <condition>(<expr><name>cfType</name> == null</expr>)</condition><then>
+       <block>{
+           <if>if <condition>(<expr><call><name><name>mutation</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<call><name>isSetSuper_column</name><argument_list>()</argument_list></call> || <call><name><name>mutation</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<call><name>isSetCounter_super_column</name><argument_list>()</argument_list></call></expr>)</condition><then>
+               <expr_stmt><expr><name>cfType</name> = <name><name>CFType</name>.<name>SUPER</name></name></expr>;</expr_stmt></then>
+           <else>else
+               <expr_stmt><expr><name>cfType</name> = <name><name>CFType</name>.<name>NORMAL</name></name></expr>;</expr_stmt></else></if>
+           <if>if <condition>(<expr><call><name><name>mutation</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<call><name>isSetCounter_column</name><argument_list>()</argument_list></call> || <call><name><name>mutation</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<call><name>isSetCounter_super_column</name><argument_list>()</argument_list></call></expr>)</condition><then>
+               <expr_stmt><expr><name>colType</name> = <name><name>ColType</name>.<name>COUNTER</name></name></expr>;</expr_stmt></then>
+           <else>else
+               <expr_stmt><expr><name>colType</name> = <name><name>ColType</name>.<name>NORMAL</name></name></expr>;</expr_stmt></else></if>
+       }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>prepareWriter</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>outputdir</name> == null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>keyspace</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getOutputKeyspace</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">//dir must be named by ks/cf for the loader</comment>
+            <expr_stmt><expr><name>outputdir</name> = new <call><name>File</name><argument_list>(<argument><expr><call><name>getOutputLocation</name><argument_list>()</argument_list></call> + <name><name>File</name>.<name>separator</name></name> + <name>keyspace</name> + <name><name>File</name>.<name>separator</name></name> + <call><name><name>ConfigHelper</name>.<name>getOutputColumnFamily</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>outputdir</name>.<name>mkdirs</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        
+        <if>if <condition>(<expr><name>writer</name> == null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>subcomparator</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ExternalClient</name></type> <name>externalClient</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>username</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getOutputKeyspaceUserName</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>password</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getOutputKeyspacePassword</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>cfType</name> == <name><name>CFType</name>.<name>SUPER</name></name></expr>)</condition><then>
+                <expr_stmt><expr><name>subcomparator</name> = <name><name>BytesType</name>.<name>instance</name></name></expr>;</expr_stmt></then></if>
+
+            <expr_stmt><expr><name><name>this</name>.<name>writer</name></name> = new <call><name>SSTableSimpleUnsortedWriter</name><argument_list>(
+                    <argument><expr><name>outputdir</name></expr></argument>,
+                    <argument><expr><call><name><name>ConfigHelper</name>.<name>getOutputPartitioner</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>,
+                    <argument><expr><call><name><name>ConfigHelper</name>.<name>getOutputKeyspace</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>,
+                    <argument><expr><call><name><name>ConfigHelper</name>.<name>getOutputColumnFamily</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>,
+                    <argument><expr><name><name>BytesType</name>.<name>instance</name></name></expr></argument>,
+                    <argument><expr><name>subcomparator</name></expr></argument>,
+                    <argument><expr><call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><call><name><name>conf</name>.<name>get</name></name><argument_list>(<argument><expr><name>BUFFER_SIZE_IN_MB</name></expr></argument>, <argument><expr>"64"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+                    <argument><expr><call><name><name>ConfigHelper</name>.<name>getOutputCompressionParamaters</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><name>externalClient</name> = new <call><name>ExternalClient</name><argument_list>(<argument><expr><call><name><name>ConfigHelper</name>.<name>getOutputInitialAddress</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>,
+                                                <argument><expr><call><name><name>ConfigHelper</name>.<name>getOutputRpcPort</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>,
+                                                <argument><expr><name>username</name></expr></argument>,
+                                                <argument><expr><name>password</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><name><name>this</name>.<name>loader</name></name> = new <call><name>SSTableLoader</name><argument_list>(<argument><expr><name>outputdir</name></expr></argument>, <argument><expr><name>externalClient</name></expr></argument>, <argument><expr>new <call><name>NullOutputHandler</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>write</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>keybuff</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name></type> <name>value</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>setTypes</name><argument_list>(<argument><expr><call><name><name>value</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>prepareWriter</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>writer</name>.<name>newRow</name></name><argument_list>(<argument><expr><name>keybuff</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>Mutation</name></type> <name>mut</name> <range>: <expr><name>value</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name>cfType</name> == <name><name>CFType</name>.<name>SUPER</name></name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>writer</name>.<name>newSuperColumn</name></name><argument_list>(<argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<call><name>getSuper_column</name><argument_list>()</argument_list></call>.<name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>colType</name> == <name><name>ColType</name>.<name>COUNTER</name></name></expr>)</condition><then>
+                    <for>for (<init><decl><type><name>CounterColumn</name></type> <name>column</name> <range>: <expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<call><name>getCounter_super_column</name><argument_list>()</argument_list></call>.<name>columns</name></expr></range></decl></init>)
+                        <expr_stmt><expr><call><name><name>writer</name>.<name>addCounterColumn</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for></then>
+                <else>else
+                <block>{
+                    <for>for (<init><decl><type><name>Column</name></type> <name>column</name> <range>: <expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<call><name>getSuper_column</name><argument_list>()</argument_list></call>.<name>columns</name></expr></range></decl></init>)
+                    <block>{
+                        <if>if<condition>(<expr><name><name>column</name>.<name>ttl</name></name> == 0</expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>writer</name>.<name>addColumn</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>value</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>timestamp</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                        <else>else
+                            <expr_stmt><expr><call><name><name>writer</name>.<name>addExpiringColumn</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>value</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>timestamp</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>ttl</name></name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> + ((<name>long</name>)<name><name>column</name>.<name>ttl</name></name> * 1000)</expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+                    }</block></for>
+                }</block></else></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <if>if <condition>(<expr><name>colType</name> == <name><name>ColType</name>.<name>COUNTER</name></name></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>writer</name>.<name>addCounterColumn</name></name><argument_list>(<argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>counter_column</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>counter_column</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                <else>else
+                <block>{
+                    <if>if<condition>(<expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>column</name>.<name>ttl</name></name> == 0</expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>writer</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>column</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>column</name>.<name>value</name></name></expr></argument>, <argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>column</name>.<name>timestamp</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                    <else>else
+                        <expr_stmt><expr><call><name><name>writer</name>.<name>addExpiringColumn</name></name><argument_list>(<argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>column</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>column</name>.<name>value</name></name></expr></argument>, <argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>column</name>.<name>timestamp</name></name></expr></argument>, <argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>column</name>.<name>ttl</name></name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> + (<call>(<name>long</name>)<argument_list>(<argument><expr><call><name><name>mut</name>.<name>getColumn_or_supercolumn</name></name><argument_list>()</argument_list></call>.<name><name>column</name>.<name>ttl</name></name></expr></argument>)</argument_list></call> * 1000)</expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+                }</block></else></if>
+            }</block></else></if>
+            <expr_stmt><expr><call><name><name>progress</name>.<name>progress</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>(<param><decl><type><name>TaskAttemptContext</name></type> <name>context</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>close</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** Fills the deprecated RecordWriter interface for streaming. */</comment>
+    <function><type><annotation>@<name>Deprecated</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>(<param><decl><type><name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name>Reporter</name></name></type> <name>reporter</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>close</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>writer</name> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>writer</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name><name>SSTableLoader</name>.<name>LoaderFuture</name></name></type> <name>future</name> <init>= <expr><call><name><name>loader</name>.<name>stream</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <while>while <condition>(<expr>true</expr>)</condition>
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name><name>future</name>.<name>get</name></name><argument_list>(<argument><expr>1000</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>TimeoutException</name></type> <name>te</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>progress</name>.<name>progress</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></catch>
+                <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></while>
+            <if>if <condition>(<expr><call><name><name>future</name>.<name>hadFailures</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>future</name>.<name>getFailedHosts</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> &gt; <name>maxFailures</name></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Too many hosts failed: " + <call><name><name>future</name>.<name>getFailedHosts</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then>
+                <else>else
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Some hosts failed: " + <call><name><name>future</name>.<name>getFailedHosts</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+            }</block></then></if>
+        }</block></then></if>
+    }</block></function>
+
+    <class><specifier>static</specifier> class <name>ExternalClient</name> <super><extends>extends <name><name>SSTableLoader</name>.<name>Client</name></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>knownCfs</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>hostlist</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>rpcPort</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>username</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>password</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>ExternalClient</name><parameter_list>(<param><decl><type><name>String</name></type> <name>hostlist</name></decl></param>, <param><decl><type><name>int</name></type> <name>port</name></decl></param>, <param><decl><type><name>String</name></type> <name>username</name></decl></param>, <param><decl><type><name>String</name></type> <name>password</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>hostlist</name></name> = <name>hostlist</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>rpcPort</name></name> = <name>port</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>username</name></name> = <name>username</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>password</name></name> = <name>password</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>init</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>hosts</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>nodes</name> <init>= <expr><call><name><name>hostlist</name>.<name>split</name></name><argument_list>(<argument><expr>","</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>String</name></type> <name>node</name> <range>: <expr><name>nodes</name></expr></range></decl></init>)
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name><name>hosts</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>node</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>UnknownHostException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></for>
+            <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>hostiter</name> <init>= <expr><call><name><name>hosts</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <while>while <condition>(<expr><call><name><name>hostiter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <try>try
+                <block>{
+                    <decl_stmt><decl><type><name>InetAddress</name></type> <name>host</name> <init>= <expr><call><name><name>hostiter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name><name>Cassandra</name>.<name>Client</name></name></type> <name>client</name> <init>= <expr><call><name>createThriftClient</name><argument_list>(<argument><expr><call><name><name>host</name>.<name>getHostAddress</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>rpcPort</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <comment type="line">// log in</comment>
+                    <expr_stmt><expr><call><name><name>client</name>.<name>set_keyspace</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><name>username</name> != null</expr>)</condition><then>
+                    <block>{
+                        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>creds</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <expr_stmt><expr><call><name><name>creds</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>USERNAME_KEY</name></name></expr></argument>, <argument><expr><name>username</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>creds</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>PASSWORD_KEY</name></name></expr></argument>, <argument><expr><name>password</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <decl_stmt><decl><type><name>AuthenticationRequest</name></type> <name>authRequest</name> <init>= <expr>new <call><name>AuthenticationRequest</name><argument_list>(<argument><expr><name>creds</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <expr_stmt><expr><call><name><name>client</name>.<name>login</name></name><argument_list>(<argument><expr><name>authRequest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+
+                    <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>TokenRange</name></argument>&gt;</argument_list></name></type> <name>tokenRanges</name> <init>= <expr><call><name><name>client</name>.<name>describe_ring</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>KsDef</name></argument>&gt;</argument_list></name></type> <name>ksDefs</name> <init>= <expr><call><name><name>client</name>.<name>describe_keyspaces</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <expr_stmt><expr><call><name>setPartitioner</name><argument_list>(<argument><expr><call><name><name>client</name>.<name>describe_partitioner</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <decl_stmt><decl><type><name><name>Token</name>.<name>TokenFactory</name></name></type> <name>tkFactory</name> <init>= <expr><call><name>getPartitioner</name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <for>for (<init><decl><type><name>TokenRange</name></type> <name>tr</name> <range>: <expr><name>tokenRanges</name></expr></range></decl></init>)
+                    <block>{
+                        <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <init>= <expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>tkFactory</name>.<name>fromString</name></name><argument_list>(<argument><expr><name><name>tr</name>.<name>start_token</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>tkFactory</name>.<name>fromString</name></name><argument_list>(<argument><expr><name><name>tr</name>.<name>end_token</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <for>for (<init><decl><type><name>String</name></type> <name>ep</name> <range>: <expr><name><name>tr</name>.<name>endpoints</name></name></expr></range></decl></init>)
+                        <block>{
+                            <expr_stmt><expr><call><name>addRangeForEndpoint</name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></for>
+                    }</block></for>
+
+                    <for>for (<init><decl><type><name>KsDef</name></type> <name>ksDef</name> <range>: <expr><name>ksDefs</name></expr></range></decl></init>)
+                    <block>{
+                        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>cfs</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <for>for (<init><decl><type><name>CfDef</name></type> <name>cfDef</name> <range>: <expr><name><name>ksDef</name>.<name>cf_defs</name></name></expr></range></decl></init>)
+                            <expr_stmt><expr><call><name><name>cfs</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>cfDef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                        <expr_stmt><expr><call><name><name>knownCfs</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>ksDef</name>.<name>name</name></name></expr></argument>, <argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></for>
+                    <break>break;</break>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <if>if <condition>(<expr>!<call><name><name>hostiter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Could not retrieve endpoint ranges: "</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                }</block></catch></try>
+            }</block></while>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>validateColumnFamily</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>cfs</name> <init>= <expr><call><name><name>knownCfs</name>.<name>get</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><name>cfs</name> != null &amp;&amp; <call><name><name>cfs</name>.<name>contains</name></name><argument_list>(<argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Cassandra</name>.<name>Client</name></name></type> <name>createThriftClient</name><parameter_list>(<param><decl><type><name>String</name></type> <name>host</name></decl></param>, <param><decl><type><name>int</name></type> <name>port</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>TTransportException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>TSocket</name></type> <name>socket</name> <init>= <expr>new <call><name>TSocket</name><argument_list>(<argument><expr><name>host</name></expr></argument>, <argument><expr><name>port</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TTransport</name></type> <name>trans</name> <init>= <expr>new <call><name>TFramedTransport</name><argument_list>(<argument><expr><name>socket</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>trans</name>.<name>open</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>TProtocol</name></type> <name>protocol</name> <init>= <expr>new <call><name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>protocol</name>.<name>TBinaryProtocol</name></name><argument_list>(<argument><expr><name>trans</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>new <call><name><name>Cassandra</name>.<name>Client</name></name><argument_list>(<argument><expr><name>protocol</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>static</specifier> class <name>NullOutputHandler</name> <super><implements>implements <name>OutputHandler</name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>output</name><parameter_list>(<param><decl><type><name>String</name></type> <name>msg</name></decl></param>)</parameter_list> <block>{}</block></function>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>debug</name><parameter_list>(<param><decl><type><name>String</name></type> <name>msg</name></decl></param>)</parameter_list> <block>{}</block></function>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>warn</name><parameter_list>(<param><decl><type><name>String</name></type> <name>msg</name></decl></param>)</parameter_list> <block>{}</block></function>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>warn</name><parameter_list>(<param><decl><type><name>String</name></type> <name>msg</name></decl></param>, <param><decl><type><name>Throwable</name></type> <name>th</name></decl></param>)</parameter_list> <block>{}</block></function>
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,30 @@
+public static Token getBootstrapToken(final TokenMetadata metadata, final Map<InetAddress, Double> load) throws IOException, ConfigurationException
+    {
+        // if user specified a token, use that
+        if (DatabaseDescriptor.getInitialToken() != null)
+        {
+            logger.debug("token manually specified as " + DatabaseDescriptor.getInitialToken());
+            Token token = StorageService.getPartitioner().getTokenFactory().fromString(DatabaseDescriptor.getInitialToken());
+            if (metadata.getEndpoint(token) != null)
+                throw new ConfigurationException("Bootstraping to existing token " + token + " is not allowed (decommission/removetoken the old node first).");
+            return token;
+        }
+
+        // if there is a schema, then we're joining an existing cluster so get a "balanced" token
+        for (Map.Entry<InetAddress, EndpointState> entry : Gossiper.instance.getEndpointStates())
+        {
+            if (entry.getKey().equals(FBUtilities.getBroadcastAddress()))
+            {
+                // skip ourselves to avoid confusing the tests, which always load a schema first thing
+                continue;
+            }
+
+            VersionedValue schemaValue = entry.getValue().getApplicationState(ApplicationState.SCHEMA);
+            if (schemaValue != null && !schemaValue.value.equals(Schema.emptyVersion.toString()))
+                return getBalancedToken(metadata, load);
+        }
+
+        // no schema; pick a random token (so multiple non-seeds starting up simultaneously in a new cluster
+        // don't get the same token; see CASSANDRA-3219)
+        return StorageService.getPartitioner().getRandomToken();
+    }

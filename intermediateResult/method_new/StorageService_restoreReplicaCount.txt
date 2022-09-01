@@ -1,0 +1,54 @@
+private void restoreReplicaCount(InetAddress endpoint, final InetAddress notifyEndpoint)
+    {
+        final Multimap<InetAddress, String> fetchSources = HashMultimap.create();
+        Multimap<String, Map.Entry<InetAddress, Collection<Range<Token>>>> rangesToFetch = HashMultimap.create();
+
+        final InetAddress myAddress = FBUtilities.getBroadcastAddress();
+
+        for (String table : Schema.instance.getNonSystemTables())
+        {
+            Multimap<Range<Token>, InetAddress> changedRanges = getChangedRangesForLeaving(table, endpoint);
+            Set<Range<Token>> myNewRanges = new HashSet<Range<Token>>();
+            for (Map.Entry<Range<Token>, InetAddress> entry : changedRanges.entries())
+            {
+                if (entry.getValue().equals(myAddress))
+                    myNewRanges.add(entry.getKey());
+            }
+            Multimap<InetAddress, Range<Token>> sourceRanges = getNewSourceRanges(table, myNewRanges);
+            for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : sourceRanges.asMap().entrySet())
+            {
+                fetchSources.put(entry.getKey(), table);
+                rangesToFetch.put(table, entry);
+            }
+        }
+
+        for (final String table : rangesToFetch.keySet())
+        {
+            for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : rangesToFetch.get(table))
+            {
+                final InetAddress source = entry.getKey();
+                Collection<Range<Token>> ranges = entry.getValue();
+                final IStreamCallback callback = new IStreamCallback()
+                {
+                    public void onSuccess()
+                    {
+                        synchronized (fetchSources)
+                        {
+                            fetchSources.remove(source, table);
+                            if (fetchSources.isEmpty())
+                                sendReplicationNotification(notifyEndpoint);
+                        }
+                    }
+
+                    public void onFailure()
+                    {
+                        logger.warn("Streaming from " + source + " failed");
+                        onSuccess(); // calling onSuccess to send notification
+                    }
+                };
+                if (logger.isDebugEnabled())
+                    logger.debug("Requesting from " + source + " ranges " + StringUtils.join(ranges, ", "));
+                StreamIn.requestRanges(source, table, ranges, callback, OperationType.RESTORE_REPLICA_COUNT);
+            }
+        }
+    }

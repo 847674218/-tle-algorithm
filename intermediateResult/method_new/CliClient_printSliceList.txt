@@ -1,0 +1,67 @@
+private void printSliceList(CfDef columnFamilyDef, List<KeySlice> slices)
+            throws NotFoundException, TException, IllegalAccessException, InstantiationException, NoSuchFieldException, CharacterCodingException
+    {
+        AbstractType<?> validator;
+        String columnFamilyName = columnFamilyDef.getName();
+        AbstractType<?> keyComparator = getKeyComparatorForCF(columnFamilyName);
+
+        for (KeySlice ks : slices)
+        {
+            String keyName = (keyComparator == null) ? ByteBufferUtil.string(ks.key) : keyComparator.getString(ks.key);
+
+            sessionState.out.printf("-------------------%n");
+            sessionState.out.printf("RowKey: %s%n", keyName);
+            Iterator<ColumnOrSuperColumn> iterator = ks.getColumnsIterator();
+
+            while (iterator.hasNext())
+            {
+                ColumnOrSuperColumn columnOrSuperColumn = iterator.next();
+
+                if (columnOrSuperColumn.column != null)
+                {
+                    Column col = columnOrSuperColumn.column;
+                    validator = getValidatorForValue(columnFamilyDef, col.getName());
+
+                    sessionState.out.printf("=> (column=%s, value=%s, timestamp=%d%s)%n",
+                                    formatColumnName(keySpace, columnFamilyName, col.name), validator.getString(col.value), col.timestamp,
+                                    col.isSetTtl() ? String.format(", ttl=%d", col.getTtl()) : "");
+                }
+                else if (columnOrSuperColumn.super_column != null)
+                {
+                    SuperColumn superCol = columnOrSuperColumn.super_column;
+                    sessionState.out.printf("=> (super_column=%s,", formatColumnName(keySpace, columnFamilyName, superCol.name));
+
+                    for (Column col : superCol.columns)
+                    {
+                        validator = getValidatorForValue(columnFamilyDef, col.getName());
+
+                        sessionState.out.printf("%n     (column=%s, value=%s, timestamp=%d%s)",
+                                        formatSubcolumnName(keySpace, columnFamilyName, col.name), validator.getString(col.value), col.timestamp,
+                                        col.isSetTtl() ? String.format(", ttl=%d", col.getTtl()) : "");
+                    }
+
+                    sessionState.out.println(")");
+                }
+                else if (columnOrSuperColumn.counter_column != null)
+                {
+                    CounterColumn col = columnOrSuperColumn.counter_column;
+
+                    sessionState.out.printf("=> (counter=%s, value=%s)%n", formatColumnName(keySpace, columnFamilyName, col.name), col.value);
+                }
+                else if (columnOrSuperColumn.counter_super_column != null)
+                {
+                    CounterSuperColumn superCol = columnOrSuperColumn.counter_super_column;
+                    sessionState.out.printf("=> (super_column=%s,", formatColumnName(keySpace, columnFamilyName, superCol.name));
+
+                    for (CounterColumn col : superCol.columns)
+                    {
+                        sessionState.out.printf("%n     (counter=%s, value=%s)", formatSubcolumnName(keySpace, columnFamilyName, col.name), col.value);
+                    }
+
+                    sessionState.out.println(")");
+                }
+            }
+        }
+
+        sessionState.out.printf("%n%d Row%s Returned.%n", slices.size(), (slices.size() > 1 ? "s" : ""));
+    }

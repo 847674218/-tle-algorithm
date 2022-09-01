@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\commitlog\BatchCommitLogExecutorService.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>commitlog</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>WrappedRunnable</name></name>;</import>
+
+<class>class <name>BatchCommitLogExecutorService</name> <super><extends>extends <name>AbstractCommitLogExecutorService</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>BlockingQueue</name><argument_list>&lt;<argument><name>CheaterFutureTask</name></argument>&gt;</argument_list></name></type> <name>queue</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Thread</name></type> <name>appendingThread</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>boolean</name></type> <name>run</name> <init>= <expr>true</expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>BatchCommitLogExecutorService</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getConcurrentWriters</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>BatchCommitLogExecutorService</name><parameter_list>(<param><decl><type><name>int</name></type> <name>queueSize</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>queue</name> = new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>CheaterFutureTask</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>queueSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>WrappedRunnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+            <block>{
+                <while>while <condition>(<expr><name>run</name></expr>)</condition>
+                <block>{
+                    <if>if <condition>(<expr><call><name>processWithSyncBatch</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><name>completedTaskCount</name>++</expr>;</expr_stmt></then></if>
+                }</block></while>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>appendingThread</name> = new <call><name>Thread</name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr>"COMMIT-LOG-WRITER"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>appendingThread</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getPendingTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>queue</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ArrayList</name><argument_list>&lt;<argument><name>CheaterFutureTask</name></argument>&gt;</argument_list></name></type> <name>incompleteTasks</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>CheaterFutureTask</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ArrayList</name></type> <name>taskValues</name> <init>= <expr>new <call><name>ArrayList</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// TODO not sure how to generify this</comment>
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>processWithSyncBatch</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>CheaterFutureTask</name></type> <name>firstTask</name> <init>= <expr><call><name><name>queue</name>.<name>poll</name></name><argument_list>(<argument><expr>100</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>firstTask</name> == null</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+        <if>if <condition>(<expr>!(<call><name><name>firstTask</name>.<name>getRawCallable</name></name><argument_list>()</argument_list></call> instanceof <name><name>CommitLog</name>.<name>LogRecordAdder</name></name>)</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>firstTask</name>.<name>run</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>true</expr>;</return>
+        }</block></then></if>
+
+        <comment type="line">// attempt to do a bunch of LogRecordAdder ops before syncing</comment>
+        <comment type="line">// (this is a little clunky since there is no blocking peek method,</comment>
+        <comment type="line">//  so we have to break it into firstTask / extra tasks)</comment>
+        <expr_stmt><expr><call><name><name>incompleteTasks</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>taskValues</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>end</name> <init>= <expr><call><name><name>System</name>.<name>nanoTime</name></name><argument_list>()</argument_list></call> + <call>(<name>long</name>)<argument_list>(<argument><expr>1000000 * <call><name><name>DatabaseDescriptor</name>.<name>getCommitLogSyncBatchWindow</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// it doesn't seem worth bothering future-izing the exception</comment>
+        <comment type="line">// since if a commitlog op throws, we're probably screwed anyway</comment>
+        <expr_stmt><expr><call><name><name>incompleteTasks</name>.<name>add</name></name><argument_list>(<argument><expr><name>firstTask</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>taskValues</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>firstTask</name>.<name>getRawCallable</name></name><argument_list>()</argument_list></call>.<call><name>call</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <while>while <condition>(<expr>!<call><name><name>queue</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call>
+               &amp;&amp; <call><name><name>queue</name>.<name>peek</name></name><argument_list>()</argument_list></call>.<call><name>getRawCallable</name><argument_list>()</argument_list></call> instanceof <name><name>CommitLog</name>.<name>LogRecordAdder</name></name>
+               &amp;&amp; <call><name><name>System</name>.<name>nanoTime</name></name><argument_list>()</argument_list></call> &lt; <name>end</name></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>CheaterFutureTask</name></type> <name>task</name> <init>= <expr><call><name><name>queue</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>incompleteTasks</name>.<name>add</name></name><argument_list>(<argument><expr><name>task</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>taskValues</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>task</name>.<name>getRawCallable</name></name><argument_list>()</argument_list></call>.<call><name>call</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></while>
+
+        <comment type="line">// now sync and set the tasks' values (which allows thread calling get() to proceed)</comment>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>CommitLog</name>.<name>instance</name>.<name>sync</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>incompleteTasks</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <expr_stmt><expr><call><name><name>incompleteTasks</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call>.<call><name>set</name><argument_list>(<argument><expr><call><name><name>taskValues</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>protected</specifier> <argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list> <name><name>RunnableFuture</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>newTaskFor</name><parameter_list>(<param><decl><type><name>Runnable</name></type> <name>runnable</name></decl></param>, <param><decl><type><name>T</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>newTaskFor</name><argument_list>(<argument><expr><call><name><name>Executors</name>.<name>callable</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>protected</specifier> <argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list> <name><name>RunnableFuture</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>newTaskFor</name><parameter_list>(<param><decl><type><name><name>Callable</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>callable</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>CheaterFutureTask</name><argument_list>(<argument><expr><name>callable</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>execute</name><parameter_list>(<param><decl><type><name>Runnable</name></type> <name>command</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>queue</name>.<name>put</name></name><argument_list>(<argument><expr>(<name>CheaterFutureTask</name>)<name>command</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name><name>CommitLog</name>.<name>LogRecordAdder</name></name></type> <name>adder</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>submit</name><argument_list>(<argument><expr>(<name>Callable</name>)<name>adder</name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>shutdown</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr>new <call><name>Thread</name><argument_list>(<argument><expr>new <class><super><name>WrappedRunnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>InterruptedException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <while>while <condition>(<expr>!<call><name><name>queue</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition>
+                    <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr>100</expr></argument>)</argument_list></call></expr>;</expr_stmt></while>
+                <expr_stmt><expr><name>run</name> = false</expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>appendingThread</name>.<name>join</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></argument>, <argument><expr>"Commitlog Shutdown"</expr></argument>)</argument_list></call>.<call><name>start</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>awaitTermination</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>appendingThread</name>.<name>join</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name><name>CheaterFutureTask</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name> <super><extends>extends <name><name>FutureTask</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Callable</name></type> <name>rawCallable</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>CheaterFutureTask</name><parameter_list>(<param><decl><type><name><name>Callable</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></type> <name>callable</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>callable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>rawCallable</name> = <name>callable</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>Callable</name></type> <name>getRawCallable</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>rawCallable</name></expr>;</return>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>void</name></type> <name>set</name><parameter_list>(<param><decl><type><name>V</name></type> <name>v</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>super</name>.<name>set</name></name><argument_list>(<argument><expr><name>v</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+}</block></class>
+</unit>

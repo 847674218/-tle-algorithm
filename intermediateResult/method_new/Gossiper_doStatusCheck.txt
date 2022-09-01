@@ -1,0 +1,52 @@
+private void doStatusCheck()
+    {
+        long now = System.currentTimeMillis();
+
+        Set<InetAddress> eps = endpointStateMap.keySet();
+        for ( InetAddress endpoint : eps )
+        {
+            if ( endpoint.equals(FBUtilities.getBroadcastAddress()) )
+                continue;
+
+            FailureDetector.instance.interpret(endpoint);
+            EndpointState epState = endpointStateMap.get(endpoint);
+            if ( epState != null )
+            {
+                long duration = now - epState.getUpdateTimestamp();
+
+                // check if this is a fat client. fat clients are removed automatically from
+                // gossip after FatClientTimeout.  Do not remove dead states here.
+                if (!isDeadState(epState) && !epState.isAlive() && !StorageService.instance.getTokenMetadata().isMember(endpoint) && !justRemovedEndpoints.containsKey(endpoint) && (duration > FatClientTimeout))
+                {
+                    logger.info("FatClient " + endpoint + " has been silent for " + FatClientTimeout + "ms, removing from gossip");
+                    removeEndpoint(endpoint); // will put it in justRemovedEndpoints to respect quarantine delay
+                    evictFromMembership(endpoint); // can get rid of the state immediately
+                }
+
+                // check for dead state removal
+                long expireTime = getExpireTimeForEndpoint(endpoint);
+                if (!epState.isAlive() && (now > expireTime)
+                        && (!StorageService.instance.getTokenMetadata().isMember(endpoint)))
+                {
+                    if (logger.isDebugEnabled())
+                    {
+                        logger.debug("time is expiring for endpoint : " + endpoint + " (" + expireTime + ")");
+                    }
+                    evictFromMembership(endpoint);
+                }
+            }
+        }
+
+        if (!justRemovedEndpoints.isEmpty())
+        {
+            for (Entry<InetAddress, Long> entry : justRemovedEndpoints.entrySet())
+            {
+                if ((now - entry.getValue()) > QUARANTINE_DELAY)
+                {
+                    if (logger.isDebugEnabled())
+                        logger.debug(QUARANTINE_DELAY + " elapsed, " + entry.getKey() + " gossip quarantine over");
+                    justRemovedEndpoints.remove(entry.getKey());
+                }
+            }
+        }
+    }

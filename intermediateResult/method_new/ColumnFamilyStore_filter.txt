@@ -1,0 +1,59 @@
+public List<Row> filter(AbstractScanIterator rowIterator, ExtendedFilter filter)
+    {
+        logger.trace("Filtering {} for rows matching {}", rowIterator, filter);
+        List<Row> rows = new ArrayList<Row>();
+        int columnsCount = 0;
+        int total = 0, matched = 0;
+
+        try
+        {
+            while (rowIterator.hasNext() && rows.size() < filter.maxRows() && columnsCount < filter.maxColumns())
+            {
+                // get the raw columns requested, and additional columns for the expressions if necessary
+                Row rawRow = rowIterator.next();
+                total++;
+                ColumnFamily data = rawRow.cf;
+
+                if (rowIterator.needsFiltering())
+                {
+                    IDiskAtomFilter extraFilter = filter.getExtraFilter(data);
+                    if (extraFilter != null)
+                    {
+                        QueryPath path = new QueryPath(columnFamily);
+                        ColumnFamily cf = filter.cfs.getColumnFamily(new QueryFilter(rawRow.key, path, extraFilter));
+                        if (cf != null)
+                            data.addAll(cf, HeapAllocator.instance);
+                    }
+
+                    if (!filter.isSatisfiedBy(data, null))
+                        continue;
+
+                    logger.trace("{} satisfies all filter expressions", data);
+                    // cut the resultset back to what was requested, if necessary
+                    data = filter.prune(data);
+                }
+
+                rows.add(new Row(rawRow.key, data));
+                matched++;
+
+                if (data != null)
+                    columnsCount += filter.lastCounted(data);
+                // Update the underlying filter to avoid querying more columns per slice than necessary and to handle paging
+                filter.updateFilter(columnsCount);
+            }
+
+            return rows;
+        }
+        finally
+        {
+            try
+            {
+                rowIterator.close();
+                Tracing.trace("Scanned {} rows and matched {}", total, matched);
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+    }

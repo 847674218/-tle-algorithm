@@ -1,0 +1,44 @@
+public OnDiskAtomIterator next()
+        {
+            try
+            {
+                final DecoratedKey currentKey;
+                final RowIndexEntry currentEntry;
+
+                if (row == null)
+                {
+                    currentKey = sstable.decodeKey(ByteBufferUtil.readWithShortLength(ifile));
+                    currentEntry = RowIndexEntry.serializer.deserialize(ifile, sstable.descriptor.version);
+                }
+                else
+                {
+                    currentKey = nextKey;
+                    currentEntry = nextEntry;
+                }
+
+                if (ifile.isEOF())
+                {
+                    nextKey = null;
+                    nextEntry = null;
+                }
+                else
+                {
+                    nextKey = sstable.decodeKey(ByteBufferUtil.readWithShortLength(ifile));
+                    nextEntry = RowIndexEntry.serializer.deserialize(ifile, sstable.descriptor.version);
+                }
+
+                assert !dfile.isEOF();
+                return row = new LazyColumnIterator(currentKey, new IColumnIteratorFactory()
+                {
+                    public OnDiskAtomIterator create()
+                    {
+                        return filter.getSSTableColumnIterator(sstable, dfile, currentKey, currentEntry);
+                    }
+                });
+            }
+            catch (IOException e)
+            {
+                sstable.markSuspect();
+                throw new CorruptSSTableException(e, ifile.getPath());
+            }
+        }

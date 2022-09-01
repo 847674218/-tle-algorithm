@@ -1,0 +1,70 @@
+public int forceRepairAsync(final String tableName, final boolean isSequential, final Collection<Range<Token>> ranges, final String... columnFamilies)
+    {
+        if (Table.SYSTEM_TABLE.equals(tableName))
+            return 0;
+
+        final int cmd = nextRepairCommand.incrementAndGet();
+        if (ranges.size() > 0)
+        {
+            new Thread(new WrappedRunnable()
+            {
+                protected void runMayThrow() throws Exception
+                {
+                    String message = String.format("Starting repair command #%d, repairing %d ranges for keyspace %s", cmd, ranges.size(), tableName);
+                    logger_.info(message);
+                    sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.STARTED.ordinal()});
+
+                    List<AntiEntropyService.RepairFuture> futures = new ArrayList<AntiEntropyService.RepairFuture>(ranges.size());
+                    for (Range<Token> range : ranges)
+                    {
+                        AntiEntropyService.RepairFuture future;
+                        try
+                        {
+                            future = forceTableRepair(range, tableName, isSequential, columnFamilies);
+                        }
+                        catch (IllegalArgumentException e)
+                        {
+                            message = String.format("Repair session failed with error: %s", e);
+                            sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.SESSION_FAILED.ordinal()});
+                            continue;
+                        }
+                        if (future == null)
+                            continue;
+                        futures.add(future);
+                        // wait for a session to be done with its differencing before starting the next one
+                        try
+                        {
+                            future.session.differencingDone.await();
+                        }
+                        catch (InterruptedException e)
+                        {
+                            message = "Interrupted while waiting for the differencing of repair session " + future.session + " to be done. Repair may be imprecise.";
+                            logger_.error(message, e);
+                            sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.SESSION_FAILED.ordinal()});
+                        }
+                    }
+                    for (AntiEntropyService.RepairFuture future : futures)
+                    {
+                        try
+                        {
+                            future.get();
+                            message = String.format("Repair session %s for range %s finished", future.session.getName(), future.session.getRange().toString());
+                            sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.SESSION_SUCCESS.ordinal()});
+                        }
+                        catch (ExecutionException e)
+                        {
+                            message = String.format("Repair session %s for range %s failed with error %s", future.session.getName(), future.session.getRange().toString(), e.getCause().getMessage());
+                            sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.SESSION_FAILED.ordinal()});
+                        }
+                        catch (Exception e)
+                        {
+                            message = String.format("Repair session %s for range %s failed with error %s", future.session.getName(), future.session.getRange().toString(), e.getMessage());
+                            sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.SESSION_FAILED.ordinal()});
+                        }
+                    }
+                    sendNotification("repair", String.format("Repair command #%d finished", cmd), new int[]{cmd, AntiEntropyService.Status.FINISHED.ordinal()});
+                }
+            }).start();
+        }
+        return cmd;
+    }

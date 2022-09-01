@@ -1,0 +1,39 @@
+private AutoSavingCache<KeyCacheKey, RowIndexEntry> initKeyCache()
+    {
+        logger.info("Initializing key cache with capacity of {} MBs.", DatabaseDescriptor.getKeyCacheSizeInMB());
+
+        long keyCacheInMemoryCapacity = DatabaseDescriptor.getKeyCacheSizeInMB() * 1024 * 1024;
+
+        // as values are constant size we can use singleton weigher
+        // where 48 = 40 bytes (average size of the key) + 8 bytes (size of value)
+        ICache<KeyCacheKey, RowIndexEntry> kc;
+        if (MemoryMeter.isInitialized())
+        {
+            kc = ConcurrentLinkedHashCache.create(keyCacheInMemoryCapacity);
+        }
+        else
+        {
+            logger.warn("MemoryMeter uninitialized (jamm not specified as java agent); KeyCache size in JVM Heap will not be calculated accurately. " +
+                        "Usually this means cassandra-env.sh disabled jamm because you are using a buggy JRE; upgrade to the Sun JRE instead");
+            /* We don't know the overhead size because memory meter is not enabled. */
+            EntryWeigher<KeyCacheKey, RowIndexEntry> weigher = new EntryWeigher<KeyCacheKey, RowIndexEntry>()
+            {
+                public int weightOf(KeyCacheKey key, RowIndexEntry entry)
+                {
+                    return key.key.length + entry.serializedSize();
+                }
+            };
+            kc = ConcurrentLinkedHashCache.create(keyCacheInMemoryCapacity, weigher);
+        }
+        AutoSavingCache<KeyCacheKey, RowIndexEntry> keyCache = new AutoSavingCache<KeyCacheKey, RowIndexEntry>(kc, CacheType.KEY_CACHE, new KeyCacheSerializer());
+
+        int keyCacheKeysToSave = DatabaseDescriptor.getKeyCacheKeysToSave();
+
+        logger.info("Scheduling key cache save to each {} seconds (going to save {} keys).",
+                DatabaseDescriptor.getKeyCacheSavePeriod(),
+                    keyCacheKeysToSave == Integer.MAX_VALUE ? "all" : keyCacheKeysToSave);
+
+        keyCache.scheduleSaving(DatabaseDescriptor.getKeyCacheSavePeriod(), keyCacheKeysToSave);
+
+        return keyCache;
+    }

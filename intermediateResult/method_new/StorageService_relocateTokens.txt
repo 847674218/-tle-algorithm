@@ -1,0 +1,67 @@
+void relocateTokens(Collection<Token> srcTokens)
+    {
+        assert srcTokens != null;
+        InetAddress localAddress = FBUtilities.getBroadcastAddress();
+        Collection<Token> localTokens = getTokenMetadata().getTokens(localAddress);
+        Set<Token> tokens = new HashSet<Token>(srcTokens);
+
+        Iterator<Token> it = tokens.iterator();
+        while (it.hasNext())
+        {
+            Token srcT = it.next();
+            if (localTokens.contains(srcT))
+            {
+                it.remove();
+                logger.warn("cannot move {}; source and destination match", srcT);
+            }
+        }
+
+        if (tokens.size() < 1)
+            logger.warn("no valid token arguments specified; nothing to relocate");
+
+        Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.relocating(tokens));
+        setMode(Mode.RELOCATING, String.format("relocating %s to %s", tokens, localAddress.getHostAddress()), true);
+
+        List<String> tables = Schema.instance.getNonSystemTables();
+
+        setMode(Mode.RELOCATING, String.format("Sleeping %s ms before start streaming/fetching ranges", RING_DELAY), true);
+        try
+        {
+            Thread.sleep(RING_DELAY);
+        }
+        catch (InterruptedException e)
+        {
+            throw new RuntimeException("Sleep interrupted " + e.getMessage());
+        }
+
+        RangeRelocator relocator = new RangeRelocator(tokens, tables);
+
+        if (relocator.streamsNeeded())
+        {
+            setMode(Mode.RELOCATING, "fetching new ranges and streaming old ranges", true);
+
+            relocator.logStreamsMap("[Relocate->STREAMING]");
+            CountDownLatch streamLatch = relocator.streams();
+
+            relocator.logRequestsMap("[Relocate->FETCHING]");
+            CountDownLatch fetchLatch = relocator.requests();
+
+            try
+            {
+                streamLatch.await();
+                fetchLatch.await();
+            }
+            catch (InterruptedException e)
+            {
+                throw new RuntimeException("Interrupted latch while waiting for stream/fetch ranges to finish: " + e.getMessage());
+            }
+        }
+        else
+            setMode(Mode.RELOCATING, "no new ranges to stream/fetch", true);
+
+        Collection<Token> currentTokens = SystemTable.updateLocalTokens(tokens, Collections.<Token>emptyList());
+        tokenMetadata.updateNormalTokens(currentTokens, FBUtilities.getBroadcastAddress());
+        Gossiper.instance.addLocalApplicationState(ApplicationState.TOKENS, valueFactory.tokens(currentTokens));
+        Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.normal(currentTokens));
+        setMode(Mode.NORMAL, false);
+    }

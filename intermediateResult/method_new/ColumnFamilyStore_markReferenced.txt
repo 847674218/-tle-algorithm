@@ -1,0 +1,25 @@
+public ViewFragment markReferenced(RowPosition startWith, RowPosition stopAt)
+    {
+        DataTracker.View view;
+        List<SSTableReader> sstables;
+        while (true)
+        {
+            view = data.getView();
+            // startAt == minimum is ok, but stopAt == minimum is confusing because all IntervalTree deals with
+            // is Comparable, so it won't know to special-case that. However max() should not be call if the
+            // intervalTree is empty sochecking that first
+            //
+            if (view.intervalTree.isEmpty())
+            {
+                sstables = Collections.emptyList();
+                break;
+            }
+
+            RowPosition stopInTree = stopAt.isMinimum() ? view.intervalTree.max() : stopAt;
+            sstables = view.intervalTree.search(Interval.<RowPosition, SSTableReader>create(startWith, stopInTree));
+            if (SSTableReader.acquireReferences(sstables))
+                break;
+            // retry w/ new view
+        }
+        return new ViewFragment(sstables, Iterables.concat(Collections.singleton(view.memtable), view.memtablesPendingFlush));
+    }

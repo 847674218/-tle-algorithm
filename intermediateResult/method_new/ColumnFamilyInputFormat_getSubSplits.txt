@@ -1,0 +1,45 @@
+private List<CfSplit> getSubSplits(String keyspace, String cfName, TokenRange range, Configuration conf) throws IOException
+    {
+        int splitsize = ConfigHelper.getInputSplitSize(conf);
+        for (int i = 0; i < range.rpc_endpoints.size(); i++)
+        {
+            String host = range.rpc_endpoints.get(i);
+
+            if (host == null || host.equals("0.0.0.0"))
+                host = range.endpoints.get(i);
+
+            try
+            {
+                Cassandra.Client client = ConfigHelper.createConnection(conf, host, ConfigHelper.getInputRpcPort(conf));
+                client.set_keyspace(keyspace);
+
+                try
+                {
+                    return client.describe_splits_ex(cfName, range.start_token, range.end_token, splitsize);
+                }
+                catch (TApplicationException e)
+                {
+                    // fallback to guessing split size if talking to a server without describe_splits_ex method
+                    if (e.getType() == TApplicationException.UNKNOWN_METHOD)
+                    {
+                        List<String> splitPoints = client.describe_splits(cfName, range.start_token, range.end_token, splitsize);
+                        return tokenListToSplits(splitPoints, splitsize);
+                    }
+                    throw e;
+                }
+            }
+            catch (IOException e)
+            {
+                logger.debug("failed connect to endpoint " + host, e);
+            }
+            catch (TException e)
+            {
+                throw new RuntimeException(e);
+            }
+            catch (InvalidRequestException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+        throw new IOException("failed connecting to all endpoints " + StringUtils.join(range.endpoints, ","));
+    }

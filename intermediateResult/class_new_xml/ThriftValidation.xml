@@ -1,0 +1,604 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\thrift\ThriftValidation.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>IDiskAtomFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>NamesQueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>SliceQueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name>.<name>SecondaryIndexManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>MarshalException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>IPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>RandomPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * This has a lot of building blocks for CassandraServer to call to make sure it has valid input
+ * -- ensuring column names conform to the declared comparator, for instance.
+ *
+ * The methods here mostly try to do just one part of the validation so they can be combined
+ * for different needs -- supercolumns vs regular, range slices vs named, batch vs single-column.
+ * (ValidateColumnPath is the main exception in that it includes table and CF validation.)
+ */</comment>
+<class><specifier>public</specifier> class <name>ThriftValidation</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>ThriftValidation</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateKey</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>key</name> == null || <call><name><name>key</name>.<name>remaining</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"Key may not be empty"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+
+        <comment type="line">// check that key can be handled by FBUtilities.writeShortByteArray</comment>
+        <if>if <condition>(<expr><call><name><name>key</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; <name><name>FBUtilities</name>.<name>MAX_UNSIGNED_SHORT</name></name></expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"Key length of " + <call><name><name>key</name>.<name>remaining</name></name><argument_list>()</argument_list></call> +
+                                                                              " is longer than maximum of " +
+                                                                              <name><name>FBUtilities</name>.<name>MAX_UNSIGNED_SHORT</name></name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>metadata</name>.<name>getKeyValidator</name></name><argument_list>()</argument_list></call>.<call><name>validate</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateTable</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tablename</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>KeyspaceNotDefinedException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>Schema</name>.<name>instance</name>.<name>getTables</name></name><argument_list>()</argument_list></call>.<call><name>contains</name><argument_list>(<argument><expr><name>tablename</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name>KeyspaceNotDefinedException</name><argument_list>(<argument><expr>"Keyspace " + <name>tablename</name> + " does not exist"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>CFMetaData</name></type> <name>validateColumnFamily</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tablename</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isCommutativeOp</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>CFMetaData</name></type> <name>metadata</name> <init>= <expr><call><name>validateColumnFamily</name><argument_list>(<argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>isCommutativeOp</name></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>metadata</name>.<name>getDefaultValidator</name></name><argument_list>()</argument_list></call>.<call><name>isCommutative</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"invalid operation for non commutative columnfamily " + <name>cfName</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <if>if <condition>(<expr><call><name><name>metadata</name>.<name>getDefaultValidator</name></name><argument_list>()</argument_list></call>.<call><name>isCommutative</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"invalid operation for commutative columnfamily " + <name>cfName</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></else></if>
+        <return>return <expr><name>metadata</name></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// To be used when the operation should be authorized whether this is a counter CF or not</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>CFMetaData</name></type> <name>validateColumnFamily</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tablename</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>validateTable</name><argument_list>(<argument><expr><name>tablename</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>cfName</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"non-empty columnfamily is required"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>CFMetaData</name></type> <name>metadata</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>metadata</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"unconfigured columnfamily " + <name>cfName</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <return>return <expr><name>metadata</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * validates all parts of the path to the column, including the column name
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateColumnPath</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ColumnPath</name></type> <name>column_path</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name><name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Standard</name></name></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name><name>column_path</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"supercolumn parameter is invalid for standard CF " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+            <if>if <condition>(<expr><name><name>column_path</name>.<name>column</name></name> == null</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"column parameter is not optional for standard CF " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <if>if <condition>(<expr><name><name>column_path</name>.<name>super_column</name></name> == null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"supercolumn parameter is not optional for super CF " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></else></if>
+        <if>if <condition>(<expr><name><name>column_path</name>.<name>column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>validateColumnNames</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name><name>column_path</name>.<name>super_column</name></name></expr></argument>, <argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name><name>column_path</name>.<name>column</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <if>if <condition>(<expr><name><name>column_path</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>validateColumnNames</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr>(<name>ByteBuffer</name>)null</expr></argument>, <argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name><name>column_path</name>.<name>super_column</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateColumnParent</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ColumnParent</name></type> <name>column_parent</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name><name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Standard</name></name></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name><name>column_parent</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"columnfamily alone is required for standard CF " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><name><name>column_parent</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>validateColumnNames</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr>(<name>ByteBuffer</name>)null</expr></argument>, <argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name><name>column_parent</name>.<name>super_column</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="line">// column_path_or_parent is a ColumnPath for remove, where the "column" is optional even for a standard CF</comment>
+    <function><type><specifier>static</specifier> <name>void</name></type> <name>validateColumnPathOrParent</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ColumnPath</name></type> <name>column_path_or_parent</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name><name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Standard</name></name></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name><name>column_path_or_parent</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"supercolumn may not be specified for standard CF " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+        }</block></then></if>
+        <if>if <condition>(<expr><name><name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Super</name></name></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name><name>column_path_or_parent</name>.<name>super_column</name></name> == null &amp;&amp; <name><name>column_path_or_parent</name>.<name>column</name></name> != null</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"A column cannot be specified without specifying a super column for removal on super CF "
+                                                                          + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+        }</block></then></if>
+        <if>if <condition>(<expr><name><name>column_path_or_parent</name>.<name>column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>validateColumnNames</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name><name>column_path_or_parent</name>.<name>super_column</name></name></expr></argument>, <argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name><name>column_path_or_parent</name>.<name>column</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <if>if <condition>(<expr><name><name>column_path_or_parent</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>validateColumnNames</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr>(<name>ByteBuffer</name>)null</expr></argument>, <argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name><name>column_path_or_parent</name>.<name>super_column</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Validates the column names but not the parent path or data
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateColumnNames</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>superColumnName</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>column_names</name></decl></param>)</parameter_list>
+    <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>superColumnName</name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>superColumnName</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; <name><name>IColumn</name>.<name>MAX_NAME_LENGTH</name></name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"supercolumn name length must not be greater than " + <name><name>IColumn</name>.<name>MAX_NAME_LENGTH</name></name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <if>if <condition>(<expr><call><name><name>superColumnName</name>.<name>remaining</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"supercolumn name must not be empty"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <if>if <condition>(<expr><name><name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Standard</name></name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"supercolumn specified to ColumnFamily " + <name><name>metadata</name>.<name>cfName</name></name> + " containing normal columns"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></then></if>
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr><call><name><name>metadata</name>.<name>getComparatorFor</name></name><argument_list>(<argument><expr><name>superColumnName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>name</name> <range>: <expr><name>column_names</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>name</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; <name><name>IColumn</name>.<name>MAX_NAME_LENGTH</name></name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"column name length must not be greater than " + <name><name>IColumn</name>.<name>MAX_NAME_LENGTH</name></name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <if>if <condition>(<expr><call><name><name>name</name>.<name>remaining</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"column name must not be empty"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>comparator</name>.<name>validate</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateColumnNames</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ColumnParent</name></type> <name>column_parent</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>column_names</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>validateColumnNames</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name><name>column_parent</name>.<name>super_column</name></name></expr></argument>, <argument><expr><name>column_names</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateRange</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ColumnParent</name></type> <name>column_parent</name></decl></param>, <param><decl><type><name>SliceRange</name></type> <name>range</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr><call><name><name>metadata</name>.<name>getComparatorFor</name></name><argument_list>(<argument><expr><name><name>column_parent</name>.<name>super_column</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>comparator</name>.<name>validate</name></name><argument_list>(<argument><expr><name><name>range</name>.<name>start</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>comparator</name>.<name>validate</name></name><argument_list>(<argument><expr><name><name>range</name>.<name>finish</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <if>if <condition>(<expr><name><name>range</name>.<name>count</name></name> &lt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"get_slice requires non-negative count"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name><name>Comparator</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>orderedComparator</name> <init>= <expr><call><name><name>range</name>.<name>isReversed</name></name><argument_list>()</argument_list></call> ? <name><name>comparator</name>.<name>reverseComparator</name></name> : <name>comparator</name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>range</name>.<name>start</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; 0
+            &amp;&amp; <call><name><name>range</name>.<name>finish</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; 0
+            &amp;&amp; <call><name><name>orderedComparator</name>.<name>compare</name></name><argument_list>(<argument><expr><name><name>range</name>.<name>start</name></name></expr></argument>, <argument><expr><name><name>range</name>.<name>finish</name></name></expr></argument>)</argument_list></call> &gt; 0</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"range finish must come after start in the order of traversal"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateColumnOrSuperColumn</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ColumnOrSuperColumn</name></type> <name>cosc</name></decl></param>)</parameter_list>
+            <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>boolean</name></type> <name>isCommutative</name> <init>= <expr><call><name><name>metadata</name>.<name>getDefaultValidator</name></name><argument_list>()</argument_list></call>.<call><name>isCommutative</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>nulls</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name><name>cosc</name>.<name>column</name></name> == null</expr>)</condition><then> <expr_stmt><expr><name>nulls</name>++</expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><name><name>cosc</name>.<name>super_column</name></name> == null</expr>)</condition><then> <expr_stmt><expr><name>nulls</name>++</expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><name><name>cosc</name>.<name>counter_column</name></name> == null</expr>)</condition><then> <expr_stmt><expr><name>nulls</name>++</expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><name><name>cosc</name>.<name>counter_super_column</name></name> == null</expr>)</condition><then> <expr_stmt><expr><name>nulls</name>++</expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><name>nulls</name> != 3</expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"ColumnOrSuperColumn must have one (and only one) of column, super_column, counter and counter_super_column"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr><name><name>cosc</name>.<name>column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name>isCommutative</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"invalid operation for commutative columnfamily " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <expr_stmt><expr><call><name>validateTtl</name><argument_list>(<argument><expr><name><name>cosc</name>.<name>column</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>validateColumnPath</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr>new <call><name>ColumnPath</name><argument_list>(<argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call>.<call><name>setSuper_column</name><argument_list>(<argument><expr>(<name>ByteBuffer</name>)null</expr></argument>)</argument_list></call>.<call><name>setColumn</name><argument_list>(<argument><expr><name><name>cosc</name>.<name>column</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>validateColumnData</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name><name>cosc</name>.<name>column</name></name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><name><name>cosc</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name>isCommutative</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"invalid operation for commutative columnfamily " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <for>for (<init><decl><type><name>Column</name></type> <name>c</name> <range>: <expr><name><name>cosc</name>.<name>super_column</name>.<name>columns</name></name></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name>validateColumnPath</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr>new <call><name>ColumnPath</name><argument_list>(<argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call>.<call><name>setSuper_column</name><argument_list>(<argument><expr><name><name>cosc</name>.<name>super_column</name>.<name>name</name></name></expr></argument>)</argument_list></call>.<call><name>setColumn</name><argument_list>(<argument><expr><name><name>c</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>validateColumnData</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>c</name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><name><name>cosc</name>.<name>counter_column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr>!<name>isCommutative</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"invalid operation for non commutative columnfamily " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <expr_stmt><expr><call><name>validateColumnPath</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr>new <call><name>ColumnPath</name><argument_list>(<argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call>.<call><name>setSuper_column</name><argument_list>(<argument><expr>(<name>ByteBuffer</name>)null</expr></argument>)</argument_list></call>.<call><name>setColumn</name><argument_list>(<argument><expr><name><name>cosc</name>.<name>counter_column</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><name><name>cosc</name>.<name>counter_super_column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr>!<name>isCommutative</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"invalid operation for non commutative columnfamily " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <for>for (<init><decl><type><name>CounterColumn</name></type> <name>c</name> <range>: <expr><name><name>cosc</name>.<name>counter_super_column</name>.<name>columns</name></name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name>validateColumnPath</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr>new <call><name>ColumnPath</name><argument_list>(<argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call>.<call><name>setSuper_column</name><argument_list>(<argument><expr><name><name>cosc</name>.<name>counter_super_column</name>.<name>name</name></name></expr></argument>)</argument_list></call>.<call><name>setColumn</name><argument_list>(<argument><expr><name><name>c</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateTtl</name><parameter_list>(<param><decl><type><name>Column</name></type> <name>column</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>column</name>.<name>isSetTtl</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name><name>column</name>.<name>ttl</name></name> &lt;= 0</expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"ttl must be positive"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <if>if <condition>(<expr><name><name>column</name>.<name>ttl</name></name> &gt; <name><name>ExpiringColumn</name>.<name>MAX_TTL</name></name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"ttl is too large. requested (%d) maximum (%d)"</expr></argument>, <argument><expr><name><name>column</name>.<name>ttl</name></name></expr></argument>, <argument><expr><name><name>ExpiringColumn</name>.<name>MAX_TTL</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <comment type="line">// if it's not set, then it should be zero -- here we are just checking to make sure Thrift doesn't change that contract with us.</comment>
+            <assert>assert <expr><name><name>column</name>.<name>ttl</name></name> == 0</expr>;</assert>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateMutation</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>Mutation</name></type> <name>mut</name></decl></param>)</parameter_list>
+            <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnOrSuperColumn</name></type> <name>cosc</name> <init>= <expr><name><name>mut</name>.<name>column_or_supercolumn</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Deletion</name></type> <name>del</name> <init>= <expr><name><name>mut</name>.<name>deletion</name></name></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>nulls</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>cosc</name> == null</expr>)</condition><then> <expr_stmt><expr><name>nulls</name>++</expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><name>del</name> == null</expr>)</condition><then> <expr_stmt><expr><name>nulls</name>++</expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><name>nulls</name> != 1</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"mutation must have one and only one of column_or_supercolumn or deletion"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><name>cosc</name> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>validateColumnOrSuperColumn</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>cosc</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name>validateDeletion</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>del</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateDeletion</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>Deletion</name></type> <name>del</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+
+        <if>if <condition>(<expr><name><name>del</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name>validateColumnNames</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr>(<name>ByteBuffer</name>)null</expr></argument>, <argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name><name>del</name>.<name>super_column</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><name><name>del</name>.<name>predicate</name></name> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>validateSlicePredicate</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name><name>del</name>.<name>super_column</name></name></expr></argument>, <argument><expr><name><name>del</name>.<name>predicate</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name><name>del</name>.<name>predicate</name>.<name>slice_range</name></name> != null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"Deletion does not yet support SliceRange predicates."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><name><name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Standard</name></name> &amp;&amp; <name><name>del</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>msg</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Deletion of super columns is not possible on a standard ColumnFamily (KeySpace=%s ColumnFamily=%s Deletion=%s)"</expr></argument>, <argument><expr><name><name>metadata</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>del</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><name>msg</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><call><name><name>metadata</name>.<name>getDefaultValidator</name></name><argument_list>()</argument_list></call>.<call><name>isCommutative</name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <comment type="line">// forcing server timestamp even if a timestamp was set for coherence with other counter operation</comment>
+            <expr_stmt><expr><name><name>del</name>.<name>timestamp</name></name> = <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else <if>if <condition>(<expr>!<call><name><name>del</name>.<name>isSetTimestamp</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"Deletion timestamp is not optional for non commutative column family " + <name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateSlicePredicate</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>scName</name></decl></param>, <param><decl><type><name>SlicePredicate</name></type> <name>predicate</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name><name>predicate</name>.<name>column_names</name></name> == null &amp;&amp; <name><name>predicate</name>.<name>slice_range</name></name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"A SlicePredicate must be given a list of Columns, a SliceRange, or both"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr><name><name>predicate</name>.<name>slice_range</name></name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name>validateRange</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr>new <call><name>ColumnParent</name><argument_list>(<argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call>.<call><name>setSuper_column</name><argument_list>(<argument><expr><name>scName</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>predicate</name>.<name>slice_range</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><name><name>predicate</name>.<name>column_names</name></name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name>validateColumnNames</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>scName</name></expr></argument>, <argument><expr><name><name>predicate</name>.<name>column_names</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Validates the data part of the column (everything in the Column object but the name, which is assumed to be valid)
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateColumnData</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>Column</name></type> <name>column</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isSubColumn</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>validateTtl</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr>!<call><name><name>column</name>.<name>isSetValue</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"Column value is required"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr>!<call><name><name>column</name>.<name>isSetTimestamp</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"Column timestamp is required"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>ColumnDefinition</name></type> <name>columnDef</name> <init>= <expr><call><name><name>metadata</name>.<name>getColumnDefinitionFromColumnName</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>validator</name> <init>= <expr><call><name><name>metadata</name>.<name>getValueValidator</name></name><argument_list>(<argument><expr><name>columnDef</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>validator</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>validator</name>.<name>validate</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>me</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"rejecting invalid value " + <call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><call><name>summarize</name><argument_list>(<argument><expr><name><name>column</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"(%s) [%s][%s][%s] failed validation"</expr></argument>,
+                                                                      <argument><expr><call><name><name>me</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                      <argument><expr><name><name>metadata</name>.<name>ksName</name></name></expr></argument>,
+                                                                      <argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>,
+                                                                      <argument><expr>(<name>isSubColumn</name> ? <name><name>metadata</name>.<name>subcolumnComparator</name></name> : <name><name>metadata</name>.<name>comparator</name></name>).<call><name>getString</name><argument_list>(<argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <comment type="line">// Indexed column values cannot be larger than 64K.  See CASSANDRA-3057/4240 for more details</comment>
+        <if>if <condition>(<expr>!<call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>metadata</name>.<name>ksName</name></name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call>.<call><name><name>indexManager</name>.<name>validate</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Can't index column value of size %d for index %s in CF %s of KS %s"</expr></argument>,
+                                                                              <argument><expr><call><name><name>column</name>.<name>value</name>.<name>remaining</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                              <argument><expr><call><name><name>columnDef</name>.<name>getIndexName</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                              <argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>,
+                                                                              <argument><expr><name><name>metadata</name>.<name>ksName</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Return, at most, the first 64K of the buffer. This avoids very large column values being
+     * logged in their entirety.
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>ByteBuffer</name></type> <name>summarize</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>buffer</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>MAX</name> <init>= <expr><name><name>Short</name>.<name>MAX_VALUE</name></name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>buffer</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &lt;= <name>MAX</name></expr>)</condition><then>
+            <return>return <expr><name>buffer</name></expr>;</return></then></if>
+        <return>return <expr>(<name>ByteBuffer</name>) <call><name><name>buffer</name>.<name>slice</name></name><argument_list>()</argument_list></call>.<call><name>limit</name><argument_list>(<argument><expr><call><name><name>buffer</name>.<name>position</name></name><argument_list>()</argument_list></call> + <name>MAX</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validatePredicate</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ColumnParent</name></type> <name>column_parent</name></decl></param>, <param><decl><type><name>SlicePredicate</name></type> <name>predicate</name></decl></param>)</parameter_list>
+            <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name><name>predicate</name>.<name>column_names</name></name> == null &amp;&amp; <name><name>predicate</name>.<name>slice_range</name></name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"predicate column_names and slice_range may not both be null"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><name><name>predicate</name>.<name>column_names</name></name> != null &amp;&amp; <name><name>predicate</name>.<name>slice_range</name></name> != null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"predicate column_names and slice_range may not both be present"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr><call><name><name>predicate</name>.<name>getSlice_range</name></name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name>validateRange</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>column_parent</name></expr></argument>, <argument><expr><name><name>predicate</name>.<name>slice_range</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><call><name>validateColumnNames</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>column_parent</name></expr></argument>, <argument><expr><name><name>predicate</name>.<name>column_names</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateKeyRange</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>superColumn</name></decl></param>, <param><decl><type><name>KeyRange</name></type> <name>range</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>(<name><name>range</name>.<name>start_key</name></name> == null) == (<name><name>range</name>.<name>start_token</name></name> == null)
+            || (<name><name>range</name>.<name>end_key</name></name> == null) == (<name><name>range</name>.<name>end_token</name></name> == null)</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"exactly one each of {start key, start token} and {end key, end token} must be specified"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+
+        <comment type="line">// (key, token) is supported (for wide-row CFRR) but not (token, key)</comment>
+        <if>if <condition>(<expr><name><name>range</name>.<name>start_token</name></name> != null &amp;&amp; <name><name>range</name>.<name>end_key</name></name> != null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"start token + end key is not a supported key range"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>IPartitioner</name></type> <name>p</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name><name>range</name>.<name>start_key</name></name> != null &amp;&amp; <name><name>range</name>.<name>end_key</name></name> != null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>Token</name></type> <name>startToken</name> <init>= <expr><call><name><name>p</name>.<name>getToken</name></name><argument_list>(<argument><expr><name><name>range</name>.<name>start_key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>Token</name></type> <name>endToken</name> <init>= <expr><call><name><name>p</name>.<name>getToken</name></name><argument_list>(<argument><expr><name><name>range</name>.<name>end_key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>startToken</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name>endToken</name></expr></argument>)</argument_list></call> &gt; 0 &amp;&amp; !<call><name><name>endToken</name>.<name>isMinimum</name></name><argument_list>(<argument><expr><name>p</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>p</name>.<name>preservesOrder</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"start key must sort before (or equal to) finish key in your partitioner!"</expr></argument>)</argument_list></call></expr>;</throw></then>
+                <else>else
+                    <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"start key's token sorts after end key's token.  this is not allowed; you probably should not specify end key at all except with an ordered partitioner"</expr></argument>)</argument_list></call></expr>;</throw></else></if>
+            }</block></then></if>
+        }</block></then>
+        <else>else <if>if <condition>(<expr><name><name>range</name>.<name>start_key</name></name> != null &amp;&amp; <name><name>range</name>.<name>end_token</name></name> != null</expr>)</condition><then>
+        <block>{
+            <comment type="line">// start_token/end_token can wrap, but key/token should not</comment>
+            <decl_stmt><decl><type><name>RowPosition</name></type> <name>stop</name> <init>= <expr><call><name><name>p</name>.<name>getTokenFactory</name></name><argument_list>()</argument_list></call>.<call><name>fromString</name><argument_list>(<argument><expr><name><name>range</name>.<name>end_token</name></name></expr></argument>)</argument_list></call>.<call><name>maxKeyBound</name><argument_list>(<argument><expr><name>p</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>RowPosition</name>.<name>forKey</name></name><argument_list>(<argument><expr><name><name>range</name>.<name>start_key</name></name></expr></argument>, <argument><expr><name>p</name></expr></argument>)</argument_list></call>.<call><name>compareTo</name><argument_list>(<argument><expr><name>stop</name></expr></argument>)</argument_list></call> &gt; 0</expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"Start key's token sorts after end token"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></then></if></else></if>
+
+        <expr_stmt><expr><call><name>validateFilterClauses</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name><name>range</name>.<name>row_filter</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr>!<call><name>isEmpty</name><argument_list>(<argument><expr><name><name>range</name>.<name>row_filter</name></name></expr></argument>)</argument_list></call> &amp;&amp; <name>superColumn</name> != null</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"super columns are not supported for indexing"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><name><name>range</name>.<name>count</name></name> &lt;= 0</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"maxRows must be positive"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>isEmpty</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name>clause</name> == null || <call><name><name>clause</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateIndexClauses</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>IndexClause</name></type> <name>index_clause</name></decl></param>)</parameter_list>
+    <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>index_clause</name>.<name>expressions</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"index clause list may not be empty"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr>!<call><name>validateFilterClauses</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name><name>index_clause</name>.<name>expressions</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"No indexed columns present in index clause with operator EQ"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <comment type="line">// return true if index_clause contains an indexed columns with operator EQ</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>validateFilterClauses</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>index_clause</name></decl></param>)</parameter_list>
+    <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name>isEmpty</name><argument_list>(<argument><expr><name>index_clause</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <comment type="line">// no filter to apply</comment>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>SecondaryIndexManager</name></type> <name>idxManager</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>metadata</name>.<name>ksName</name></name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>)</argument_list></call>.<name>indexManager</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>nameValidator</name> <init>=  <expr><call><name><name>ColumnFamily</name>.<name>getComparatorFor</name></name><argument_list>(<argument><expr><name><name>metadata</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>boolean</name></type> <name>isIndexed</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>IndexExpression</name></type> <name>expression</name> <range>: <expr><name>index_clause</name></expr></range></decl></init>)
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>nameValidator</name>.<name>validate</name></name><argument_list>(<argument><expr><name><name>expression</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>me</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[%s]=[%s] failed name validation (%s)"</expr></argument>,
+                                                                                  <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name><name>expression</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                                                                  <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name><name>expression</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                                                                  <argument><expr><call><name><name>me</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+
+            <if>if <condition>(<expr><call><name><name>expression</name>.<name>value</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; 0xFFFF</expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"Index expression values may not be larger than 64K"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>valueValidator</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getValueValidator</name></name><argument_list>(<argument><expr><name><name>metadata</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>metadata</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name><name>expression</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>valueValidator</name>.<name>validate</name></name><argument_list>(<argument><expr><name><name>expression</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>MarshalException</name></type> <name>me</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[%s]=[%s] failed value validation (%s)"</expr></argument>,
+                                                                                  <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name><name>expression</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                                                                  <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name><name>expression</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                                                                  <argument><expr><call><name><name>me</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+
+            <expr_stmt><expr><name>isIndexed</name> |= (<name><name>expression</name>.<name>op</name></name> == <name><name>IndexOperator</name>.<name>EQ</name></name>) &amp;&amp; <call><name><name>idxManager</name>.<name>indexes</name></name><argument_list>(<argument><expr><name><name>expression</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <return>return <expr><name>isIndexed</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateKeyspaceNotYetExisting</name><parameter_list>(<param><decl><type><name>String</name></type> <name>newKsName</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <comment type="line">// keyspace names must be unique case-insensitively because the keyspace name becomes the directory</comment>
+        <comment type="line">// where we store CF sstables.  Names that differ only in case would thus cause problems on</comment>
+        <comment type="line">// case-insensitive filesystems (NTFS, most installations of HFS+).</comment>
+        <for>for (<init><decl><type><name>String</name></type> <name>ksName</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTables</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>ksName</name>.<name>equalsIgnoreCase</name></name><argument_list>(<argument><expr><name>newKsName</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Keyspace names must be case-insensitively unique (\"%s\" conflicts with \"%s\")"</expr></argument>,
+                                                                                  <argument><expr><name>newKsName</name></expr></argument>,
+                                                                                  <argument><expr><name>ksName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateKeyspaceNotSystem</name><parameter_list>(<param><decl><type><name>String</name></type> <name>modifiedKeyspace</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>modifiedKeyspace</name>.<name>equalsIgnoreCase</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_KS</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>InvalidRequestException</name></name><argument_list>(<argument><expr>"system keyspace is not user-modifiable"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>IDiskAtomFilter</name></type> <name>asIFilter</name><parameter_list>(<param><decl><type><name>SlicePredicate</name></type> <name>sp</name></decl></param>, <param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>SliceRange</name></type> <name>sr</name> <init>= <expr><name><name>sp</name>.<name>slice_range</name></name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>sr</name> == null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>ss</name> <init>= <expr>new <call><name><name>TreeSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>comparator</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>ss</name>.<name>addAll</name></name><argument_list>(<argument><expr><name><name>sp</name>.<name>column_names</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>new <call><name>NamesQueryFilter</name><argument_list>(<argument><expr><name>ss</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then>
+        <else>else
+        <block>{
+            <return>return <expr>new <call><name>SliceQueryFilter</name><argument_list>(<argument><expr><name><name>sr</name>.<name>start</name></name></expr></argument>, <argument><expr><name><name>sr</name>.<name>finish</name></name></expr></argument>, <argument><expr><name><name>sr</name>.<name>reversed</name></name></expr></argument>, <argument><expr><name><name>sr</name>.<name>count</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></else></if>
+    }</block></function>
+}</block></class>
+</unit>

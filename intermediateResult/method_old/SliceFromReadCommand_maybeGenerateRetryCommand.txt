@@ -1,0 +1,20 @@
+@Override
+    public ReadCommand maybeGenerateRetryCommand(RepairCallback handler, Row row)
+    {
+        int maxLiveColumns = handler.getMaxLiveColumns();
+        int liveColumnsInRow = row != null ? row.getLiveColumnCount() : 0;
+
+        // We generate a retry if at least one node reply with count live columns but after merge we have less
+        // than the total number of column we are interested in (which may be < count on a retry)
+        if ((maxLiveColumns >= count) && (liveColumnsInRow < getOriginalRequestedCount()))
+        {
+            // We asked t (= count) live columns and got l (=liveColumnsInRow) ones.
+            // From that, we can estimate that on this row, for x requested
+            // columns, only l/t end up live after reconciliation. So for next
+            // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
+            int retryCount = liveColumnsInRow == 0 ? count + 1 : ((count * count) / liveColumnsInRow) + 1;
+            return new RetriedSliceFromReadCommand(table, key, queryPath, start, finish, reversed, getOriginalRequestedCount(), retryCount);
+        }
+
+        return null;
+    }

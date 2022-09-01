@@ -1,0 +1,456 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\tools\BulkLoader.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tools</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>cli</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>auth</name>.<name>IAuthenticator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>SystemTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableLoader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>PendingFile</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>OutputHandler</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>protocol</name>.<name>TBinaryProtocol</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>protocol</name>.<name>TProtocol</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TFramedTransport</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TSocket</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TTransport</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>BulkLoader</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>TOOL_NAME</name> <init>= <expr>"sstableloader"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>VERBOSE_OPTION</name>  <init>= <expr>"verbose"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>DEBUG_OPTION</name>  <init>= <expr>"debug"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>HELP_OPTION</name>  <init>= <expr>"help"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>NOPROGRESS_OPTION</name>  <init>= <expr>"no-progress"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>IGNORE_NODES_OPTION</name>  <init>= <expr>"ignore"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>INITIAL_HOST_ADDRESS_OPTION</name> <init>= <expr>"nodes"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>RPC_PORT_OPTION</name> <init>= <expr>"port"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>USER_OPTION</name> <init>= <expr>"username"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>PASSWD_OPTION</name> <init>= <expr>"password"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>THROTTLE_MBITS</name> <init>= <expr>"throttle"</expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>main</name><parameter_list>(<param><decl><type><name>String</name></type> <name><name>args</name><index>[]</index></name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>LoaderOptions</name></type> <name>options</name> <init>= <expr><call><name><name>LoaderOptions</name>.<name>parseArgs</name></name><argument_list>(<argument><expr><name>args</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>OutputHandler</name></type> <name>handler</name> <init>= <expr>new <call><name><name>OutputHandler</name>.<name>SystemOutput</name></name><argument_list>(<argument><expr><name><name>options</name>.<name>verbose</name></name></expr></argument>, <argument><expr><name><name>options</name>.<name>debug</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>SSTableLoader</name></type> <name>loader</name> <init>= <expr>new <call><name>SSTableLoader</name><argument_list>(<argument><expr><name><name>options</name>.<name>directory</name></name></expr></argument>, <argument><expr>new <call><name>ExternalClient</name><argument_list>(<argument><expr><name>handler</name></expr></argument>, <argument><expr><name><name>options</name>.<name>hosts</name></name></expr></argument>, <argument><expr><name><name>options</name>.<name>rpcPort</name></name></expr></argument>, <argument><expr><name><name>options</name>.<name>user</name></name></expr></argument>, <argument><expr><name><name>options</name>.<name>passwd</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>handler</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>setStreamThroughputOutboundMegabitsPerSec</name></name><argument_list>(<argument><expr><name><name>options</name>.<name>throttle</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name><name>SSTableLoader</name>.<name>LoaderFuture</name></name></type> <name>future</name> <init>= <expr><call><name><name>loader</name>.<name>stream</name></name><argument_list>(<argument><expr><name><name>options</name>.<name>ignores</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name><name>options</name>.<name>noProgress</name></name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>future</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name>ProgressIndicator</name></type> <name>indicator</name> <init>= <expr>new <call><name>ProgressIndicator</name><argument_list>(<argument><expr><call><name><name>future</name>.<name>getPendingFiles</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>indicator</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>System</name>.<name>out</name>.<name>println</name></name><argument_list>(<argument><expr>""</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>boolean</name></type> <name>printEnd</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+                <while>while <condition>(<expr>!<call><name><name>future</name>.<name>isDone</name></name><argument_list>()</argument_list></call></expr>)</condition>
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>indicator</name>.<name>printProgress</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <comment type="line">// We're done with streaming</comment>
+                        <expr_stmt><expr><call><name><name>System</name>.<name>out</name>.<name>println</name></name><argument_list>(<argument><expr>"\nWaiting for targets to rebuild indexes ..."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>printEnd</name> = true</expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>future</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <assert>assert <expr><call><name><name>future</name>.<name>isDone</name></name><argument_list>()</argument_list></call></expr>;</assert>
+                    }</block></then>
+                    <else>else
+                    <block>{
+                        <try>try <block>{ <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr>1000L</expr></argument>)</argument_list></call></expr>;</expr_stmt> }</block> <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list> <block>{}</block></catch></try>
+                    }</block></else></if>
+                }</block></while>
+                <if>if <condition>(<expr>!<name>printEnd</name></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>indicator</name>.<name>printProgress</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>future</name>.<name>hadFailures</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr>"Streaming to the following hosts failed:"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>future</name>.<name>getFailedHosts</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></else></if>
+
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// We need that to stop non daemonized threads</comment>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name><name>options</name>.<name>debug</name></name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>e</name>.<name>printStackTrace</name></name><argument_list>(<argument><expr><name><name>System</name>.<name>err</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="line">// Return true when everything is at 100%</comment>
+    <class><specifier>static</specifier> class <name>ProgressIndicator</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>filesByHost</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>startTime</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>lastProgress</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>lastTime</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>ProgressIndicator</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>filesByHost</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>filesByHost</name></name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>filesByHost</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>startTime</name> = <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>printProgress</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>boolean</name></type> <name>done</name> <init>= <expr>true</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"\rprogress: "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>totalProgress</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>totalSize</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>filesByHost</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>progress</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>completed</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></type> <name>pendings</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>PendingFile</name></type> <name>f</name> <range>: <expr><name>pendings</name></expr></range></decl></init>)
+                <block>{
+                    <expr_stmt><expr><name>progress</name> += <name><name>f</name>.<name>progress</name></name></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>size</name> += <name><name>f</name>.<name>size</name></name></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><name><name>f</name>.<name>progress</name></name> == <name><name>f</name>.<name>size</name></name></expr>)</condition><then>
+                        <expr_stmt><expr><name>completed</name>++</expr>;</expr_stmt></then></if>
+                }</block></for>
+                <expr_stmt><expr><name>totalProgress</name> += <name>progress</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name>totalSize</name> += <name>size</name></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>completed</name> != <call><name><name>pendings</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>done</name> = false</expr>;</expr_stmt></then></if>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"["</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>" "</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>completed</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"/"</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>pendings</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>" ("</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>size</name> == 0 ? 100L : <name>progress</name> * 100L / <name>size</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>")] "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <decl_stmt><decl><type><name>long</name></type> <name>time</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>deltaTime</name> <init>= <expr><name>time</name> - <name>lastTime</name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>lastTime</name> = <name>time</name></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>deltaProgress</name> <init>= <expr><name>totalProgress</name> - <name>lastProgress</name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>lastProgress</name> = <name>totalProgress</name></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"[total: "</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>totalSize</name> == 0 ? 100L : <name>totalProgress</name> * 100L / <name>totalSize</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>" - "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name>mbPerSec</name><argument_list>(<argument><expr><name>deltaProgress</name></expr></argument>, <argument><expr><name>deltaTime</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"MB/s"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>" (avg: "</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name>mbPerSec</name><argument_list>(<argument><expr><name>totalProgress</name></expr></argument>, <argument><expr><name>time</name> - <name>startTime</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"MB/s)]"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>out</name>.<name>print</name></name><argument_list>(<argument><expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>done</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>int</name></type> <name>mbPerSec</name><parameter_list>(<param><decl><type><name>long</name></type> <name>bytes</name></decl></param>, <param><decl><type><name>long</name></type> <name>timeInMs</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>double</name></type> <name>bytesPerMs</name> <init>= <expr>((<name>double</name>)<name>bytes</name>) / <name>timeInMs</name></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call>(<name>int</name>)<argument_list>(<argument><expr>(<name>bytesPerMs</name> * 1000) / (1024 * 2024)</expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>static</specifier> class <name>ExternalClient</name> <super><extends>extends <name><name>SSTableLoader</name>.<name>Client</name></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>knownCfs</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>hosts</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>rpcPort</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>user</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>passwd</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>ExternalClient</name><parameter_list>(<param><decl><type><name>OutputHandler</name></type> <name>outputHandler</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>hosts</name></decl></param>, <param><decl><type><name>int</name></type> <name>port</name></decl></param>, <param><decl><type><name>String</name></type> <name>user</name></decl></param>, <param><decl><type><name>String</name></type> <name>passwd</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>hosts</name></name> = <name>hosts</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>rpcPort</name></name> = <name>port</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>user</name></name> = <name>user</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>passwd</name></name> = <name>passwd</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>init</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>hostiter</name> <init>= <expr><call><name><name>hosts</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <while>while <condition>(<expr><call><name><name>hostiter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <try>try
+                <block>{
+                    <comment type="line">// Query endpoint to ranges map and schemas from thrift</comment>
+                    <decl_stmt><decl><type><name>InetAddress</name></type> <name>host</name> <init>= <expr><call><name><name>hostiter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name><name>Cassandra</name>.<name>Client</name></name></type> <name>client</name> <init>= <expr><call><name>createThriftClient</name><argument_list>(<argument><expr><call><name><name>host</name>.<name>getHostAddress</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>rpcPort</name></expr></argument>, <argument><expr><name><name>this</name>.<name>user</name></name></expr></argument>, <argument><expr><name><name>this</name>.<name>passwd</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <expr_stmt><expr><call><name>setPartitioner</name><argument_list>(<argument><expr><call><name><name>client</name>.<name>describe_partitioner</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <decl_stmt><decl><type><name><name>Token</name>.<name>TokenFactory</name></name></type> <name>tkFactory</name> <init>= <expr><call><name>getPartitioner</name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <for>for (<init><decl><type><name>TokenRange</name></type> <name>tr</name> <range>: <expr><call><name><name>client</name>.<name>describe_ring</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+                    <block>{
+                        <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <init>= <expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>tkFactory</name>.<name>fromString</name></name><argument_list>(<argument><expr><name><name>tr</name>.<name>start_token</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>tkFactory</name>.<name>fromString</name></name><argument_list>(<argument><expr><name><name>tr</name>.<name>end_token</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <for>for (<init><decl><type><name>String</name></type> <name>ep</name> <range>: <expr><name><name>tr</name>.<name>endpoints</name></name></expr></range></decl></init>)
+                        <block>{
+                            <expr_stmt><expr><call><name>addRangeForEndpoint</name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></for>
+                    }</block></for>
+
+                    <decl_stmt><decl><type><name>String</name></type> <name>query</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"SELECT columnfamily_name FROM %s.%s WHERE keyspace_name = '%s'"</expr></argument>,
+                                                 <argument><expr><name><name>Table</name>.<name>SYSTEM_KS</name></name></expr></argument>,
+                                                 <argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNFAMILIES_CF</name></name></expr></argument>,
+                                                 <argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>CqlResult</name></type> <name>result</name> <init>= <expr><call><name><name>client</name>.<name>execute_cql3_query</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr><name>query</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Compression</name>.<name>NONE</name></name></expr></argument>, <argument><expr><name><name>ConsistencyLevel</name>.<name>ONE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <for>for (<init><decl><type><name>CqlRow</name></type> <name>row</name> <range>: <expr><name><name>result</name>.<name>rows</name></name></expr></range></decl></init>)
+                        <expr_stmt><expr><call><name><name>knownCfs</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>String</name><argument_list>(<argument><expr><call><name><name>row</name>.<name>getColumns</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>.<call><name>getValue</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>"UTF8"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                    <break>break;</break>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <if>if <condition>(<expr>!<call><name><name>hostiter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Could not retrieve endpoint ranges: "</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                }</block></catch></try>
+            }</block></while>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>validateColumnFamily</name><parameter_list>(<param><decl><type><name>String</name></type> <name>keyspace</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>knownCfs</name>.<name>contains</name></name><argument_list>(<argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Cassandra</name>.<name>Client</name></name></type> <name>createThriftClient</name><parameter_list>(<param><decl><type><name>String</name></type> <name>host</name></decl></param>, <param><decl><type><name>int</name></type> <name>port</name></decl></param>, <param><decl><type><name>String</name></type> <name>user</name></decl></param>, <param><decl><type><name>String</name></type> <name>passwd</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>TSocket</name></type> <name>socket</name> <init>= <expr>new <call><name>TSocket</name><argument_list>(<argument><expr><name>host</name></expr></argument>, <argument><expr><name>port</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TTransport</name></type> <name>trans</name> <init>= <expr>new <call><name>TFramedTransport</name><argument_list>(<argument><expr><name>socket</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>trans</name>.<name>open</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>TProtocol</name></type> <name>protocol</name> <init>= <expr>new <call><name>TBinaryProtocol</name><argument_list>(<argument><expr><name>trans</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Cassandra</name>.<name>Client</name></name></type> <name>client</name> <init>= <expr>new <call><name><name>Cassandra</name>.<name>Client</name></name><argument_list>(<argument><expr><name>protocol</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>user</name> != null &amp;&amp; <name>passwd</name> != null</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>credentials</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>credentials</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>USERNAME_KEY</name></name></expr></argument>, <argument><expr><name>user</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>credentials</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>PASSWORD_KEY</name></name></expr></argument>, <argument><expr><name>passwd</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>AuthenticationRequest</name></type> <name>authenticationRequest</name> <init>= <expr>new <call><name>AuthenticationRequest</name><argument_list>(<argument><expr><name>credentials</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>client</name>.<name>login</name></name><argument_list>(<argument><expr><name>authenticationRequest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+            <return>return <expr><name>client</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>static</specifier> class <name>LoaderOptions</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>File</name></type> <name>directory</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>public</specifier> <name>boolean</name></type> <name>debug</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <name>boolean</name></type> <name>verbose</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <name>boolean</name></type> <name>noProgress</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <name>int</name></type> <name>rpcPort</name> <init>= <expr>9160</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <name>String</name></type> <name>user</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <name>String</name></type> <name>passwd</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <name>int</name></type> <name>throttle</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>hosts</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>ignores</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <constructor><name>LoaderOptions</name><parameter_list>(<param><decl><type><name>File</name></type> <name>directory</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>directory</name></name> = <name>directory</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <specifier>static</specifier> <name>LoaderOptions</name></type> <name>parseArgs</name><parameter_list>(<param><decl><type><name>String</name></type> <name><name>cmdArgs</name><index>[]</index></name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>CommandLineParser</name></type> <name>parser</name> <init>= <expr>new <call><name>GnuParser</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>CmdLineOptions</name></type> <name>options</name> <init>= <expr><call><name>getCmdLineOptions</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <decl_stmt><decl><type><name>CommandLine</name></type> <name>cmd</name> <init>= <expr><call><name><name>parser</name>.<name>parse</name></name><argument_list>(<argument><expr><name>options</name></expr></argument>, <argument><expr><name>cmdArgs</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>HELP_OPTION</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name>printUsage</name><argument_list>(<argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+
+                <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>args</name> <init>= <expr><call><name><name>cmd</name>.<name>getArgs</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name><name>args</name>.<name>length</name></name> == 0</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr>"Missing sstable directory argument"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>printUsage</name><argument_list>(<argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+
+                <if>if <condition>(<expr><name><name>args</name>.<name>length</name></name> &gt; 1</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr>"Too many arguments"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>printUsage</name><argument_list>(<argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+
+                <decl_stmt><decl><type><name>String</name></type> <name>dirname</name> <init>= <expr><name><name>args</name><index>[<expr>0</expr>]</index></name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>File</name></type> <name>dir</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>dirname</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr>!<call><name><name>dir</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name>errorMsg</name><argument_list>(<argument><expr>"Unknown directory: " + <name>dirname</name></expr></argument>, <argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr>!<call><name><name>dir</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name>errorMsg</name><argument_list>(<argument><expr><name>dirname</name> + " is not a directory"</expr></argument>, <argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <decl_stmt><decl><type><name>LoaderOptions</name></type> <name>opts</name> <init>= <expr>new <call><name>LoaderOptions</name><argument_list>(<argument><expr><name>dir</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <expr_stmt><expr><name><name>opts</name>.<name>debug</name></name> = <call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>DEBUG_OPTION</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>opts</name>.<name>verbose</name></name> = <call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>VERBOSE_OPTION</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>opts</name>.<name>noProgress</name></name> = <call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>NOPROGRESS_OPTION</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <if>if <condition>(<expr><call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>THROTTLE_MBITS</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name><name>opts</name>.<name>throttle</name></name> = <call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><call><name><name>cmd</name>.<name>getOptionValue</name></name><argument_list>(<argument><expr><name>THROTTLE_MBITS</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>RPC_PORT_OPTION</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name><name>opts</name>.<name>rpcPort</name></name> = <call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><call><name><name>cmd</name>.<name>getOptionValue</name></name><argument_list>(<argument><expr><name>RPC_PORT_OPTION</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>USER_OPTION</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name><name>opts</name>.<name>user</name></name> = <call><name><name>cmd</name>.<name>getOptionValue</name></name><argument_list>(<argument><expr><name>USER_OPTION</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>PASSWD_OPTION</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name><name>opts</name>.<name>passwd</name></name> = <call><name><name>cmd</name>.<name>getOptionValue</name></name><argument_list>(<argument><expr><name>PASSWD_OPTION</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>INITIAL_HOST_ADDRESS_OPTION</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>nodes</name> <init>= <expr><call><name><name>cmd</name>.<name>getOptionValue</name></name><argument_list>(<argument><expr><name>INITIAL_HOST_ADDRESS_OPTION</name></expr></argument>)</argument_list></call>.<call><name>split</name><argument_list>(<argument><expr>","</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <try>try
+                    <block>{
+                        <for>for (<init><decl><type><name>String</name></type> <name>node</name> <range>: <expr><name>nodes</name></expr></range></decl></init>)
+                        <block>{
+                            <expr_stmt><expr><call><name><name>opts</name>.<name>hosts</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><call><name><name>node</name>.<name>trim</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></for>
+                    }</block>
+                    <catch>catch <parameter_list>(<param><decl><type><name>UnknownHostException</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name>errorMsg</name><argument_list>(<argument><expr>"Unknown host: " + <call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></catch></try>
+
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr>"Initial hosts must be specified (-d)"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>printUsage</name><argument_list>(<argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+
+                <if>if <condition>(<expr><call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>IGNORE_NODES_OPTION</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>nodes</name> <init>= <expr><call><name><name>cmd</name>.<name>getOptionValue</name></name><argument_list>(<argument><expr><name>IGNORE_NODES_OPTION</name></expr></argument>)</argument_list></call>.<call><name>split</name><argument_list>(<argument><expr>","</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <try>try
+                    <block>{
+                        <for>for (<init><decl><type><name>String</name></type> <name>node</name> <range>: <expr><name>nodes</name></expr></range></decl></init>)
+                        <block>{
+                            <expr_stmt><expr><call><name><name>opts</name>.<name>ignores</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><call><name><name>node</name>.<name>trim</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></for>
+                    }</block>
+                    <catch>catch <parameter_list>(<param><decl><type><name>UnknownHostException</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name>errorMsg</name><argument_list>(<argument><expr>"Unknown host: " + <call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></catch></try>
+                }</block></then></if>
+
+                <return>return <expr><name>opts</name></expr>;</return>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>ParseException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>errorMsg</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr>null</expr>;</return>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>errorMsg</name><parameter_list>(<param><decl><type><name>String</name></type> <name>msg</name></decl></param>, <param><decl><type><name>CmdLineOptions</name></type> <name>options</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><name>msg</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>printUsage</name><argument_list>(<argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+        <function><type><specifier>private</specifier> <specifier>static</specifier> <name>CmdLineOptions</name></type> <name>getCmdLineOptions</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>CmdLineOptions</name></type> <name>options</name> <init>= <expr>new <call><name>CmdLineOptions</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>DEBUG_OPTION</name></expr></argument>,        <argument><expr>"display stack traces"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"v"</expr></argument>,  <argument><expr><name>VERBOSE_OPTION</name></expr></argument>,      <argument><expr>"verbose output"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"h"</expr></argument>,  <argument><expr><name>HELP_OPTION</name></expr></argument>,         <argument><expr>"display this help message"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>NOPROGRESS_OPTION</name></expr></argument>,   <argument><expr>"don't display progress"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"i"</expr></argument>,  <argument><expr><name>IGNORE_NODES_OPTION</name></expr></argument>, <argument><expr>"NODES"</expr></argument>, <argument><expr>"don't stream to this (comma separated) list of nodes"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"d"</expr></argument>,  <argument><expr><name>INITIAL_HOST_ADDRESS_OPTION</name></expr></argument>, <argument><expr>"initial hosts"</expr></argument>, <argument><expr>"try to connect to these hosts (comma separated) initially for ring information"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"p"</expr></argument>,  <argument><expr><name>RPC_PORT_OPTION</name></expr></argument>, <argument><expr>"rpc port"</expr></argument>, <argument><expr>"port used for rpc (default 9160)"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"t"</expr></argument>,  <argument><expr><name>THROTTLE_MBITS</name></expr></argument>, <argument><expr>"throttle"</expr></argument>, <argument><expr>"throttle speed in Mbits (default unlimited)"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"u"</expr></argument>,  <argument><expr><name>USER_OPTION</name></expr></argument>, <argument><expr>"username"</expr></argument>, <argument><expr>"username for cassandra authentication"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"pw"</expr></argument>, <argument><expr><name>PASSWD_OPTION</name></expr></argument>, <argument><expr>"password"</expr></argument>, <argument><expr>"password for cassandra authentication"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>options</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>printUsage</name><parameter_list>(<param><decl><type><name>Options</name></type> <name>options</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>usage</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%s [options] &lt;dir_path&gt;"</expr></argument>, <argument><expr><name>TOOL_NAME</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>StringBuilder</name></type> <name>header</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"--\n"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"Bulk load the sstables found in the directory &lt;dir_path&gt; to the configured cluster."</expr></argument> )</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"The parent directory of &lt;dir_path&gt; is used as the keyspace name. "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"So for instance, to load an sstable named Standard1-g-1-Data.db into keyspace Keyspace1, "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"you will need to have the files Standard1-g-1-Data.db and Standard1-g-1-Index.db in a "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"directory Keyspace1/Standard1/ in the directory and call: sstableloader Keyspace1/Standard1"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"\n--\n"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"Options are:"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr>new <call><name>HelpFormatter</name><argument_list>()</argument_list></call>.<call><name>printHelp</name><argument_list>(<argument><expr><name>usage</name></expr></argument>, <argument><expr><call><name><name>header</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>options</name></expr></argument>, <argument><expr>""</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>CmdLineOptions</name> <super><extends>extends <name>Options</name></extends></super>
+    <block>{
+        <comment type="block" format="javadoc">/**
+         * Add option with argument and argument name
+         * @param opt shortcut for option name
+         * @param longOpt complete option name
+         * @param argName argument name
+         * @param description description of the option
+         * @return updated Options object
+         */</comment>
+        <function><type><specifier>public</specifier> <name>Options</name></type> <name>addOption</name><parameter_list>(<param><decl><type><name>String</name></type> <name>opt</name></decl></param>, <param><decl><type><name>String</name></type> <name>longOpt</name></decl></param>, <param><decl><type><name>String</name></type> <name>argName</name></decl></param>, <param><decl><type><name>String</name></type> <name>description</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>Option</name></type> <name>option</name> <init>= <expr>new <call><name>Option</name><argument_list>(<argument><expr><name>opt</name></expr></argument>, <argument><expr><name>longOpt</name></expr></argument>, <argument><expr>true</expr></argument>, <argument><expr><name>description</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>option</name>.<name>setArgName</name></name><argument_list>(<argument><expr><name>argName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <return>return <expr><call><name>addOption</name><argument_list>(<argument><expr><name>option</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Add option without argument
+         * @param opt shortcut for option name
+         * @param longOpt complete option name
+         * @param description description of the option
+         * @return updated Options object
+         */</comment>
+        <function><type><specifier>public</specifier> <name>Options</name></type> <name>addOption</name><parameter_list>(<param><decl><type><name>String</name></type> <name>opt</name></decl></param>, <param><decl><type><name>String</name></type> <name>longOpt</name></decl></param>, <param><decl><type><name>String</name></type> <name>description</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name>addOption</name><argument_list>(<argument><expr>new <call><name>Option</name><argument_list>(<argument><expr><name>opt</name></expr></argument>, <argument><expr><name>longOpt</name></expr></argument>, <argument><expr>false</expr></argument>, <argument><expr><name>description</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

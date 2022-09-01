@@ -1,0 +1,47 @@
+ColumnFamily getColumnFamily(QueryFilter filter, int gcBefore)
+    {
+        assert columnFamily.equals(filter.getColumnFamilyName()) : filter.getColumnFamilyName();
+
+        ColumnFamily result = null;
+
+        long start = System.nanoTime();
+        try
+        {
+            if (isRowCacheEnabled())
+            {
+                UUID cfId = Schema.instance.getId(table.name, columnFamily);
+                if (cfId == null)
+                {
+                    logger.trace("no id found for {}.{}", table.name, columnFamily);
+                    return null;
+                }
+
+                ColumnFamily cached = getThroughCache(cfId, filter);
+                if (cached == null)
+                {
+                    logger.trace("cached row is empty");
+                    return null;
+                }
+
+                result = filterColumnFamily(cached, filter, gcBefore);
+            }
+            else
+            {
+                ColumnFamily cf = getTopLevelColumns(filter, gcBefore, false);
+
+                if (cf == null)
+                    return null;
+
+                // TODO this is necessary because when we collate supercolumns together, we don't check
+                // their subcolumns for relevance, so we need to do a second prune post facto here.
+                result = cf.isSuper() ? removeDeleted(cf, gcBefore) : removeDeletedCF(cf, gcBefore);
+
+            }
+        }
+        finally
+        {
+            metric.readLatency.addNano(System.nanoTime() - start);
+        }
+
+        return result;
+    }

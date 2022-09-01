@@ -1,0 +1,35 @@
+public Message.Response execute(QueryState state)
+    {
+        try
+        {
+            UUID tracingId = null;
+            if (isTracingRequested())
+            {
+                tracingId = UUIDGen.getTimeUUID();
+                state.prepareTracingSession(tracingId);
+            }
+
+            if (state.traceNextQuery())
+            {
+                state.createTracingSession();
+                Tracing.instance().begin("Execute CQL3 query", ImmutableMap.of("query", query));
+            }
+
+            Message.Response response = QueryProcessor.process(query, consistency, state);
+
+            if (tracingId != null)
+                response.setTracingId(tracingId);
+
+            return response;
+        }
+        catch (Exception e)
+        {
+            if (!((e instanceof RequestValidationException) || (e instanceof RequestExecutionException)))
+                logger.error("Unexpected error during query", e);
+            return ErrorMessage.fromException(e);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
+    }

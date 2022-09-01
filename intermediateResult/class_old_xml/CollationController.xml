@@ -1,0 +1,311 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\CollationController.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Maps</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>IColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>ISSTableColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>SimpleAbstractColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>SizeTieredCompactionStrategy</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>NamesQueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>CounterColumnType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>CloseableIterator</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>CollationController</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CollationController</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>cfs</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>mutableColumns</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>QueryFilter</name></type> <name>filter</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>gcBefore</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>sstablesIterated</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CollationController</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>mutableColumns</name></decl></param>, <param><decl><type><name>QueryFilter</name></type> <name>filter</name></decl></param>, <param><decl><type><name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>cfs</name></name> = <name>cfs</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>mutableColumns</name></name> = <name>mutableColumns</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>filter</name></name> = <name>filter</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>gcBefore</name></name> = <name>gcBefore</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getTopLevelColumns</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>filter</name>.<name>filter</name></name> instanceof <name>NamesQueryFilter</name>
+               &amp;&amp; (<name><name>cfs</name>.<name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Standard</name></name> || <name><name>filter</name>.<name>path</name>.<name>superColumnName</name></name> != null)
+               &amp;&amp; <call><name><name>cfs</name>.<name>metadata</name>.<name>getDefaultValidator</name></name><argument_list>()</argument_list></call> != <name><name>CounterColumnType</name>.<name>instance</name></name>
+               ? <call><name>collectTimeOrderedData</name><argument_list>()</argument_list></call>
+               : <call><name>collectAllData</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Collects data in order of recency, using the sstable maxtimestamp data.
+     * Once we have data for all requests columns that is newer than the newest remaining maxtimestamp,
+     * we stop.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>ColumnFamily</name></type> <name>collectTimeOrderedData</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"collectTimeOrderedData"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// AtomicSortedColumns doesn't work for super columi ns (see #3821)</comment>
+        <decl_stmt><decl><type><name><name>ISortedColumns</name>.<name>Factory</name></name></type> <name>factory</name> <init>= <expr><name>mutableColumns</name>
+                                       ? <name><name>cfs</name>.<name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Super</name></name> ? <call><name><name>ThreadSafeSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call> : <call><name><name>AtomicSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call>
+                                       : <call><name><name>TreeMapBackedSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>container</name> <init>= <expr><call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name><name>cfs</name>.<name>metadata</name></name></expr></argument>, <argument><expr><name>factory</name></expr></argument>, <argument><expr><call><name><name>filter</name>.<name>filter</name>.<name>isReversed</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IColumnIterator</name></argument>&gt;</argument_list></name></type> <name>iterators</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>IColumnIterator</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>ColumnFamilyStore</name>.<name>ViewFragment</name></name></type> <name>view</name> <init>= <expr><call><name><name>cfs</name>.<name>markReferenced</name></name><argument_list>(<argument><expr><name><name>filter</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <for>for (<init><decl><type><name>Memtable</name></type> <name>memtable</name> <range>: <expr><name><name>view</name>.<name>memtables</name></name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>IColumnIterator</name></type> <name>iter</name> <init>= <expr><call><name><name>filter</name>.<name>getMemtableColumnIterator</name></name><argument_list>(<argument><expr><name>memtable</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>iter</name> != null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>iterators</name>.<name>add</name></name><argument_list>(<argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>container</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>iter</name>.<name>getColumnFamily</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <while>while <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+                        <expr_stmt><expr><call><name><name>container</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></while>
+                }</block></then></if>
+            }</block></for>
+
+            <comment type="line">// avoid changing the filter columns of the original filter</comment>
+            <comment type="line">// (reduceNameFilter removes columns that are known to be irrelevant)</comment>
+            <decl_stmt><decl><type><name><name>TreeSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>filterColumns</name> <init>= <expr>new <call><name><name>TreeSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>((<name>NamesQueryFilter</name>) <name><name>filter</name>.<name>filter</name></name>).<name>columns</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>QueryFilter</name></type> <name>reducedFilter</name> <init>= <expr>new <call><name>QueryFilter</name><argument_list>(<argument><expr><name><name>filter</name>.<name>key</name></name></expr></argument>, <argument><expr><name><name>filter</name>.<name>path</name></name></expr></argument>, <argument><expr>new <call><name>NamesQueryFilter</name><argument_list>(<argument><expr><name>filterColumns</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="block">/* add the SSTables on disk */</comment>
+            <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name><name>view</name>.<name>sstables</name></name></expr></argument>, <argument><expr><name><name>SSTable</name>.<name>maxTimestampComparator</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// read sorted sstables</comment>
+            <decl_stmt><decl><type><name>long</name></type> <name>mostRecentRowTombstone</name> <init>= <expr><name><name>Long</name>.<name>MIN_VALUE</name></name></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name><name>view</name>.<name>sstables</name></name></expr></range></decl></init>)
+            <block>{
+                <comment type="line">// if we've already seen a row tombstone with a timestamp greater </comment>
+                <comment type="line">// than the most recent update to this sstable, we're done, since the rest of the sstables</comment>
+                <comment type="line">// will also be older</comment>
+                <if>if <condition>(<expr><call><name><name>sstable</name>.<name>getMaxTimestamp</name></name><argument_list>()</argument_list></call> &lt; <name>mostRecentRowTombstone</name></expr>)</condition><then>
+                    <break>break;</break></then></if>
+                
+                <decl_stmt><decl><type><name>long</name></type> <name>currentMaxTs</name> <init>= <expr><call><name><name>sstable</name>.<name>getMaxTimestamp</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name>reduceNameFilter</name><argument_list>(<argument><expr><name>reducedFilter</name></expr></argument>, <argument><expr><name>container</name></expr></argument>, <argument><expr><name>currentMaxTs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr>((<name>NamesQueryFilter</name>) <name><name>reducedFilter</name>.<name>filter</name></name>).<call><name><name>columns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <break>break;</break></then></if>
+
+                <decl_stmt><decl><type><name>IColumnIterator</name></type> <name>iter</name> <init>= <expr><call><name><name>reducedFilter</name>.<name>getSSTableColumnIterator</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>iterators</name>.<name>add</name></name><argument_list>(<argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>iter</name>.<name>getColumnFamily</name></name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>iter</name>.<name>getColumnFamily</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><call><name><name>cf</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <comment type="line">// track the most recent row level tombstone we encounter</comment>
+                        <expr_stmt><expr><name>mostRecentRowTombstone</name> = <call><name><name>cf</name>.<name>getMarkedForDeleteAt</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                    
+                    <expr_stmt><expr><call><name><name>container</name>.<name>delete</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>sstablesIterated</name>++</expr>;</expr_stmt>
+                    <while>while <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+                        <expr_stmt><expr><call><name><name>container</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></while>
+                }</block></then></if>
+            }</block></for>
+
+            <comment type="line">// we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)</comment>
+            <comment type="line">// and "there used to be data, but it's gone now" (we should cache the empty CF so we don't need to rebuild that slower)</comment>
+            <if>if <condition>(<expr><call><name><name>iterators</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr>null</expr>;</return></then></if>
+
+            <comment type="line">// do a final collate.  toCollate is boilerplate required to provide a CloseableIterator</comment>
+            <decl_stmt><decl><type><specifier>final</specifier> <name>ColumnFamily</name></type> <name>c2</name> <init>= <expr><name>container</name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>CloseableIterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>toCollate</name> <init>= <expr>new <class><super><name>SimpleAbstractColumnIterator</name></super><argument_list>()</argument_list>
+            <block>{
+                <decl_stmt><decl><type><specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name><name>c2</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <function><type><specifier>protected</specifier> <name>IColumn</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+                <block>{
+                    <return>return <expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call> ? <call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call> : <call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return>
+                }</block></function>
+
+                <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getColumnFamily</name><parameter_list>()</parameter_list>
+                <block>{
+                    <return>return <expr><name>c2</name></expr>;</return>
+                }</block></function>
+
+                <function><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>getKey</name><parameter_list>()</parameter_list>
+                <block>{
+                    <return>return <expr><name><name>filter</name>.<name>key</name></name></expr>;</return>
+                }</block></function>
+            }</block></class></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>returnCF</name> <init>= <expr><call><name><name>container</name>.<name>cloneMeShallow</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>filter</name>.<name>collateColumns</name></name><argument_list>(<argument><expr><name>returnCF</name></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>toCollate</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// "hoist up" the requested data into a more recent sstable</comment>
+            <if>if <condition>(<expr><name>sstablesIterated</name> &gt; <call><name><name>cfs</name>.<name>getMinimumCompactionThreshold</name></name><argument_list>()</argument_list></call>
+                &amp;&amp; !<call><name><name>cfs</name>.<name>isCompactionDisabled</name></name><argument_list>()</argument_list></call>
+                &amp;&amp; <call><name><name>cfs</name>.<name>getCompactionStrategy</name></name><argument_list>()</argument_list></call> instanceof <name>SizeTieredCompactionStrategy</name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>RowMutation</name></type> <name>rm</name> <init>= <expr>new <call><name>RowMutation</name><argument_list>(<argument><expr><name><name>cfs</name>.<name>table</name>.<name>name</name></name></expr></argument>, <argument><expr>new <call><name>Row</name><argument_list>(<argument><expr><name><name>filter</name>.<name>key</name></name></expr></argument>, <argument><expr><call><name><name>returnCF</name>.<name>cloneMe</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <comment type="line">// skipping commitlog and index updates is fine since we're just de-fragmenting existing data</comment>
+                    <expr_stmt><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><call><name><name>rm</name>.<name>getTable</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>apply</name><argument_list>(<argument><expr><name>rm</name></expr></argument>, <argument><expr>false</expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <comment type="line">// log and allow the result to be returned</comment>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Error re-writing read results"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></catch></try>
+            }</block></then></if>
+
+            <comment type="line">// Caller is responsible for final removeDeletedCF.  This is important for cacheRow to work correctly:</comment>
+            <return>return <expr><name>returnCF</name></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <for>for (<init><decl><type><name>IColumnIterator</name></type> <name>iter</name> <range>: <expr><name>iterators</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><call><name><name>SSTableReader</name>.<name>releaseReferences</name></name><argument_list>(<argument><expr><name><name>view</name>.<name>sstables</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * remove columns from @param filter where we already have data in @param returnCF newer than @param sstableTimestamp
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>reduceNameFilter</name><parameter_list>(<param><decl><type><name>QueryFilter</name></type> <name>filter</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>returnCF</name></decl></param>, <param><decl><type><name>long</name></type> <name>sstableTimestamp</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>AbstractColumnContainer</name></type> <name>container</name> <init>= <expr><name><name>filter</name>.<name>path</name>.<name>superColumnName</name></name> == null
+                                          ? <name>returnCF</name>
+                                          : (<name>SuperColumn</name>) <call><name><name>returnCF</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name><name>filter</name>.<name>path</name>.<name>superColumnName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// MIN_VALUE means we don't know any information</comment>
+        <if>if <condition>(<expr><name>container</name> == null || <name>sstableTimestamp</name> == <name><name>Long</name>.<name>MIN_VALUE</name></name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <for>for (<init><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>iterator</name> <init>= <expr>((<name>NamesQueryFilter</name>) <name><name>filter</name>.<name>filter</name></name>).<call><name><name>columns</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</init> <condition><expr><call><name><name>iterator</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr/>)
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>filterColumn</name> <init>= <expr><call><name><name>iterator</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>container</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>filterColumn</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>column</name> != null &amp;&amp; <call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call> &gt; <name>sstableTimestamp</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>iterator</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Collects data the brute-force way: gets an iterator for the filter in question
+     * from every memtable and sstable, then merges them together.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>ColumnFamily</name></type> <name>collectAllData</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"collectAllData"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// AtomicSortedColumns doesn't work for super columns (see #3821)</comment>
+        <decl_stmt><decl><type><name><name>ISortedColumns</name>.<name>Factory</name></name></type> <name>factory</name> <init>= <expr><name>mutableColumns</name>
+                                       ? <name><name>cfs</name>.<name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Super</name></name> ? <call><name><name>ThreadSafeSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call> : <call><name><name>AtomicSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call>
+                                       : <call><name><name>ArrayBackedSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>ColumnFamilyStore</name>.<name>ViewFragment</name></name></type> <name>view</name> <init>= <expr><call><name><name>cfs</name>.<name>markReferenced</name></name><argument_list>(<argument><expr><name><name>filter</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IColumnIterator</name></argument>&gt;</argument_list></name></type> <name>iterators</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>IColumnIterator</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name><name>view</name>.<name>memtables</name></name></expr></argument>)</argument_list></call> + <call><name><name>view</name>.<name>sstables</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>returnCF</name> <init>= <expr><call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name><name>cfs</name>.<name>metadata</name></name></expr></argument>, <argument><expr><name>factory</name></expr></argument>, <argument><expr><call><name><name>filter</name>.<name>filter</name>.<name>isReversed</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <for>for (<init><decl><type><name>Memtable</name></type> <name>memtable</name> <range>: <expr><name><name>view</name>.<name>memtables</name></name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>IColumnIterator</name></type> <name>iter</name> <init>= <expr><call><name><name>filter</name>.<name>getMemtableColumnIterator</name></name><argument_list>(<argument><expr><name>memtable</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>iter</name> != null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>returnCF</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>iter</name>.<name>getColumnFamily</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>iterators</name>.<name>add</name></name><argument_list>(<argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></for>
+            
+            <decl_stmt><decl><type><name>long</name></type> <name>mostRecentRowTombstone</name> <init>= <expr><name><name>Long</name>.<name>MIN_VALUE</name></name></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name><name>view</name>.<name>sstables</name></name></expr></range></decl></init>)
+            <block>{
+                <comment type="line">// if we've already seen a row tombstone with a timestamp greater </comment>
+                <comment type="line">// than the most recent update to this sstable, we can skip it</comment>
+                <if>if <condition>(<expr><call><name><name>sstable</name>.<name>getMaxTimestamp</name></name><argument_list>()</argument_list></call> &lt; <name>mostRecentRowTombstone</name></expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <decl_stmt><decl><type><name>IColumnIterator</name></type> <name>iter</name> <init>= <expr><call><name><name>filter</name>.<name>getSSTableColumnIterator</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>iterators</name>.<name>add</name></name><argument_list>(<argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>iter</name>.<name>getColumnFamily</name></name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>iter</name>.<name>getColumnFamily</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><call><name><name>cf</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><name>mostRecentRowTombstone</name> = <call><name><name>cf</name>.<name>getMarkedForDeleteAt</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+                    <expr_stmt><expr><call><name><name>returnCF</name>.<name>delete</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>sstablesIterated</name>++</expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></for>
+            
+            <comment type="line">// If we saw a row tombstone, do a second pass through the iterators we</comment>
+            <comment type="line">// obtained from the sstables and drop any whose maxTimestamp &lt; that of the</comment>
+            <comment type="line">// row tombstone</comment>
+            <if>if <condition>(<expr><name>mostRecentRowTombstone</name> &gt; <name><name>Long</name>.<name>MIN_VALUE</name></name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>IColumnIterator</name></argument>&gt;</argument_list></name></type> <name>it</name> <init>= <expr><call><name><name>iterators</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <while>while <condition>(<expr><call><name><name>it</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+                <block>{
+                    <decl_stmt><decl><type><name>IColumnIterator</name></type> <name>iter</name> <init>= <expr><call><name><name>it</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr>(<name>iter</name> instanceof <name>ISSTableColumnIterator</name>)
+                        &amp;&amp; ((<name>ISSTableColumnIterator</name>) <name>iter</name>).<call><name>getSStable</name><argument_list>()</argument_list></call>.<call><name>getMaxTimestamp</name><argument_list>()</argument_list></call> &lt; <name>mostRecentRowTombstone</name></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>it</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                }</block></while>
+            }</block></then></if>
+
+            <comment type="line">// we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)</comment>
+            <comment type="line">// and "there used to be data, but it's gone now" (we should cache the empty CF so we don't need to rebuild that slower)</comment>
+            <if>if <condition>(<expr><call><name><name>iterators</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr>null</expr>;</return></then></if>
+
+            <expr_stmt><expr><call><name><name>filter</name>.<name>collateColumns</name></name><argument_list>(<argument><expr><name>returnCF</name></expr></argument>, <argument><expr><name>iterators</name></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// Caller is responsible for final removeDeletedCF.  This is important for cacheRow to work correctly:</comment>
+            <return>return <expr><name>returnCF</name></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <for>for (<init><decl><type><name>IColumnIterator</name></type> <name>iter</name> <range>: <expr><name>iterators</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><call><name><name>SSTableReader</name>.<name>releaseReferences</name></name><argument_list>(<argument><expr><name><name>view</name>.<name>sstables</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getSstablesIterated</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>sstablesIterated</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

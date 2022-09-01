@@ -1,0 +1,315 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\gms\FailureDetector.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>CopyOnWriteArrayList</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>MBeanServer</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>ObjectName</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSWriteError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>BoundedStatsDeque</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * This FailureDetector is an implementation of the paper titled
+ * "The Phi Accrual Failure Detector" by Hayashibara.
+ * Check the paper and the &lt;i&gt;IFailureDetector&lt;/i&gt; interface for details.
+ */</comment>
+<class><specifier>public</specifier> class <name>FailureDetector</name> <super><implements>implements <name>IFailureDetector</name>, <name>FailureDetectorMBean</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>MBEAN_NAME</name> <init>= <expr>"org.apache.cassandra.net:type=FailureDetector"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>SAMPLE_SIZE</name> <init>= <expr>1000</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>IFailureDetector</name></type> <name>instance</name> <init>= <expr>new <call><name>FailureDetector</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>FailureDetector</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>ArrivalWindow</name></argument>&gt;</argument_list></name></type> <name>arrivalSamples</name> <init>= <expr>new <call><name><name>Hashtable</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>ArrivalWindow</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IFailureDetectionEventListener</name></argument>&gt;</argument_list></name></type> <name>fdEvntListeners</name> <init>= <expr>new <call><name><name>CopyOnWriteArrayList</name><argument_list>&lt;<argument><name>IFailureDetectionEventListener</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>FailureDetector</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// Register this instance with JMX</comment>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>MBeanServer</name></type> <name>mbs</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>mbs</name>.<name>registerMBean</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name>MBEAN_NAME</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getAllEndpointStates</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>endpointStateMap</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"\n"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>appendEndpointState</name><argument_list>(<argument><expr><name>sb</name></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getSimpleStates</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>nodesStatus</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>endpointStateMap</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>endpointStateMap</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>isAlive</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>nodesStatus</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>"UP"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name><name>nodesStatus</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>"DOWN"</expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></for>
+        <return>return <expr><name>nodesStatus</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getEndpointState</name><parameter_list>(<param><decl><type><name>String</name></type> <name>address</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnknownHostException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>endpointState</name> <init>= <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getEndpointStateForEndpoint</name></name><argument_list>(<argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>appendEndpointState</name><argument_list>(<argument><expr><name>sb</name></expr></argument>, <argument><expr><name>endpointState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>appendEndpointState</name><parameter_list>(<param><decl><type><name>StringBuilder</name></type> <name>sb</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>endpointState</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ApplicationState</name></argument>, <argument><name>VersionedValue</name></argument>&gt;</argument_list></name></name></type> <name>state</name> <range>: <expr><call><name><name>endpointState</name>.<name>applicationState</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>state</name>.<name>getKey</name></name><argument_list>()</argument_list></call> == <name><name>ApplicationState</name>.<name>TOKENS</name></name></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"  "</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>state</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>":"</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>state</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<name>value</name></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>"\n"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Dump the inter arrival times for examination if necessary.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>dumpInterArrivalTimes</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>file</name> <init>= <expr><call><name><name>FileUtils</name>.<name>createTempFile</name></name><argument_list>(<argument><expr>"failuredetector-"</expr></argument>, <argument><expr>".dat"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>OutputStream</name></type> <name>os</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>os</name> = new <call><name>BufferedOutputStream</name><argument_list>(<argument><expr>new <call><name>FileOutputStream</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>os</name>.<name>write</name></name><argument_list>(<argument><expr><call><name>toString</name><argument_list>()</argument_list></call>.<call><name>getBytes</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>os</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setPhiConvictThreshold</name><parameter_list>(<param><decl><type><name>double</name></type> <name>phi</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>setPhiConvictThreshold</name></name><argument_list>(<argument><expr><name>phi</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>double</name></type> <name>getPhiConvictThreshold</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>DatabaseDescriptor</name>.<name>getPhiConvictThreshold</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isAlive</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>ep</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getEndpointStateForEndpoint</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// we could assert not-null, but having isAlive fail screws a node over so badly that</comment>
+        <comment type="line">// it's worth being defensive here so minor bugs don't cause disproportionate</comment>
+        <comment type="line">// badness.  (See CASSANDRA-1463 for an example).</comment>
+        <if>if <condition>(<expr><name>epState</name> == null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"unknown endpoint " + <name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <return>return <expr><name>epState</name> != null &amp;&amp; <call><name><name>epState</name>.<name>isAlive</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>clear</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ArrivalWindow</name></type> <name>heartbeatWindow</name> <init>= <expr><call><name><name>arrivalSamples</name>.<name>get</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>heartbeatWindow</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>heartbeatWindow</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>report</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"reporting {}"</expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <decl_stmt><decl><type><name>long</name></type> <name>now</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ArrivalWindow</name></type> <name>heartbeatWindow</name> <init>= <expr><call><name><name>arrivalSamples</name>.<name>get</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>( <expr><name>heartbeatWindow</name> == null</expr> )</condition><then>
+        <block>{
+            <expr_stmt><expr><name>heartbeatWindow</name> = new <call><name>ArrivalWindow</name><argument_list>(<argument><expr><name>SAMPLE_SIZE</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>arrivalSamples</name>.<name>put</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>heartbeatWindow</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <expr_stmt><expr><call><name><name>heartbeatWindow</name>.<name>add</name></name><argument_list>(<argument><expr><name>now</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>interpret</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ArrivalWindow</name></type> <name>hbWnd</name> <init>= <expr><call><name><name>arrivalSamples</name>.<name>get</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>( <expr><name>hbWnd</name> == null</expr> )</condition><then>
+        <block>{
+            <return>return;</return>
+        }</block></then></if>
+        <decl_stmt><decl><type><name>long</name></type> <name>now</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>double</name></type> <name>phi</name> <init>= <expr><call><name><name>hbWnd</name>.<name>phi</name></name><argument_list>(<argument><expr><name>now</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"PHI for " + <name>ep</name> + " : " + <name>phi</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><name>phi</name> &gt; <call><name>getPhiConvictThreshold</name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"notifying listeners that {} is down"</expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"intervals: {} mean: {}"</expr></argument>, <argument><expr><name>hbWnd</name></expr></argument>, <argument><expr><call><name><name>hbWnd</name>.<name>mean</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for ( <init><decl><type><name>IFailureDetectionEventListener</name></type> <name>listener</name> <range>: <expr><name>fdEvntListeners</name></expr></range></decl></init> )
+            <block>{
+                <expr_stmt><expr><call><name><name>listener</name>.<name>convict</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>phi</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>forceConviction</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Forcing conviction of {}"</expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>IFailureDetectionEventListener</name></type> <name>listener</name> <range>: <expr><name>fdEvntListeners</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>listener</name>.<name>convict</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><call><name>getPhiConvictThreshold</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>arrivalSamples</name>.<name>remove</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>registerFailureDetectionEventListener</name><parameter_list>(<param><decl><type><name>IFailureDetectionEventListener</name></type> <name>listener</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>fdEvntListeners</name>.<name>add</name></name><argument_list>(<argument><expr><name>listener</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>unregisterFailureDetectionEventListener</name><parameter_list>(<param><decl><type><name>IFailureDetectionEventListener</name></type> <name>listener</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>fdEvntListeners</name>.<name>remove</name></name><argument_list>(<argument><expr><name>listener</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>eps</name> <init>= <expr><call><name><name>arrivalSamples</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"-----------------------------------------------------------------------"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for ( <init><decl><type><name>InetAddress</name></type> <name>ep</name> <range>: <expr><name>eps</name></expr></range></decl></init> )
+        <block>{
+            <decl_stmt><decl><type><name>ArrivalWindow</name></type> <name>hWnd</name> <init>= <expr><call><name><name>arrivalSamples</name>.<name>get</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>ep</name> + " : "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>hWnd</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>( <argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"line.separator"</expr></argument>)</argument_list></call></expr></argument> )</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"-----------------------------------------------------------------------"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>main</name><parameter_list>(<param><decl><type><name><name>String</name><index>[]</index></name></type> <name>args</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>Throwable</name></expr></argument></throws>
+    <block>{
+    }</block></function>
+}</block></class>
+
+<class>class <name>ArrivalWindow</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>ArrivalWindow</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>double</name></type> <name>tLast</name> <init>= <expr>0L</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>BoundedStatsDeque</name></type> <name>arrivalIntervals</name></decl>;</decl_stmt>
+
+    <comment type="line">// this is useless except to provide backwards compatibility in phi_convict_threshold,</comment>
+    <comment type="line">// because everyone seems pretty accustomed to the default of 8, and users who have</comment>
+    <comment type="line">// already tuned their phi_convict_threshold for their own environments won't need to</comment>
+    <comment type="line">// change.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>double</name></type> <name>PHI_FACTOR</name> <init>= <expr>1.0 / <call><name><name>Math</name>.<name>log</name></name><argument_list>(<argument><expr>10.0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// in the event of a long partition, never record an interval longer than the rpc timeout,</comment>
+    <comment type="line">// since if a host is regularly experiencing connectivity problems lasting this long we'd</comment>
+    <comment type="line">// rather mark it down quickly instead of adapting</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>double</name></type> <name>MAX_INTERVAL_IN_MS</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getRpcTimeout</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><name>ArrivalWindow</name><parameter_list>(<param><decl><type><name>int</name></type> <name>size</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>arrivalIntervals</name> = new <call><name>BoundedStatsDeque</name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>synchronized</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name>double</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>double</name></type> <name>interArrivalTime</name></decl>;</decl_stmt>
+        <if>if <condition>( <expr><name>tLast</name> &gt; 0L</expr> )</condition><then>
+        <block>{
+            <expr_stmt><expr><name>interArrivalTime</name> = (<name>value</name> - <name>tLast</name>)</expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name>interArrivalTime</name> = <name><name>Gossiper</name>.<name>intervalInMillis</name></name> / 2</expr>;</expr_stmt>
+        }</block></else></if>
+        <if>if <condition>(<expr><name>interArrivalTime</name> &lt;= <name>MAX_INTERVAL_IN_MS</name></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>arrivalIntervals</name>.<name>add</name></name><argument_list>(<argument><expr><name>interArrivalTime</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Ignoring interval time of {}"</expr></argument>, <argument><expr><name>interArrivalTime</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        <expr_stmt><expr><name>tLast</name> = <name>value</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><name>double</name></type> <name>mean</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>arrivalIntervals</name>.<name>mean</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>clear</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>arrivalIntervals</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="line">// see CASSANDRA-2597 for an explanation of the math at work here.</comment>
+    <function><type><name>double</name></type> <name>phi</name><parameter_list>(<param><decl><type><name>long</name></type> <name>tnow</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>size</name> <init>= <expr><call><name><name>arrivalIntervals</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>double</name></type> <name>t</name> <init>= <expr><name>tnow</name> - <name>tLast</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr>(<name>size</name> &gt; 0)
+               ? <name>PHI_FACTOR</name> * <name>t</name> / <call><name>mean</name><argument_list>()</argument_list></call>
+               : 0.0</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><call><name><name>arrivalIntervals</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>" "</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+
+</unit>

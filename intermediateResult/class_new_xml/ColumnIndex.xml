@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\ColumnIndex.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>IndexHelper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>AlwaysPresentFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>IFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FilterFactory</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>ColumnIndex</name>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>IndexHelper</name>.<name>IndexInfo</name></name></argument>&gt;</argument_list></name></type> <name>columnsIndex</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>IFilter</name></type> <name>bloomFilter</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>ColumnIndex</name></type> <name>EMPTY</name> <init>= <expr>new <call><name>ColumnIndex</name><argument_list>(<argument><expr><name><name>Collections</name>.</name>&lt;<name><name>IndexHelper</name>.<name>IndexInfo</name></name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>new <call><name>AlwaysPresentFilter</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>private</specifier> <name>ColumnIndex</name><parameter_list>(<param><decl><type><name>int</name></type> <name>estimatedColumnCount</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>IndexHelper</name>.<name>IndexInfo</name></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>FilterFactory</name>.<name>getFilter</name></name><argument_list>(<argument><expr><name>estimatedColumnCount</name></expr></argument>, <argument><expr>4</expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>private</specifier> <name>ColumnIndex</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>IndexHelper</name>.<name>IndexInfo</name></name></argument>&gt;</argument_list></name></type> <name>columnsIndex</name></decl></param>, <param><decl><type><name>IFilter</name></type> <name>bloomFilter</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>columnsIndex</name></name> = <name>columnsIndex</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>bloomFilter</name></name> = <name>bloomFilter</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Help to create an index for a column family based on size of columns,
+     * and write said columns to disk.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>Builder</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ColumnIndex</name></type> <name>result</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>indexOffset</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>startPosition</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>endPosition</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>blockSize</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>OnDiskAtom</name></type> <name>firstColumn</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>OnDiskAtom</name></type> <name>lastColumn</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>OnDiskAtom</name></type> <name>lastBlockClosing</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>DataOutput</name></type> <name>output</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>RangeTombstone</name>.<name>Tracker</name></name></type> <name>tombstoneTracker</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>OnDiskAtom</name>.<name>Serializer</name></name></type> <name>atomSerializer</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>atomCount</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>Builder</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>,
+                       <param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>,
+                       <param><decl><type><name>int</name></type> <name>estimatedColumnCount</name></decl></param>,
+                       <param><decl><type><name>DataOutput</name></type> <name>output</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>indexOffset</name></name> = <call><name>rowHeaderSize</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><call><name><name>cf</name>.<name>deletionInfo</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>result</name></name> = new <call><name>ColumnIndex</name><argument_list>(<argument><expr><name>estimatedColumnCount</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>output</name></name> = <name>output</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>atomSerializer</name></name> = <call><name><name>cf</name>.<name>getOnDiskSerializer</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>tombstoneTracker</name></name> = new <call><name><name>RangeTombstone</name>.<name>Tracker</name></name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/**
+         * Returns the number of bytes between the beginning of the row and the
+         * first serialized column.
+         */</comment>
+        <function><type><specifier>private</specifier> <specifier>static</specifier> <name>long</name></type> <name>rowHeaderSize</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name>DeletionInfo</name></type> <name>delInfo</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>TypeSizes</name></type> <name>typeSizes</name> <init>= <expr><name><name>TypeSizes</name>.<name>NATIVE</name></name></expr></init></decl>;</decl_stmt>
+            <comment type="line">// TODO fix constantSize when changing the nativeconststs.</comment>
+            <decl_stmt><decl><type><name>int</name></type> <name>keysize</name> <init>= <expr><call><name><name>key</name>.<name>remaining</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>typeSizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr>(<name>short</name>) <name>keysize</name></expr></argument>)</argument_list></call> + <name>keysize</name>          <comment type="line">// Row key</comment>
+                 + <call><name><name>typeSizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr>0L</expr></argument>)</argument_list></call>                                 <comment type="line">// Row data size</comment>
+                 + <call><name><name>DeletionTime</name>.<name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><call><name><name>delInfo</name>.<name>getTopLevelDeletion</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>typeSizes</name></expr></argument>)</argument_list></call>
+                 + <call><name><name>typeSizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</return>                                 <comment type="line">// Column count</comment>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>RangeTombstone</name>.<name>Tracker</name></name></type> <name>tombstoneTracker</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>tombstoneTracker</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>writtenAtomCount</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>atomCount</name> + <call><name><name>tombstoneTracker</name>.<name>writtenAtom</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Serializes the index into in-memory structure with all required components
+         * such as Bloom Filter, index block size, IndexInfo list
+         *
+         * @param cf Column family to create index for
+         *
+         * @return information about index - it's Bloom Filter, block size and IndexInfo list
+         */</comment>
+        <function><type><specifier>public</specifier> <name>ColumnIndex</name></type> <name>build</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>RangeTombstone</name></argument>&gt;</argument_list></name></type> <name>rangeIter</name> <init>= <expr><call><name><name>cf</name>.<name>deletionInfo</name></name><argument_list>()</argument_list></call>.<call><name>rangeIterator</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>RangeTombstone</name></type> <name>tombstone</name> <init>= <expr><call><name><name>rangeIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call> ? <call><name><name>rangeIter</name>.<name>next</name></name><argument_list>()</argument_list></call> : null</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Comparator</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr><call><name><name>cf</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name>IColumn</name></type> <name>c</name> <range>: <expr><name>cf</name></expr></range></decl></init>)
+            <block>{
+                <while>while <condition>(<expr><name>tombstone</name> != null &amp;&amp; <call><name><name>comparator</name>.<name>compare</name></name><argument_list>(<argument><expr><call><name><name>c</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>tombstone</name>.<name>min</name></name></expr></argument>)</argument_list></call> &gt;= 0</expr>)</condition>
+                <block>{
+                    <expr_stmt><expr><call><name>add</name><argument_list>(<argument><expr><name>tombstone</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>tombstone</name> = <call><name><name>rangeIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call> ? <call><name><name>rangeIter</name>.<name>next</name></name><argument_list>()</argument_list></call> : null</expr>;</expr_stmt>
+                }</block></while>
+                <expr_stmt><expr><call><name>add</name><argument_list>(<argument><expr><name>c</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+
+            <while>while <condition>(<expr><name>tombstone</name> != null</expr>)</condition>
+            <block>{
+                <expr_stmt><expr><call><name>add</name><argument_list>(<argument><expr><name>tombstone</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>tombstone</name> = <call><name><name>rangeIter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call> ? <call><name><name>rangeIter</name>.<name>next</name></name><argument_list>()</argument_list></call> : null</expr>;</expr_stmt>
+            }</block></while>
+            <return>return <expr><call><name>build</name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ColumnIndex</name></type> <name>build</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name></type> <name>columns</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <for>for (<init><decl><type><name>OnDiskAtom</name></type> <name>c</name> <range>: <expr><name>columns</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name>add</name><argument_list>(<argument><expr><name>c</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+            <return>return <expr><call><name>build</name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name>OnDiskAtom</name></type> <name>column</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><name>atomCount</name>++</expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>column</name> instanceof <name>IColumn</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>result</name>.<name>bloomFilter</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <if>if <condition>(<expr><name>firstColumn</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>firstColumn</name> = <name>column</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name>startPosition</name> = <name>endPosition</name></expr>;</expr_stmt>
+                <comment type="line">// TODO: have that use the firstColumn as min + make sure we</comment>
+                <comment type="line">// optimize that on read</comment>
+                <expr_stmt><expr><name>endPosition</name> += <call><name><name>tombstoneTracker</name>.<name>writeOpenedMarker</name></name><argument_list>(<argument><expr><name>firstColumn</name></expr></argument>, <argument><expr><name>output</name></expr></argument>, <argument><expr><name>atomSerializer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>blockSize</name> = 0</expr>;</expr_stmt> <comment type="line">// We don't count repeated tombstone marker in the block size, to avoid a situation</comment>
+                               <comment type="line">// where we wouldn't make any problem because a block is filled by said marker</comment>
+            }</block></then></if>
+
+            <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><call><name><name>column</name>.<name>serializedSizeForSSTable</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>endPosition</name> += <name>size</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>blockSize</name> += <name>size</name></expr>;</expr_stmt>
+
+            <comment type="line">// if we hit the column index size that we have to index after, go ahead and index it.</comment>
+            <if>if <condition>(<expr><name>blockSize</name> &gt;= <call><name><name>DatabaseDescriptor</name>.<name>getColumnIndexSize</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>IndexHelper</name>.<name>IndexInfo</name></name></type> <name>cIndexInfo</name> <init>= <expr>new <call><name><name>IndexHelper</name>.<name>IndexInfo</name></name><argument_list>(<argument><expr><call><name><name>firstColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>indexOffset</name> + <name>startPosition</name></expr></argument>, <argument><expr><name>endPosition</name> - <name>startPosition</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>result</name>.<name>columnsIndex</name>.<name>add</name></name><argument_list>(<argument><expr><name>cIndexInfo</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>firstColumn</name> = null</expr>;</expr_stmt>
+                <expr_stmt><expr><name>lastBlockClosing</name> = <name>column</name></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <if>if <condition>(<expr><name>output</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>atomSerializer</name>.<name>serializeForSSTable</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name>output</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <comment type="line">// TODO: Should deal with removing unneeded tombstones</comment>
+            <expr_stmt><expr><call><name><name>tombstoneTracker</name>.<name>update</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><name>lastColumn</name> = <name>column</name></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ColumnIndex</name></type> <name>build</name><parameter_list>()</parameter_list>
+        <block>{
+            <comment type="line">// all columns were GC'd after all</comment>
+            <if>if <condition>(<expr><name>lastColumn</name> == null</expr>)</condition><then>
+                <return>return <expr><name><name>ColumnIndex</name>.<name>EMPTY</name></name></expr>;</return></then></if>
+
+            <comment type="line">// the last column may have fallen on an index boundary already.  if not, index it explicitly.</comment>
+            <if>if <condition>(<expr><call><name><name>result</name>.<name>columnsIndex</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> || <name>lastBlockClosing</name> != <name>lastColumn</name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>IndexHelper</name>.<name>IndexInfo</name></name></type> <name>cIndexInfo</name> <init>= <expr>new <call><name><name>IndexHelper</name>.<name>IndexInfo</name></name><argument_list>(<argument><expr><call><name><name>firstColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>lastColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>indexOffset</name> + <name>startPosition</name></expr></argument>, <argument><expr><name>endPosition</name> - <name>startPosition</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>result</name>.<name>columnsIndex</name>.<name>add</name></name><argument_list>(<argument><expr><name>cIndexInfo</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <comment type="line">// we should always have at least one computed index block, but we only write it out if there is more than that.</comment>
+            <assert>assert <expr><call><name><name>result</name>.<name>columnsIndex</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>;</assert>
+            <return>return <expr><name>result</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

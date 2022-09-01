@@ -1,0 +1,79 @@
+private void load(boolean recreatebloom, Set<DecoratedKey> keysToLoadInCache) throws IOException
+    {
+        boolean cacheLoading = !keysToLoadInCache.isEmpty();
+        if (cacheLoading && keyCache == null)
+            keyCache = CacheService.instance.keyCache;
+
+        SegmentedFile.Builder ibuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getIndexAccessMode());
+        SegmentedFile.Builder dbuilder = compression
+                                          ? SegmentedFile.getCompressedBuilder()
+                                          : SegmentedFile.getBuilder(DatabaseDescriptor.getDiskAccessMode());
+
+        // we read the positions in a BRAF so we don't have to worry about an entry spanning a mmap boundary.
+        RandomAccessReader input = RandomAccessReader.open(new File(descriptor.filenameFor(Component.PRIMARY_INDEX)), true);
+        DecoratedKey left = null, right = null;
+        try
+        {
+            long indexSize = input.length();
+            long histogramCount = sstableMetadata.estimatedRowSize.count();
+            long estimatedKeys = histogramCount > 0 && !sstableMetadata.estimatedRowSize.isOverflowed()
+                               ? histogramCount
+                               : SSTable.estimateRowsFromIndex(input); // statistics is supposed to be optional
+            indexSummary = new IndexSummary(estimatedKeys);
+            if (recreatebloom)
+                bf = LegacyBloomFilter.getFilter(estimatedKeys, 15);
+
+            while (true)
+            {
+                long indexPosition = input.getFilePointer();
+                if (indexPosition == indexSize)
+                    break;
+
+                DecoratedKey decoratedKey = null;
+                int len = ByteBufferUtil.readShortLength(input);
+
+                boolean firstKey = left == null;
+                boolean lastKey = indexPosition + DBConstants.shortSize + len + DBConstants.longSize == indexSize;
+                boolean shouldAddEntry = indexSummary.shouldAddEntry();
+                if (shouldAddEntry || cacheLoading || recreatebloom || firstKey || lastKey)
+                {
+                    decoratedKey = decodeKey(partitioner, descriptor, ByteBufferUtil.read(input, len));
+                    if (firstKey)
+                        left = decoratedKey;
+                    if (lastKey)
+                        right = decoratedKey;
+                }
+                else
+                {
+                    FileUtils.skipBytesFully(input, len);
+                }
+
+                long dataPosition = input.readLong();
+                if (decoratedKey != null)
+                {
+                    if (recreatebloom)
+                        bf.add(decoratedKey.key);
+                    if (shouldAddEntry)
+                        indexSummary.addEntry(decoratedKey, indexPosition);
+                    // if key cache could be used and we have key already pre-loaded
+                    if (cacheLoading && keysToLoadInCache.contains(decoratedKey))
+                        cacheKey(decoratedKey, dataPosition);
+                }
+
+                indexSummary.incrementRowid();
+                ibuilder.addPotentialBoundary(indexPosition);
+                dbuilder.addPotentialBoundary(dataPosition);
+            }
+            indexSummary.complete();
+        }
+        finally
+        {
+            FileUtils.closeQuietly(input);
+        }
+        this.first = getMinimalKey(left);
+        this.last = getMinimalKey(right);
+
+        // finalize the state of the reader
+        ifile = ibuilder.complete(descriptor.filenameFor(Component.PRIMARY_INDEX));
+        dfile = dbuilder.complete(descriptor.filenameFor(Component.DATA));
+    }

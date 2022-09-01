@@ -1,0 +1,44 @@
+public void execute(ColumnFamily cf,
+                        ColumnNameBuilder builder,
+                        AbstractType<?> validator,
+                        UpdateParameters params,
+                        List<Pair<ByteBuffer, IColumn>> list) throws InvalidRequestException
+    {
+        if (!(validator instanceof ListType || (kind == Kind.SET_IDX && validator instanceof MapType)))
+            throw new InvalidRequestException("List operations are only supported on List typed columns, but " + validator + " given.");
+
+        switch (kind)
+        {
+            case SET:
+                cf.addAtom(params.makeTombstoneForOverwrite(builder.copy().build(), builder.copy().buildAsEndOfRange()));
+                doAppend(cf, builder, (CollectionType)validator, params);
+                break;
+            case SET_IDX:
+                // Since the parser couldn't disambiguate between a 'list set by idx'
+                // and a 'map put by key', we have to do it now.
+                if (validator instanceof MapType)
+                {
+                    assert values.size() == 2;
+                    MapOperation.Put(values.get(0), values.get(1)).execute(cf, builder, validator, params, null);
+                }
+                else
+                {
+                    doSet(cf, builder, params, (CollectionType)validator, list);
+                }
+                break;
+            case APPEND:
+                doAppend(cf, builder, (CollectionType)validator, params);
+                break;
+            case PREPEND:
+                doPrepend(cf, builder, (CollectionType)validator, params);
+                break;
+            case DISCARD:
+                doDiscard(cf, (CollectionType)validator, params, list);
+                break;
+            case DISCARD_IDX:
+                doDiscardIdx(cf, params, list);
+                break;
+            default:
+                throw new AssertionError("Unsupported List operation: " + kind);
+        }
+    }

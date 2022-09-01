@@ -1,0 +1,335 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\Column.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>security</name>.<name>MessageDigest</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collection</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>DataOutputBuffer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Allocator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>HeapAllocator</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Column is immutable, which prevents all kinds of confusion in a multithreaded environment.
+ * (TODO: look at making SuperColumn immutable too.  This is trickier but is probably doable
+ *  with something like PCollections -- http://code.google.com
+ */</comment>
+
+<class><specifier>public</specifier> class <name>Column</name> <super><implements>implements <name>IColumn</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>Column</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>ColumnSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>ColumnSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>ColumnSerializer</name></type> <name>serializer</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>serializer</name></expr>;</return>
+    }</block></function>
+
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>ByteBuffer</name></type> <name>name</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>ByteBuffer</name></type> <name>value</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>long</name></type> <name>timestamp</name></decl>;</decl_stmt>
+
+    <constructor><name>Column</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>Column</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>value</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>Column</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>name</name> != null</expr>;</assert>
+        <assert>assert <expr><name>value</name> != null</expr>;</assert>
+        <assert>assert <expr><call><name><name>name</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &lt;= <name><name>IColumn</name>.<name>MAX_NAME_LENGTH</name></name></expr>;</assert>
+        <expr_stmt><expr><name><name>this</name>.<name>name</name></name> = <name>name</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>value</name></name> = <name>value</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>timestamp</name></name> = <name>timestamp</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>name</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>name</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Column</name></type> <name>getSubColumn</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>columnName</name></decl></param>)</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"This operation is unsupported on simple columns."</expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>value</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>value</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>getSubColumns</name><parameter_list>()</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"This operation is unsupported on simple columns."</expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>timestamp</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>timestamp</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>maxTimestamp</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>timestamp</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isMarkedForDelete</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call>(<name>int</name>) <argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> / 1000</expr></argument>)</argument_list></call> &gt;= <call><name>getLocalDeletionTime</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getMarkedForDeleteAt</name><parameter_list>()</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"column is not marked for delete"</expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>mostRecentLiveChangeAt</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>timestamp</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>mostRecentNonGCableChangeAt</name><parameter_list>(<param><decl><type><name>int</name></type> <name>gcbefore</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name>timestamp</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>size</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="block">/*
+         * Size of a column is =
+         *   size of a name (short + length of the string)
+         * + 1 byte to indicate if the column has been deleted
+         * + 8 bytes for timestamp
+         * + 4 bytes which basically indicates the size of the byte array
+         * + entire byte array.
+        */</comment>
+        <return>return <expr><name><name>DBConstants</name>.<name>shortSize</name></name> + <call><name><name>name</name>.<name>remaining</name></name><argument_list>()</argument_list></call> + 1 + <name><name>DBConstants</name>.<name>tsSize</name></name> + <name><name>DBConstants</name>.<name>intSize</name></name> + <call><name><name>value</name>.<name>remaining</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     * This returns the size of the column when serialized.
+     * @see com.facebook.infrastructure.db.IColumn#serializedSize()
+    */</comment>
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>serializedSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>size</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>serializationFlags</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>0</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addColumn</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>column</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>addColumn</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addColumn</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>column</name></decl></param>, <param><decl><type><name>Allocator</name></type> <name>allocator</name></decl></param>)</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"This operation is not supported for simple columns."</expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>IColumn</name></type> <name>diff</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>column</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name>timestamp</name><argument_list>()</argument_list></call> &lt; <call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <return>return <expr><name>column</name></expr>;</return>
+        }</block></then></if>
+        <return>return <expr>null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateDigest</name><parameter_list>(<param><decl><type><name>MessageDigest</name></type> <name>digest</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>digest</name>.<name>update</name></name><argument_list>(<argument><expr><call><name><name>name</name>.<name>duplicate</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>digest</name>.<name>update</name></name><argument_list>(<argument><expr><call><name><name>value</name>.<name>duplicate</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>DataOutputBuffer</name></type> <name>buffer</name> <init>= <expr>new <call><name>DataOutputBuffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>buffer</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buffer</name>.<name>writeByte</name></name><argument_list>(<argument><expr><call><name>serializationFlags</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <expr_stmt><expr><call><name><name>digest</name>.<name>update</name></name><argument_list>(<argument><expr><call><name><name>buffer</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>buffer</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getLocalDeletionTime</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>IColumn</name></type> <name>reconcile</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>column</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>reconcile</name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name><name>HeapAllocator</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>IColumn</name></type> <name>reconcile</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>column</name></decl></param>, <param><decl><type><name>Allocator</name></type> <name>allocator</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// tombstones take precedence.  (if both are tombstones, then it doesn't matter which one we use.)</comment>
+        <if>if <condition>(<expr><call><name>isMarkedForDelete</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><call><name>timestamp</name><argument_list>()</argument_list></call> &lt; <call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call> ? <name>column</name> : <name>this</name></expr>;</return></then></if>
+        <if>if <condition>(<expr><call><name><name>column</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><call><name>timestamp</name><argument_list>()</argument_list></call> &gt; <call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call> ? <name>this</name> : <name>column</name></expr>;</return></then></if>
+        <comment type="line">// break ties by comparing values.</comment>
+        <if>if <condition>(<expr><call><name>timestamp</name><argument_list>()</argument_list></call> == <call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><call><name>value</name><argument_list>()</argument_list></call>.<call><name>compareTo</name><argument_list>(<argument><expr><call><name><name>column</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> &lt; 0 ? <name>column</name> : <name>this</name></expr>;</return></then></if>
+        <comment type="line">// neither is tombstoned and timestamps are different</comment>
+        <return>return <expr><call><name>timestamp</name><argument_list>()</argument_list></call> &lt; <call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call> ? <name>column</name> : <name>this</name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>boolean</name></type> <name>equals</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>this</name> == <name>o</name></expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+        <if>if <condition>(<expr><name>o</name> == null || <call><name>getClass</name><argument_list>()</argument_list></call> != <call><name><name>o</name>.<name>getClass</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>Column</name></type> <name>column</name> <init>= <expr>(<name>Column</name>)<name>o</name></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>timestamp</name> != <name><name>column</name>.<name>timestamp</name></name></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+        <if>if <condition>(<expr>!<call><name><name>name</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <return>return <expr><call><name><name>value</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>int</name></type> <name>hashCode</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>result</name> <init>= <expr><name>name</name> != null ? <call><name><name>name</name>.<name>hashCode</name></name><argument_list>()</argument_list></call> : 0</expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>result</name> = 31 * <name>result</name> + (<name>value</name> != null ? <call><name><name>value</name>.<name>hashCode</name></name><argument_list>()</argument_list></call> : 0)</expr>;</expr_stmt>
+        <expr_stmt><expr><name>result</name> = 31 * <name>result</name> + <call>(<name>int</name>)<argument_list>(<argument><expr><name>timestamp</name> ^ (<name>timestamp</name> &gt;&gt;&gt; 32)</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>result</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>IColumn</name></type> <name>localCopy</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>localCopy</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name><name>HeapAllocator</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>IColumn</name></type> <name>localCopy</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>Allocator</name></type> <name>allocator</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>Column</name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>internOrCopy</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>allocator</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>allocator</name>.<name>clone</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getString</name><parameter_list>(<param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>comparator</name>.<name>getString</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>":"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name>isMarkedForDelete</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>":"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>value</name>.<name>remaining</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"@"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name>timestamp</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isLive</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>!<call><name>isMarkedForDelete</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>validateName</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>MarshalException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>nameValidator</name> <init>= <expr><name><name>metadata</name>.<name>cfType</name></name> == <name><name>ColumnFamilyType</name>.<name>Super</name></name> ? <name><name>metadata</name>.<name>subcolumnComparator</name></name> : <name><name>metadata</name>.<name>comparator</name></name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>nameValidator</name>.<name>validate</name></name><argument_list>(<argument><expr><call><name>name</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>validateFields</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>MarshalException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>validateName</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>valueValidator</name> <init>= <expr><call><name><name>metadata</name>.<name>getValueValidator</name></name><argument_list>(<argument><expr><call><name>name</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>valueValidator</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>valueValidator</name>.<name>validate</name></name><argument_list>(<argument><expr><call><name>value</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasIrrelevantData</name><parameter_list>(<param><decl><type><name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getLocalDeletionTime</name><argument_list>()</argument_list></call> &lt; <name>gcBefore</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Column</name></type> <name>create</name><parameter_list>(<param><decl><type><name>String</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>names</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>Column</name><argument_list>(<argument><expr><call><name>decomposeName</name><argument_list>(<argument><expr><name>names</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>UTF8Type</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Column</name></type> <name>create</name><parameter_list>(<param><decl><type><name>int</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>names</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>Column</name><argument_list>(<argument><expr><call><name>decomposeName</name><argument_list>(<argument><expr><name>names</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>Int32Type</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Column</name></type> <name>create</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>names</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>Column</name><argument_list>(<argument><expr><call><name>decomposeName</name><argument_list>(<argument><expr><name>names</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>BooleanType</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Column</name></type> <name>create</name><parameter_list>(<param><decl><type><name>double</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>names</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>Column</name><argument_list>(<argument><expr><call><name>decomposeName</name><argument_list>(<argument><expr><name>names</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>DoubleType</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Column</name></type> <name>create</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>names</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>Column</name><argument_list>(<argument><expr><call><name>decomposeName</name><argument_list>(<argument><expr><name>names</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>value</name></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>static</specifier> <name>ByteBuffer</name></type> <name>decomposeName</name><parameter_list>(<param><decl><type><name>String</name>...</type> <name>names</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name><name>names</name>.<name>length</name></name> &gt; 0</expr>;</assert>
+
+        <if>if <condition>(<expr><name><name>names</name>.<name>length</name></name> == 1</expr>)</condition><then>
+            <return>return <expr><call><name><name>UTF8Type</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr><name><name>names</name><index>[<expr>0</expr>]</index></name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+
+        <comment type="line">// not super performant.  at this time, only infrequently called schema code uses this.</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>types</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>names</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>names</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><call><name><name>types</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>UTF8Type</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <decl_stmt><decl><type><name><name>CompositeType</name>.<name>Builder</name></name></type> <name>builder</name> <init>= <expr>new <call><name><name>CompositeType</name>.<name>Builder</name></name><argument_list>(<argument><expr><call><name><name>CompositeType</name>.<name>getInstance</name></name><argument_list>(<argument><expr><name>types</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>String</name></type> <name>name</name> <range>: <expr><name>names</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>builder</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>UTF8Type</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><call><name><name>builder</name>.<name>build</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+
+</unit>

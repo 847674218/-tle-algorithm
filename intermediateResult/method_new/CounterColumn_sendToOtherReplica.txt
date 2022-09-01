@@ -1,0 +1,23 @@
+private static void sendToOtherReplica(DecoratedKey key, ColumnFamily cf) throws RequestExecutionException, IOException
+    {
+        RowMutation rm = new RowMutation(cf.metadata().ksName, key.key);
+        rm.add(cf);
+
+        final InetAddress local = FBUtilities.getBroadcastAddress();
+        String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(local);
+
+        StorageProxy.performWrite(rm, ConsistencyLevel.ANY, localDataCenter, new StorageProxy.WritePerformer()
+        {
+            public void apply(IMutation mutation, Iterable<InetAddress> targets, AbstractWriteResponseHandler responseHandler, String localDataCenter, ConsistencyLevel consistency_level)
+            throws IOException, OverloadedException
+            {
+                // We should only send to the remote replica, not the local one
+                Set<InetAddress> remotes = Sets.difference(ImmutableSet.copyOf(targets), ImmutableSet.of(local));
+                // Fake local response to be a good lad but we won't wait on the responseHandler
+                responseHandler.response(null);
+                StorageProxy.sendToHintedEndpoints((RowMutation) mutation, remotes, responseHandler, localDataCenter, consistency_level);
+            }
+        }, null, WriteType.SIMPLE);
+
+        // we don't wait for answers
+    }

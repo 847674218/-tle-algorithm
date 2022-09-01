@@ -1,0 +1,28 @@
+public static AbstractWriteResponseHandler mutateCounter(CounterMutation cm, String localDataCenter) throws UnavailableException, OverloadedException, IOException
+    {
+        InetAddress endpoint = findSuitableEndpoint(cm.getTable(), cm.key(), localDataCenter, cm.consistency());
+
+        if (endpoint.equals(FBUtilities.getBroadcastAddress()))
+        {
+            return applyCounterMutationOnCoordinator(cm, localDataCenter);
+        }
+        else
+        {
+            // Exit now if we can't fulfill the CL here instead of forwarding to the leader replica
+            String table = cm.getTable();
+            AbstractReplicationStrategy rs = Table.open(table).getReplicationStrategy();
+            Token tk = StorageService.getPartitioner().getToken(cm.key());
+            List<InetAddress> naturalEndpoints = StorageService.instance.getNaturalEndpoints(table, tk);
+            Collection<InetAddress> pendingEndpoints = StorageService.instance.getTokenMetadata().pendingEndpointsFor(tk, table);
+
+            rs.getWriteResponseHandler(naturalEndpoints, pendingEndpoints, cm.consistency(), null, WriteType.COUNTER).assureSufficientLiveNodes();
+
+            // Forward the actual update to the chosen leader replica
+            AbstractWriteResponseHandler responseHandler = new WriteResponseHandler(endpoint, WriteType.COUNTER);
+
+            if (logger.isTraceEnabled())
+                logger.trace("forwarding counter update of key " + ByteBufferUtil.bytesToHex(cm.key()) + " to " + endpoint);
+            MessagingService.instance().sendRR(cm.makeMutationMessage(), endpoint, responseHandler);
+            return responseHandler;
+        }
+    }

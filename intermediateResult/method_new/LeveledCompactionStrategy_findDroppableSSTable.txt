@@ -1,0 +1,28 @@
+private SSTableReader findDroppableSSTable(final int gcBefore)
+    {
+        level:
+        for (int i = manifest.getLevelCount(); i >= 0; i--)
+        {
+            // sort sstables by droppable ratio in descending order
+            SortedSet<SSTableReader> sstables = manifest.getLevelSorted(i, new Comparator<SSTableReader>()
+            {
+                public int compare(SSTableReader o1, SSTableReader o2)
+                {
+                    double r1 = o1.getEstimatedDroppableTombstoneRatio(gcBefore);
+                    double r2 = o2.getEstimatedDroppableTombstoneRatio(gcBefore);
+                    return -1 * Doubles.compare(r1, r2);
+                }
+            });
+            if (sstables.isEmpty())
+                continue;
+
+            for (SSTableReader sstable : sstables)
+            {
+                if (sstable.getEstimatedDroppableTombstoneRatio(gcBefore) <= tombstoneThreshold)
+                    continue level;
+                else if (!sstable.isMarkedSuspect() && worthDroppingTombstones(sstable, gcBefore))
+                    return sstable;
+            }
+        }
+        return null;
+    }

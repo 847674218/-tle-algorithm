@@ -1,0 +1,89 @@
+public List<KeySlice> get_range_slices(ColumnParent column_parent, SlicePredicate predicate, KeyRange range, ConsistencyLevel consistency_level)
+    throws InvalidRequestException, UnavailableException, TException, TimedOutException
+    {
+        if (startSessionIfRequested())
+        {
+            Map<String, String> traceParameters = ImmutableMap.of(
+                    "column_parent", column_parent.toString(),
+                    "predicate", predicate.toString(),
+                    "range", range.toString(),
+                    "consistency_level", consistency_level.name());
+            Tracing.instance().begin("get_range_slices", traceParameters);
+        }
+        else
+        {
+            logger.debug("range_slice");
+        }
+
+        try
+        {
+            String keyspace = null;
+            CFMetaData metadata = null;
+
+            ThriftClientState cState = state();
+            keyspace = cState.getKeyspace();
+            cState.hasColumnFamilyAccess(keyspace, column_parent.column_family, Permission.SELECT);
+
+            metadata = ThriftValidation.validateColumnFamily(keyspace, column_parent.column_family);
+            ThriftValidation.validateColumnParent(metadata, column_parent);
+            ThriftValidation.validatePredicate(metadata, column_parent, predicate);
+            ThriftValidation.validateKeyRange(metadata, column_parent.super_column, range);
+
+            org.apache.cassandra.db.ConsistencyLevel consistencyLevel = ThriftConversion.fromThrift(consistency_level);
+            consistencyLevel.validateForRead(keyspace);
+
+            List<Row> rows = null;
+
+            IPartitioner<?> p = StorageService.getPartitioner();
+            AbstractBounds<RowPosition> bounds;
+            if (range.start_key == null)
+            {
+                Token.TokenFactory<?> tokenFactory = p.getTokenFactory();
+                Token left = tokenFactory.fromString(range.start_token);
+                Token right = tokenFactory.fromString(range.end_token);
+                bounds = Range.makeRowRange(left, right, p);
+            }
+            else
+            {
+                RowPosition end = range.end_key == null
+                                ? p.getTokenFactory().fromString(range.end_token).maxKeyBound(p)
+                                : RowPosition.forKey(range.end_key, p);
+                bounds = new Bounds<RowPosition>(RowPosition.forKey(range.start_key, p), end);
+            }
+            schedule(DatabaseDescriptor.getRangeRpcTimeout());
+            try
+            {
+                IDiskAtomFilter filter = ThriftValidation.asIFilter(predicate, metadata.getComparatorFor(column_parent.super_column));
+                rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_parent, filter, bounds,
+                                                                        range.row_filter, range.count), consistencyLevel);
+            }
+            finally
+            {
+                release();
+            }
+            assert rows != null;
+
+            return thriftifyKeySlices(rows, column_parent, predicate);
+        }
+        catch (RequestValidationException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (ReadTimeoutException e)
+        {
+            logger.debug("... timed out");
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (org.apache.cassandra.exceptions.UnavailableException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
+    }

@@ -1,0 +1,353 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\filter\ExtendedFilter.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>SortedSet</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>TreeSet</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>ColumnNameBuilder</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>CompositeType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>OnDiskAtomIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>IndexExpression</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>IndexOperator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Extends a column filter (IFilter) to include a number of IndexExpression.
+ */</comment>
+<class><specifier>public</specifier> <specifier>abstract</specifier> class <name>ExtendedFilter</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>ExtendedFilter</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>cfs</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>IDiskAtomFilter</name></type> <name>originalFilter</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>maxResults</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>countCQL3Rows</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>isPaging</name></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>ExtendedFilter</name></type> <name>create</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>IDiskAtomFilter</name></type> <name>filter</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxResults</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>countCQL3Rows</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isPaging</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>clause</name> == null || <call><name><name>clause</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <return>return <expr>new <call><name>EmptyClauseFilter</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>filter</name></expr></argument>, <argument><expr><name>maxResults</name></expr></argument>, <argument><expr><name>countCQL3Rows</name></expr></argument>, <argument><expr><name>isPaging</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then>
+        <else>else
+        <block>{
+            <if>if <condition>(<expr><name>isPaging</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"Cross-row paging is not supported along with index clauses"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <return>return <expr><call><name><name>cfs</name>.<name>getComparator</name></name><argument_list>()</argument_list></call> instanceof <name>CompositeType</name>
+                 ? new <call><name>FilterWithCompositeClauses</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>filter</name></expr></argument>, <argument><expr><name>clause</name></expr></argument>, <argument><expr><name>maxResults</name></expr></argument>, <argument><expr><name>countCQL3Rows</name></expr></argument>)</argument_list></call>
+                 : new <call><name>FilterWithClauses</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>filter</name></expr></argument>, <argument><expr><name>clause</name></expr></argument>, <argument><expr><name>maxResults</name></expr></argument>, <argument><expr><name>countCQL3Rows</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></else></if>
+    }</block></function>
+
+    <constructor><specifier>protected</specifier> <name>ExtendedFilter</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>IDiskAtomFilter</name></type> <name>filter</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxResults</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>countCQL3Rows</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isPaging</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>cfs</name> != null</expr>;</assert>
+        <assert>assert <expr><name>filter</name> != null</expr>;</assert>
+        <expr_stmt><expr><name><name>this</name>.<name>cfs</name></name> = <name>cfs</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>originalFilter</name></name> = <name>filter</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>maxResults</name></name> = <name>maxResults</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>countCQL3Rows</name></name> = <name>countCQL3Rows</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>isPaging</name></name> = <name>isPaging</name></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>countCQL3Rows</name></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>originalFilter</name>.<name>updateColumnsLimit</name></name><argument_list>(<argument><expr><name>maxResults</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><name>isPaging</name> &amp;&amp; (!(<name>originalFilter</name> instanceof <name>SliceQueryFilter</name>) || ((<name>SliceQueryFilter</name>)<name>originalFilter</name>).<call><name>finish</name><argument_list>()</argument_list></call>.<call><name>remaining</name><argument_list>()</argument_list></call> != 0)</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"Cross-row paging is only supported for SliceQueryFilter having an empty finish column"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>maxRows</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>countCQL3Rows</name> ? <name><name>Integer</name>.<name>MAX_VALUE</name></name> : <name>maxResults</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>maxColumns</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>countCQL3Rows</name> ? <name>maxResults</name> : <name><name>Integer</name>.<name>MAX_VALUE</name></name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Update the filter if necessary given the number of column already
+     * fetched.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateFilter</name><parameter_list>(<param><decl><type><name>int</name></type> <name>currentColumnsCount</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// As soon as we'd done our first call, we want to reset the start column if we're paging</comment>
+        <if>if <condition>(<expr><name>isPaging</name></expr>)</condition><then>
+            <expr_stmt><expr>((<name>SliceQueryFilter</name>)<call><name>initialFilter</name><argument_list>()</argument_list></call>).<call><name>setStart</name><argument_list>(<argument><expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr>!<name>countCQL3Rows</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>remaining</name> <init>= <expr><name>maxResults</name> - <name>currentColumnsCount</name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>initialFilter</name><argument_list>()</argument_list></call>.<call><name>updateColumnsLimit</name><argument_list>(<argument><expr><name>remaining</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>lastCounted</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name>initialFilter</name><argument_list>()</argument_list></call> instanceof <name>SliceQueryFilter</name></expr>)</condition><then>
+            <return>return <expr>((<name>SliceQueryFilter</name>)<call><name>initialFilter</name><argument_list>()</argument_list></call>).<call><name>lastCounted</name><argument_list>()</argument_list></call></expr>;</return></then>
+        <else>else
+            <return>return <expr><call><name>initialFilter</name><argument_list>()</argument_list></call>.<call><name>getLiveCount</name><argument_list>(<argument><expr><name>data</name></expr></argument>)</argument_list></call></expr>;</return></else></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** The initial filter we'll do our first slice with (either the original or a superset of it) */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>IDiskAtomFilter</name></type> <name>initialFilter</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <function><type><specifier>public</specifier> <name>IDiskAtomFilter</name></type> <name>originalFilter</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>originalFilter</name></expr>;</return>
+    }</block></function>
+
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>getClause</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Returns a filter to query the columns from the clause that the initial slice filter may not have caught.
+     * @param data the data retrieve by the initial filter
+     * @return a filter or null if there can't be any columns we missed with our initial filter (typically if it was a names query, or a slice of the entire row)
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>IDiskAtomFilter</name></type> <name>getExtraFilter</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * @return data pruned down to the columns originally asked for
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>ColumnFamily</name></type> <name>prune</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if the provided data satisfies all the expressions from
+     * the clause of this filter.
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>boolean</name></type> <name>isSatisfiedBy</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>)</parameter_list>;</function_decl>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>satisfies</name><parameter_list>(<param><decl><type><name>int</name></type> <name>comparison</name></decl></param>, <param><decl><type><name>IndexOperator</name></type> <name>op</name></decl></param>)</parameter_list>
+    <block>{
+        <switch>switch <condition>(<expr><name>op</name></expr>)</condition>
+        <block>{
+            <case>case <expr><name>EQ</name></expr>:
+                <return>return <expr><name>comparison</name> == 0</expr>;</return>
+            </case><case>case <expr><name>GTE</name></expr>:
+                <return>return <expr><name>comparison</name> &gt;= 0</expr>;</return>
+            </case><case>case <expr><name>GT</name></expr>:
+                <return>return <expr><name>comparison</name> &gt; 0</expr>;</return>
+            </case><case>case <expr><name>LTE</name></expr>:
+                <return>return <expr><name>comparison</name> &lt;= 0</expr>;</return>
+            </case><case>case <expr><name>LT</name></expr>:
+                <return>return <expr><name>comparison</name> &lt; 0</expr>;</return>
+            </case><default>default:
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>()</argument_list></call></expr>;</throw>
+        </default>}</block></switch>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>FilterWithClauses</name> <super><extends>extends <name>ExtendedFilter</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>IDiskAtomFilter</name></type> <name>initialFilter</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>FilterWithClauses</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>IDiskAtomFilter</name></type> <name>filter</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxResults</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>countCQL3Rows</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>filter</name></expr></argument>, <argument><expr><name>maxResults</name></expr></argument>, <argument><expr><name>countCQL3Rows</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <assert>assert <expr><name>clause</name> != null</expr>;</assert>
+            <expr_stmt><expr><name><name>this</name>.<name>clause</name></name> = <name>clause</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>initialFilter</name></name> = <call><name>computeInitialFilter</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/** Sets up the initial filter. */</comment>
+        <function><type><specifier>protected</specifier> <name>IDiskAtomFilter</name></type> <name>computeInitialFilter</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>originalFilter</name> instanceof <name>SliceQueryFilter</name></expr>)</condition><then>
+            <block>{
+                <comment type="line">// if we have a high chance of getting all the columns in a single index slice (and it's not too costly), do that.</comment>
+                <comment type="line">// otherwise, the extraFilter (lazily created) will fetch by name the columns referenced by the additional expressions.</comment>
+                <if>if <condition>(<expr><call><name><name>cfs</name>.<name>getMaxRowSize</name></name><argument_list>()</argument_list></call> &lt; <call><name><name>DatabaseDescriptor</name>.<name>getColumnIndexSize</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Expanding slice filter to entire row to cover additional expressions"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <return>return <expr>new <call><name>SliceQueryFilter</name><argument_list>(<argument><expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></argument>,
+                                                <argument><expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></argument>,
+                                                <argument><expr>((<name>SliceQueryFilter</name>) <name>originalFilter</name>).<name>reversed</name></expr></argument>,
+                                                <argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</return>
+                }</block></then></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"adding columns to original Filter to cover additional expressions"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <assert>assert <expr><name>originalFilter</name> instanceof <name>NamesQueryFilter</name></expr>;</assert>
+                <if>if <condition>(<expr>!<call><name><name>clause</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>columns</name> <init>= <expr>new <call><name><name>TreeSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <for>for (<init><decl><type><name>IndexExpression</name></type> <name>expr</name> <range>: <expr><name>clause</name></expr></range></decl></init>)
+                    <block>{
+                        <expr_stmt><expr><call><name><name>columns</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>expr</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></for>
+                    <expr_stmt><expr><call><name><name>columns</name>.<name>addAll</name></name><argument_list>(<argument><expr>((<name>NamesQueryFilter</name>) <name>originalFilter</name>).<name>columns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <return>return <expr>((<name>NamesQueryFilter</name>)<name>originalFilter</name>).<call><name>withUpdatedColumns</name><argument_list>(<argument><expr><name>columns</name></expr></argument>)</argument_list></call></expr>;</return>
+                }</block></then></if>
+            }</block></else></if>
+            <return>return <expr><name>originalFilter</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>IDiskAtomFilter</name></type> <name>initialFilter</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>initialFilter</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>getClause</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>clause</name></expr>;</return>
+        }</block></function>
+
+        <comment type="block">/*
+         * We may need an extra query only if the original was a slice query (and thus may have miss the expression for the clause).
+         * Even then, there is no point in doing an extra query if the original filter grabbed the whole row.
+         * Lastly, we only need the extra query if we haven't yet got all the expressions from the clause.
+         */</comment>
+        <function><type><specifier>private</specifier> <name>boolean</name></type> <name>needsExtraQuery</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr>!(<name>originalFilter</name> instanceof <name>SliceQueryFilter</name>)</expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+
+            <decl_stmt><decl><type><name>SliceQueryFilter</name></type> <name>filter</name> <init>= <expr>(<name>SliceQueryFilter</name>)<name>originalFilter</name></expr></init></decl>;</decl_stmt>
+            <comment type="line">// Check if we've fetch the whole row</comment>
+            <if>if <condition>(<expr><name><name>filter</name>.<name>slices</name>.<name>length</name></name> == 1
+             &amp;&amp; <call><name><name>filter</name>.<name>start</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></argument>)</argument_list></call>
+             &amp;&amp; <call><name><name>filter</name>.<name>finish</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></argument>)</argument_list></call>
+             &amp;&amp; <name><name>filter</name>.<name>count</name></name> == <name><name>Integer</name>.<name>MAX_VALUE</name></name></expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+
+            <for>for (<init><decl><type><name>IndexExpression</name></type> <name>expr</name> <range>: <expr><name>clause</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>data</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name><name>expr</name>.<name>column_name</name></name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"adding extraFilter to cover additional expressions"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <return>return <expr>true</expr>;</return>
+                }</block></then></if>
+            }</block></for>
+            <return>return <expr>false</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>IDiskAtomFilter</name></type> <name>getExtraFilter</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr>!<call><name>needsExtraQuery</name><argument_list>(<argument><expr><name>data</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr>null</expr>;</return></then></if>
+
+            <comment type="line">// Note: for counters we must be careful to not add a column that was already there (to avoid overcount). That is</comment>
+            <comment type="line">// why we do the dance of avoiding to query any column we already have (it's also more efficient anyway)</comment>
+            <decl_stmt><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>columns</name> <init>= <expr>new <call><name><name>TreeSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>IndexExpression</name></type> <name>expr</name> <range>: <expr><name>clause</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>data</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name><name>expr</name>.<name>column_name</name></name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>columns</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>expr</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></for>
+            <assert>assert <expr>!<call><name><name>columns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+            <return>return <expr>new <call><name>NamesQueryFilter</name><argument_list>(<argument><expr><name>columns</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>prune</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>initialFilter</name> == <name>originalFilter</name></expr>)</condition><then>
+                <return>return <expr><name>data</name></expr>;</return></then></if>
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>pruned</name> <init>= <expr><call><name><name>data</name>.<name>cloneMeShallow</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>OnDiskAtomIterator</name></type> <name>iter</name> <init>= <expr><call><name><name>originalFilter</name>.<name>getMemtableColumnIterator</name></name><argument_list>(<argument><expr><name>data</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>originalFilter</name>.<name>collectReducedColumns</name></name><argument_list>(<argument><expr><name>pruned</name></expr></argument>, <argument><expr><call><name><name>QueryFilter</name>.<name>gatherTombstones</name></name><argument_list>(<argument><expr><name>pruned</name></expr></argument>, <argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>cfs</name>.<name>gcBefore</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>pruned</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isSatisfiedBy</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// We enforces even the primary clause because reads are not synchronized with writes and it is thus possible to have a race</comment>
+            <comment type="line">// where the index returned a row which doesn't have the primary column when we actually read it</comment>
+            <for>for (<init><decl><type><name>IndexExpression</name></type> <name>expression</name> <range>: <expr><name>clause</name></expr></range></decl></init>)
+            <block>{
+                <comment type="line">// check column data vs expression</comment>
+                <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>colName</name> <init>= <expr><name>builder</name> == null ? <name><name>expression</name>.<name>column_name</name></name> : <call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name><name>expression</name>.<name>column_name</name></name></expr></argument>)</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>data</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>colName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>column</name> == null</expr>)</condition><then>
+                    <return>return <expr>false</expr>;</return></then></if>
+                <decl_stmt><decl><type><name>int</name></type> <name>v</name> <init>= <expr><call><name><name>data</name>.<name>metadata</name></name><argument_list>()</argument_list></call>.<call><name>getValueValidator</name><argument_list>(<argument><expr><name><name>expression</name>.<name>column_name</name></name></expr></argument>)</argument_list></call>.<call><name>compare</name><argument_list>(<argument><expr><call><name><name>column</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>expression</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr>!<call><name>satisfies</name><argument_list>(<argument><expr><name>v</name></expr></argument>, <argument><expr><name><name>expression</name>.<name>op</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return <expr>false</expr>;</return></then></if>
+            }</block></for>
+            <return>return <expr>true</expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>FilterWithCompositeClauses</name> <super><extends>extends <name>FilterWithClauses</name></extends></super>
+    <block>{
+        <constructor><specifier>public</specifier> <name>FilterWithCompositeClauses</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>IDiskAtomFilter</name></type> <name>filter</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxResults</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>countCQL3Rows</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>filter</name></expr></argument>, <argument><expr><name>clause</name></expr></argument>, <argument><expr><name>maxResults</name></expr></argument>, <argument><expr><name>countCQL3Rows</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block">/*
+         * For composites, the index name is not a valid column name (it's only
+         * one of the component), which means we should not do the
+         * NamesQueryFilter part of FilterWithClauses in particular.
+         * Besides, CompositesSearcher doesn't really use the initial filter
+         * expect to know the limit set by the user, so create a fake filter
+         * with only the count information.
+         */</comment>
+        <function><type><specifier>protected</specifier> <name>IDiskAtomFilter</name></type> <name>computeInitialFilter</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>limit</name> <init>= <expr><name>originalFilter</name> instanceof <name>SliceQueryFilter</name>
+                      ? ((<name>SliceQueryFilter</name>)<name>originalFilter</name>).<name>count</name>
+                      : <name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></init></decl>;</decl_stmt>
+            <return>return <expr>new <call><name>SliceQueryFilter</name><argument_list>(<argument><expr><name><name>ColumnSlice</name>.<name>ALL_COLUMNS_ARRAY</name></name></expr></argument>, <argument><expr>false</expr></argument>, <argument><expr><name>limit</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>EmptyClauseFilter</name> <super><extends>extends <name>ExtendedFilter</name></extends></super>
+    <block>{
+        <constructor><specifier>public</specifier> <name>EmptyClauseFilter</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>IDiskAtomFilter</name></type> <name>filter</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxResults</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>countCQL3Rows</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>isPaging</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>filter</name></expr></argument>, <argument><expr><name>maxResults</name></expr></argument>, <argument><expr><name>countCQL3Rows</name></expr></argument>, <argument><expr><name>isPaging</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>IDiskAtomFilter</name></type> <name>initialFilter</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>originalFilter</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>getClause</name><parameter_list>()</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>IDiskAtomFilter</name></type> <name>getExtraFilter</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>null</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>prune</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><name>data</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isSatisfiedBy</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>data</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>true</expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

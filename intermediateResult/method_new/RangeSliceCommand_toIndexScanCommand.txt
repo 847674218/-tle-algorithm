@@ -1,0 +1,29 @@
+public IndexScanCommand toIndexScanCommand()
+    {
+        assert row_filter != null && !row_filter.isEmpty();
+        if (countCQL3Rows || isPaging)
+            throw new IllegalStateException("Cannot proceed with range query as the remote end has a version < 1.1. Please update the full cluster first.");
+
+        CFMetaData cfm = Schema.instance.getCFMetaData(keyspace, column_family);
+        try
+        {
+            if (!ThriftValidation.validateFilterClauses(cfm, row_filter))
+                throw new IllegalStateException("Cannot proceed with non-indexed query as the remote end has a version < 1.1. Please update the full cluster first.");
+        }
+        catch (InvalidRequestException e)
+        {
+            throw new RuntimeException(e);
+        }
+
+        RowPosition start = range.left;
+        ByteBuffer startKey = ByteBufferUtil.EMPTY_BYTE_BUFFER;
+        if (start instanceof DecoratedKey)
+        {
+            startKey = ((DecoratedKey)start).key;
+        }
+
+        IndexClause clause = new IndexClause(row_filter, startKey, maxResults);
+        // IndexScanCommand is deprecated so don't bother
+        SlicePredicate pred = RangeSliceCommandSerializer.asSlicePredicate(predicate);
+        return new IndexScanCommand(keyspace, column_family, clause, pred, range);
+    }

@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\utils\ExpiringMap.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Set</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentHashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ScheduledExecutorService</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Function</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>DebuggableScheduledThreadPoolExecutor</name></name>;</import>
+
+<class><specifier>public</specifier> class <name><name>ExpiringMap</name><argument_list>&lt;<argument><name>K</name></argument>, <argument><name>V</name></argument>&gt;</argument_list></name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>ExpiringMap</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>boolean</name></type> <name>shutdown</name></decl>;</decl_stmt>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name><name>CacheableObject</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>T</name></type> <name>value</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>long</name></type> <name>timeout</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>createdAt</name></decl>;</decl_stmt>
+
+        <constructor><specifier>private</specifier> <name>CacheableObject</name><parameter_list>(<param><decl><type><name>T</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timeout</name></decl></param>)</parameter_list>
+        <block>{
+            <assert>assert <expr><name>value</name> != null</expr>;</assert>
+            <expr_stmt><expr><name><name>this</name>.<name>value</name></name> = <name>value</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>timeout</name></name> = <name>timeout</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>createdAt</name></name> = <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>private</specifier> <name>boolean</name></type> <name>isReadyToDieAt</name><parameter_list>(<param><decl><type><name>long</name></type> <name>time</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>((<name>time</name> - <name>createdAt</name>) &gt; <name>timeout</name>)</expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <comment type="line">// if we use more ExpiringMaps we may want to add multiple threads to this executor</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>ScheduledExecutorService</name></type> <name>service</name> <init>= <expr>new <call><name>DebuggableScheduledThreadPoolExecutor</name><argument_list>(<argument><expr>"EXPIRING-MAP-REAPER"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentMap</name><argument_list>&lt;<argument><name>K</name></argument>, <argument><name><name>CacheableObject</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>cache</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>K</name></argument>, <argument><name><name>CacheableObject</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>defaultExpiration</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>ExpiringMap</name><parameter_list>(<param><decl><type><name>long</name></type> <name>defaultExpiration</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>defaultExpiration</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     *
+     * @param defaultExpiration the TTL for objects in the cache in milliseconds
+     */</comment>
+    <constructor><specifier>public</specifier> <name>ExpiringMap</name><parameter_list>(<param><decl><type><name>long</name></type> <name>defaultExpiration</name></decl></param>, <param><decl><type><specifier>final</specifier> <name><name>Function</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>K</name></argument>,<argument><name><name>CacheableObject</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>, <argument><name>?</name></argument>&gt;</argument_list></name></type> <name>postExpireHook</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>defaultExpiration</name></name> = <name>defaultExpiration</name></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>defaultExpiration</name> &lt;= 0</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"Argument specified must be a positive number"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>start</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>K</name></argument>, <argument><name><name>CacheableObject</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>cache</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>isReadyToDieAt</name><argument_list>(<argument><expr><name>start</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>cache</name>.<name>remove</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>n</name>++</expr>;</expr_stmt>
+                        <if>if <condition>(<expr><name>postExpireHook</name> != null</expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>postExpireHook</name>.<name>apply</name></name><argument_list>(<argument><expr><call><name><name>Pair</name>.<name>create</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    }</block></then></if>
+                }</block></for>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Expired {} entries"</expr></argument>, <argument><expr><name>n</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>service</name>.<name>scheduleWithFixedDelay</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr><name>defaultExpiration</name> / 2</expr></argument>, <argument><expr><name>defaultExpiration</name> / 2</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>shutdownBlocking</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>service</name>.<name>shutdown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>service</name>.<name>awaitTermination</name></name><argument_list>(<argument><expr><name>defaultExpiration</name> * 2</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>reset</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>shutdown</name> = false</expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>cache</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>V</name></type> <name>put</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>, <param><decl><type><name>V</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>put</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>value</name></expr></argument>, <argument><expr><name><name>this</name>.<name>defaultExpiration</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>V</name></type> <name>put</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>, <param><decl><type><name>V</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timeout</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>shutdown</name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// StorageProxy isn't equipped to deal with "I'm nominally alive, but I can't send any messages out."</comment>
+            <comment type="line">// So we'll just sit on this thread until the rest of the server shutdown completes.</comment>
+            <comment type="line">//</comment>
+            <comment type="line">// See comments in CustomTThreadPoolServer.serve, CASSANDRA-3335, and CASSANDRA-3727.</comment>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr><name><name>Long</name>.<name>MAX_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></then></if>
+        <decl_stmt><decl><type><name><name>CacheableObject</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></type> <name>previous</name> <init>= <expr><call><name><name>cache</name>.<name>put</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr>new <call><name><name>CacheableObject</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>value</name></expr></argument>, <argument><expr><name>timeout</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr>(<name>previous</name> == null) ? null : <name><name>previous</name>.<name>value</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>V</name></type> <name>get</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>CacheableObject</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></type> <name>co</name> <init>= <expr><call><name><name>cache</name>.<name>get</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>co</name> == null ? null : <name><name>co</name>.<name>value</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>V</name></type> <name>remove</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>CacheableObject</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></type> <name>co</name> <init>= <expr><call><name><name>cache</name>.<name>remove</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>co</name> == null ? null : <name><name>co</name>.<name>value</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getAge</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>CacheableObject</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></type> <name>co</name> <init>= <expr><call><name><name>cache</name>.<name>get</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>co</name> == null ? 0 : <name><name>co</name>.<name>createdAt</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>size</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cache</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>containsKey</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cache</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isEmpty</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cache</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>K</name></argument>&gt;</argument_list></name></type> <name>keySet</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cache</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

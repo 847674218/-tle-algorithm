@@ -1,0 +1,44 @@
+public static Map<String, CfDef> loadCql3DefsUnchecked(Cassandra.Client thriftClient, KsDef thriftKs) throws Exception
+    {
+        Map<String, CfDef> cql3Defs = new HashMap<String, CfDef>();
+
+        String query = "SELECT columnfamily_name, comparator, default_validator, key_validator FROM system.schema_columnfamilies WHERE keyspace_name='%s'";
+        String formatted = String.format(query, thriftKs.name);
+        CqlResult result = thriftClient.execute_cql3_query(ByteBufferUtil.bytes(formatted),
+                                                           Compression.NONE,
+                                                           ConsistencyLevel.ONE);
+        outer:
+        for (CqlRow row : result.rows)
+        {
+            Column rawName = row.columns.get(0);
+            assert ByteBufferUtil.string(ByteBuffer.wrap(rawName.getName())).equals("columnfamily_name");
+            String name = ByteBufferUtil.string(ByteBuffer.wrap(rawName.getValue()));
+
+            Column rawComparator = row.columns.get(1);
+            assert ByteBufferUtil.string(ByteBuffer.wrap(rawComparator.getName())).equals("comparator");
+            String comparator = ByteBufferUtil.string(ByteBuffer.wrap(rawComparator.getValue()));
+
+            Column rawValidator = row.columns.get(2);
+            assert ByteBufferUtil.string(ByteBuffer.wrap(rawValidator.getName())).equals("default_validator");
+            String validator = ByteBufferUtil.string(ByteBuffer.wrap(rawValidator.getValue()));
+
+            Column rawKeyValidator = row.columns.get(3);
+            assert ByteBufferUtil.string(ByteBuffer.wrap(rawKeyValidator.getName())).equals("key_validator");
+            String keyValidator = ByteBufferUtil.string(ByteBuffer.wrap(rawKeyValidator.getValue()));
+
+            for (CfDef cf_def : thriftKs.cf_defs)
+            {
+                if (cf_def.name.equals(name))
+                    continue outer;
+            }
+
+            CfDef thriftDef = new CfDef(thriftKs.name, name)
+                              .setComparator_type(comparator)
+                              .setDefault_validation_class(validator)
+                              .setKey_validation_class(keyValidator)
+                              .setColumn_metadata(Collections.<ColumnDef>emptyList());
+            cql3Defs.put(name, thriftDef);
+        }
+
+        return cql3Defs;
+    }

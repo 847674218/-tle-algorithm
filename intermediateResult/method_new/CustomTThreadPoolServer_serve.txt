@@ -1,0 +1,70 @@
+public void serve()
+    {
+        try
+        {
+            serverTransport_.listen();
+        }
+        catch (TTransportException ttx)
+        {
+            logger.error("Error occurred during listening.", ttx);
+            return;
+        }
+
+        stopped = false;
+        while (!stopped)
+        {
+            // block until we are under max clients
+            while (activeClients.get() >= args.maxWorkerThreads)
+            {
+                try
+                {
+                    Thread.sleep(100);
+                }
+                catch (InterruptedException e)
+                {
+                    throw new AssertionError(e);
+                }
+            }
+
+            try
+            {
+                TTransport client = serverTransport_.accept();
+                activeClients.incrementAndGet();
+                WorkerProcess wp = new WorkerProcess(client);
+                executorService.execute(wp);
+            }
+            catch (TTransportException ttx)
+            {
+                if (ttx.getCause() instanceof SocketTimeoutException) // thrift sucks
+                    continue;
+
+                if (!stopped)
+                {
+                    logger.warn("Transport error occurred during acceptance of message.", ttx);
+                }
+            }
+
+            if (activeClients.get() >= args.maxWorkerThreads)
+                logger.warn("Maximum number of clients " + args.maxWorkerThreads + " reached");
+        }
+
+        executorService.shutdown();
+        // Thrift's default shutdown waits for the WorkerProcess threads to complete.  We do not,
+        // because doing that allows a client to hold our shutdown "hostage" by simply not sending
+        // another message after stop is called (since process will block indefinitely trying to read
+        // the next meessage header).
+        //
+        // The "right" fix would be to update thrift to set a socket timeout on client connections
+        // (and tolerate unintentional timeouts until stopped is set).  But this requires deep
+        // changes to the code generator, so simply setting these threads to daemon (in our custom
+        // CleaningThreadPool) and ignoring them after shutdown is good enough.
+        //
+        // Remember, our goal on shutdown is not necessarily that each client request we receive
+        // gets answered first [to do that, you should redirect clients to a different coordinator
+        // first], but rather (1) to make sure that for each update we ack as successful, we generate
+        // hints for any non-responsive replicas, and (2) to make sure that we quickly stop
+        // accepting client connections so shutdown can continue.  Not waiting for the WorkerProcess
+        // threads here accomplishes (2); MessagingService's shutdown method takes care of (1).
+        //
+        // See CASSANDRA-3335 and CASSANDRA-3727.
+    }

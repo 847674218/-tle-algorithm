@@ -1,0 +1,60 @@
+@Override
+    public Tuple getNext() throws IOException
+    {
+        if (widerows)
+            return getNextWide();
+        try
+        {
+            // load the next pair
+            if (!reader.nextKeyValue())
+                return null;
+
+            CfDef cfDef = getCfDef(loadSignature);
+            ByteBuffer key = reader.getCurrentKey();
+            Map<ByteBuffer, IColumn> cf = reader.getCurrentValue();
+            assert key != null && cf != null;
+
+            // output tuple, will hold the key, each indexed column in a tuple, then a bag of the rest
+            // NOTE: we're setting the tuple size here only for the key so we can use setTupleValue on it
+
+            Tuple tuple = keyToTuple(key, cfDef, parseType(cfDef.getKey_validation_class()));
+            DefaultDataBag bag = new DefaultDataBag();
+
+            // we must add all the indexed columns first to match the schema
+            Map<ByteBuffer, Boolean> added = new HashMap<ByteBuffer, Boolean>();
+            // take care to iterate these in the same order as the schema does
+            for (ColumnDef cdef : cfDef.column_metadata)
+            {
+                if (cf.containsKey(cdef.name))
+                {
+                    tuple.append(columnToTuple(cf.get(cdef.name), cfDef, parseType(cfDef.getComparator_type())));
+                }
+                else
+                {   // otherwise, we need to add an empty tuple to take its place
+                    tuple.append(TupleFactory.getInstance().newTuple());
+                }
+                added.put(cdef.name, true);
+            }
+            // now add all the other columns
+            for (Map.Entry<ByteBuffer, IColumn> entry : cf.entrySet())
+            {
+                if (!added.containsKey(entry.getKey()))
+                    bag.add(columnToTuple(entry.getValue(), cfDef, parseType(cfDef.getComparator_type())));
+            }
+            tuple.append(bag);
+            // finally, special top-level indexes if needed
+            if (usePartitionFilter)
+            {
+                for (ColumnDef cdef : getIndexes())
+                {
+                    Tuple throwaway = columnToTuple(cf.get(cdef.name), cfDef, parseType(cfDef.getComparator_type()));
+                    tuple.append(throwaway.get(1));
+                }
+            }
+            return tuple;
+        }
+        catch (InterruptedException e)
+        {
+            throw new IOException(e.getMessage());
+        }
+    }

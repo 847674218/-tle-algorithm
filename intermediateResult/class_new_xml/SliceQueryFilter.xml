@@ -1,0 +1,351 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\filter\SliceQueryFilter.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>AbstractIterator</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Lists</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>OnDiskAtomIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>ISSTableColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>SSTableSliceIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>CompositeType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IVersionedSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileDataInput</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tracing</name>.<name>Tracing</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>SliceQueryFilter</name> <super><implements>implements <name>IDiskAtomFilter</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SliceQueryFilter</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Serializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>Serializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>ColumnSlice</name><index>[]</index></type> <name>slices</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>reversed</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>volatile</specifier> <name>int</name></type> <name>count</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>compositesToGroup</name></decl>;</decl_stmt>
+    <comment type="line">// This is a hack to allow rolling upgrade with pre-1.2 nodes</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>countMutliplierForCompatibility</name></decl>;</decl_stmt>
+
+    <comment type="line">// Not serialized, just a ack for range slices to find the number of live column counted, even when we group</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ColumnCounter</name></type> <name>columnCounter</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>SliceQueryFilter</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>start</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>finish</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>reversed</name></decl></param>, <param><decl><type><name>int</name></type> <name>count</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr>new <name><name>ColumnSlice</name><index>[]</index></name> <block>{ <expr>new <call><name>ColumnSlice</name><argument_list>(<argument><expr><name>start</name></expr></argument>, <argument><expr><name>finish</name></expr></argument>)</argument_list></call></expr> }</block></expr></argument>, <argument><expr><name>reversed</name></expr></argument>, <argument><expr><name>count</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>SliceQueryFilter</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>start</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>finish</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>reversed</name></decl></param>, <param><decl><type><name>int</name></type> <name>count</name></decl></param>, <param><decl><type><name>int</name></type> <name>compositesToGroup</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr>new <name><name>ColumnSlice</name><index>[]</index></name> <block>{ <expr>new <call><name>ColumnSlice</name><argument_list>(<argument><expr><name>start</name></expr></argument>, <argument><expr><name>finish</name></expr></argument>)</argument_list></call></expr> }</block></expr></argument>, <argument><expr><name>reversed</name></expr></argument>, <argument><expr><name>count</name></expr></argument>, <argument><expr><name>compositesToGroup</name></expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Constructor that accepts multiple slices. All slices are assumed to be in the same direction (forward or
+     * reversed).
+     */</comment>
+    <constructor><specifier>public</specifier> <name>SliceQueryFilter</name><parameter_list>(<param><decl><type><name><name>ColumnSlice</name><index>[]</index></name></type> <name>slices</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>reversed</name></decl></param>, <param><decl><type><name>int</name></type> <name>count</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>slices</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>, <argument><expr><name>count</name></expr></argument>, <argument><expr>-1</expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>SliceQueryFilter</name><parameter_list>(<param><decl><type><name><name>ColumnSlice</name><index>[]</index></name></type> <name>slices</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>reversed</name></decl></param>, <param><decl><type><name>int</name></type> <name>count</name></decl></param>, <param><decl><type><name>int</name></type> <name>compositesToGroup</name></decl></param>, <param><decl><type><name>int</name></type> <name>countMutliplierForCompatibility</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>slices</name></name> = <name>slices</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>reversed</name></name> = <name>reversed</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>count</name></name> = <name>count</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>compositesToGroup</name></name> = <name>compositesToGroup</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>countMutliplierForCompatibility</name></name> = <name>countMutliplierForCompatibility</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>SliceQueryFilter</name></type> <name>withUpdatedCount</name><parameter_list>(<param><decl><type><name>int</name></type> <name>newCount</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>SliceQueryFilter</name><argument_list>(<argument><expr><name>slices</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>, <argument><expr><name>newCount</name></expr></argument>, <argument><expr><name>compositesToGroup</name></expr></argument>, <argument><expr><name>countMutliplierForCompatibility</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>SliceQueryFilter</name></type> <name>withUpdatedSlices</name><parameter_list>(<param><decl><type><name><name>ColumnSlice</name><index>[]</index></name></type> <name>newSlices</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>SliceQueryFilter</name><argument_list>(<argument><expr><name>newSlices</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>, <argument><expr><name>count</name></expr></argument>, <argument><expr><name>compositesToGroup</name></expr></argument>, <argument><expr><name>countMutliplierForCompatibility</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>OnDiskAtomIterator</name></type> <name>getMemtableColumnIterator</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>Memtable</name>.<name>getSliceIterator</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ISSTableColumnIterator</name></type> <name>getSSTableColumnIterator</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>SSTableSliceIterator</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>slices</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ISSTableColumnIterator</name></type> <name>getSSTableColumnIterator</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>FileDataInput</name></type> <name>file</name></decl></param>, <param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>RowIndexEntry</name></type> <name>indexEntry</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>SSTableSliceIterator</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>file</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>slices</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>, <argument><expr><name>indexEntry</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>SuperColumn</name></type> <name>filterSuperColumn</name><parameter_list>(<param><decl><type><name>SuperColumn</name></type> <name>superColumn</name></decl></param>, <param><decl><type><name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// we clone shallow, then add, under the theory that generally we're interested in a relatively small number of subcolumns.</comment>
+        <comment type="line">// this may be a poor assumption.</comment>
+        <decl_stmt><decl><type><name>SuperColumn</name></type> <name>scFiltered</name> <init>= <expr><call><name><name>superColumn</name>.<name>cloneMeShallow</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>subcolumns</name></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>reversed</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>columnsAsList</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>superColumn</name>.<name>getSubColumns</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>subcolumns</name> = <call><name><name>Lists</name>.<name>reverse</name></name><argument_list>(<argument><expr><name>columnsAsList</name></expr></argument>)</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name>subcolumns</name> = <call><name><name>superColumn</name>.<name>getSubColumns</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr><name>reversed</name> ? <call><name><name>superColumn</name>.<name>getComparator</name></name><argument_list>()</argument_list></call>.<name>reverseComparator</name> : <call><name><name>superColumn</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>results</name> <init>= <expr>new <class><super><name><name>AbstractIterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>protected</specifier> <name>IColumn</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+            <block>{
+                <while>while <condition>(<expr><call><name><name>subcolumns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+                <block>{
+                    <decl_stmt><decl><type><name>IColumn</name></type> <name>subcolumn</name> <init>= <expr><call><name><name>subcolumns</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <comment type="line">// iterate until we get to the "real" start column</comment>
+                    <if>if <condition>(<expr><call><name><name>comparator</name>.<name>compare</name></name><argument_list>(<argument><expr><call><name><name>subcolumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>start</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> &lt; 0</expr>)</condition><then>
+                        <continue>continue;</continue></then></if>
+                    <comment type="line">// exit loop when columns are out of the range.</comment>
+                    <if>if <condition>(<expr><call><name>finish</name><argument_list>()</argument_list></call>.<call><name>remaining</name><argument_list>()</argument_list></call> &gt; 0 &amp;&amp; <call><name><name>comparator</name>.<name>compare</name></name><argument_list>(<argument><expr><call><name><name>subcolumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>finish</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> &gt; 0</expr>)</condition><then>
+                        <break>break;</break></then></if>
+                    <return>return <expr><name>subcolumn</name></expr>;</return>
+                }</block></while>
+                <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <comment type="line">// subcolumns is either empty now, or has been redefined in the loop above. either is ok.</comment>
+        <expr_stmt><expr><call><name>collectReducedColumns</name><argument_list>(<argument><expr><name>scFiltered</name></expr></argument>, <argument><expr><name>results</name></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>scFiltered</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>getColumnComparator</name><parameter_list>(<param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name>reversed</name> ? <name><name>comparator</name>.<name>columnReverseComparator</name></name> : <name><name>comparator</name>.<name>columnComparator</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>collectReducedColumns</name><parameter_list>(<param><decl><type><name>IColumnContainer</name></type> <name>container</name></decl></param>, <param><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>reducedColumns</name></decl></param>, <param><decl><type><name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>columnCounter</name> = <call><name>getColumnCounter</name><argument_list>(<argument><expr><name>container</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <while>while <condition>(<expr><call><name><name>reducedColumns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>reducedColumns</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"collecting %s of %s: %s"</expr></argument>,
+                                           <argument><expr><call><name><name>columnCounter</name>.<name>live</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>count</name></expr></argument>, <argument><expr><call><name><name>column</name>.<name>getString</name></name><argument_list>(<argument><expr><call><name><name>container</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <expr_stmt><expr><call><name><name>columnCounter</name>.<name>count</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name>container</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><call><name><name>columnCounter</name>.<name>live</name></name><argument_list>()</argument_list></call> &gt; <name>count</name></expr>)</condition><then>
+                <break>break;</break></then></if>
+
+            <comment type="line">// but we need to add all non-gc-able columns to the result for read repair:</comment>
+            <if>if <condition>(<expr><call><name><name>QueryFilter</name>.<name>isRelevant</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name>container</name></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>container</name>.<name>addColumn</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></while>
+
+        <expr_stmt><expr><call><name><name>Tracing</name>.<name>trace</name></name><argument_list>(<argument><expr>"Read {} live cells and {} tombstoned"</expr></argument>, <argument><expr><call><name><name>columnCounter</name>.<name>live</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>columnCounter</name>.<name>ignored</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getLiveCount</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnCounter</name></type> <name>counter</name> <init>= <expr><call><name>getColumnCounter</name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>IColumn</name></type> <name>column</name> <range>: <expr><name>cf</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>counter</name>.<name>count</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><call><name><name>counter</name>.<name>live</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>ColumnCounter</name></type> <name>getColumnCounter</name><parameter_list>(<param><decl><type><name>IColumnContainer</name></type> <name>container</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name> <init>= <expr><call><name><name>container</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>compositesToGroup</name> &lt; 0</expr>)</condition><then>
+            <return>return <expr>new <call><name>ColumnCounter</name><argument_list>()</argument_list></call></expr>;</return></then>
+        <else>else <if>if <condition>(<expr><name>compositesToGroup</name> == 0</expr>)</condition><then>
+            <return>return <expr>new <call><name><name>ColumnCounter</name>.<name>GroupByPrefix</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</return></then>
+        <else>else
+            <return>return <expr>new <call><name><name>ColumnCounter</name>.<name>GroupByPrefix</name></name><argument_list>(<argument><expr>(<name>CompositeType</name>)<name>comparator</name></expr></argument>, <argument><expr><name>compositesToGroup</name></expr></argument>)</argument_list></call></expr>;</return></else></if></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>trim</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>, <param><decl><type><name>int</name></type> <name>trimTo</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnCounter</name></type> <name>counter</name> <init>= <expr><call><name>getColumnCounter</name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>toRemove</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>trimRemaining</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>columns</name> <init>= <expr><name>reversed</name>
+                                    ? <call><name><name>cf</name>.<name>getReverseSortedColumns</name></name><argument_list>()</argument_list></call>
+                                    : <call><name><name>cf</name>.<name>getSortedColumns</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>IColumn</name></type> <name>column</name> <range>: <expr><name>columns</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name>trimRemaining</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>toRemove</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <continue>continue;</continue>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name><name>counter</name>.<name>count</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>counter</name>.<name>live</name></name><argument_list>()</argument_list></call> &gt; <name>trimTo</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>toRemove</name> = new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>toRemove</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>trimRemaining</name> = true</expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+
+        <if>if <condition>(<expr><name>toRemove</name> != null</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>columnName</name> <range>: <expr><name>toRemove</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>cf</name>.<name>remove</name></name><argument_list>(<argument><expr><name>columnName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>start</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>this</name>.<name>slices</name><index>[<expr>0</expr>]</index></name>.<name>start</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>finish</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>this</name>.<name>slices</name><index>[<expr><name><name>slices</name>.<name>length</name></name> - 1</expr>]</index></name>.<name>finish</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setStart</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>start</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name><name>slices</name>.<name>length</name></name> == 1</expr>;</assert>
+        <expr_stmt><expr><name><name>this</name>.<name>slices</name><index>[<expr>0</expr>]</index></name> = new <call><name>ColumnSlice</name><argument_list>(<argument><expr><name>start</name></expr></argument>, <argument><expr><name><name>this</name>.<name>slices</name><index>[<expr>0</expr>]</index></name>.<name>finish</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>lastCounted</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>columnCounter</name> == null ? 0 : <call><name><name>columnCounter</name>.<name>live</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>"SliceQueryFilter [reversed=" + <name>reversed</name> + ", slices=" + <call><name><name>Arrays</name>.<name>toString</name></name><argument_list>(<argument><expr><name>slices</name></expr></argument>)</argument_list></call> + ", count=" + <name>count</name> + ", toGroup = " + <name>compositesToGroup</name> + "]"</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isReversed</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>reversed</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateColumnsLimit</name><parameter_list>(<param><decl><type><name>int</name></type> <name>newLimit</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>count</name> = <name>newLimit</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>includes</name><parameter_list>(<param><decl><type><name><name>Comparator</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>cmp</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ColumnSlice</name></type> <name>slice</name> <range>: <expr><name>slices</name></expr></range></decl></init>)
+            <if>if <condition>(<expr><call><name><name>slice</name>.<name>includes</name></name><argument_list>(<argument><expr><name>cmp</name></expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr>true</expr>;</return></then></if></for>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>Serializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>SliceQueryFilter</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>SliceQueryFilter</name></type> <name>f</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+            <block>{
+                <comment type="line">// It's kind of lame, but probably better than throwing an exception</comment>
+                <decl_stmt><decl><type><name>ColumnSlice</name></type> <name>slice</name> <init>= <expr>new <call><name>ColumnSlice</name><argument_list>(<argument><expr><call><name><name>f</name>.<name>start</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>f</name>.<name>finish</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>ColumnSlice</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>slice</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>f</name>.<name>slices</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>ColumnSlice</name></type> <name>slice</name> <range>: <expr><name><name>f</name>.<name>slices</name></name></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>ColumnSlice</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>slice</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></else></if>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeBoolean</name></name><argument_list>(<argument><expr><name><name>f</name>.<name>reversed</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>count</name> <init>= <expr><name><name>f</name>.<name>count</name></name></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name><name>f</name>.<name>compositesToGroup</name></name> &gt; 0 &amp;&amp; <name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+                <expr_stmt><expr><name>count</name> *= <name><name>f</name>.<name>countMutliplierForCompatibility</name></name></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name>count</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>f</name>.<name>compositesToGroup</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>SliceQueryFilter</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>ColumnSlice</name><index>[]</index></type> <name>slices</name></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>slices</name> = new <name><name>ColumnSlice</name><index>[]</index></name><block>{ <expr><call><name><name>ColumnSlice</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr> }</block></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><name>slices</name> = new <name><name>ColumnSlice</name><index>[<expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr>]</index></name></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>slices</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+                    <expr_stmt><expr><name><name>slices</name><index>[<expr><name>i</name></expr>]</index></name> = <call><name><name>ColumnSlice</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></else></if>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>reversed</name> <init>= <expr><call><name><name>dis</name>.<name>readBoolean</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>count</name> <init>= <expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>compositesToGroup</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>version</name> &gt;= <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+                <expr_stmt><expr><name>compositesToGroup</name> = <call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <return>return <expr>new <call><name>SliceQueryFilter</name><argument_list>(<argument><expr><name>slices</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>, <argument><expr><name>count</name></expr></argument>, <argument><expr><name>compositesToGroup</name></expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>SliceQueryFilter</name></type> <name>f</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>TypeSizes</name></type> <name>sizes</name> <init>= <expr><name><name>TypeSizes</name>.<name>NATIVE</name></name></expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><name>int</name></type> <name>size</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>size</name> += <call><name><name>ColumnSlice</name>.<name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr>new <call><name>ColumnSlice</name><argument_list>(<argument><expr><call><name><name>f</name>.<name>start</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>f</name>.<name>finish</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><name>size</name> += <call><name><name>sizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>f</name>.<name>slices</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>ColumnSlice</name></type> <name>slice</name> <range>: <expr><name><name>f</name>.<name>slices</name></name></expr></range></decl></init>)
+                    <expr_stmt><expr><name>size</name> += <call><name><name>ColumnSlice</name>.<name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name>slice</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></else></if>
+            <expr_stmt><expr><name>size</name> += <call><name><name>sizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>f</name>.<name>reversed</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>size</name> += <call><name><name>sizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>f</name>.<name>count</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>version</name> &gt;= <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+                <expr_stmt><expr><name>size</name> += <call><name><name>sizes</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>f</name>.<name>compositesToGroup</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <return>return <expr><name>size</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,26 @@
+public synchronized void repairOverlappingSSTables(int level)
+    {
+        SSTableReader previous = null;
+        Collections.sort(generations[level], SSTable.sstableComparator);
+        List<SSTableReader> outOfOrderSSTables = new ArrayList<SSTableReader>();
+        for (SSTableReader current : generations[level])
+        {
+            if (previous != null && current.first.compareTo(previous.last) <= 0)
+            {
+                logger.error(String.format("At level %d, %s [%s, %s] overlaps %s [%s, %s].  This is caused by a bug in Cassandra 1.1.0 .. 1.1.3.  Sending back to L0.  If you have not yet run scrub, you should do so since you may also have rows out-of-order within an sstable",
+                                           level, previous, previous.first, previous.last, current, current.first, current.last));
+                outOfOrderSSTables.add(current);
+            }
+            else
+            {
+                previous = current;
+            }
+        }
+
+        if (!outOfOrderSSTables.isEmpty())
+        {
+            for (SSTableReader sstable : outOfOrderSSTables)
+                sendBackToL0(sstable);
+            serialize();
+        }
+    }

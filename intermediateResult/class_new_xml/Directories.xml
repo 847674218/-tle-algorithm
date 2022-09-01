@@ -1,0 +1,681 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\Directories.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>FileFilter</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicInteger</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicLong</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>ImmutableMap</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>ImmutableSortedSet</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>primitives</name>.<name>Longs</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>LeveledManifest</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSWriteError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Encapsulate handling of paths to the data files.
+ *
+ * The directory layout is the following:
+ *   /&lt;path_to_data_dir&gt;/ks/cf1/ks-cf1-hb-1-Data.db
+ *                         /cf2/ks-cf2-hb-1-Data.db
+ *                         ...
+ *
+ * In addition, more that one 'root' data directory can be specified so that
+ * &lt;path_to_data_dir&gt; potentially represents multiple locations.
+ * Note that in the case of multiple locations, the manifest for the leveled
+ * compaction is only in one of the location.
+ *
+ * Snapshots (resp. backups) are always created along the sstables thare are
+ * snapshoted (resp. backuped) but inside a subdirectory named 'snapshots'
+ * (resp. backups) (and snapshots are furter inside a subdirectory of the name
+ * of the snapshot).
+ *
+ * This class abstracts all those details from the rest of the code.
+ */</comment>
+<class><specifier>public</specifier> class <name>Directories</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>Directories</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>BACKUPS_SUBDIR</name> <init>= <expr>"backups"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>SNAPSHOT_SUBDIR</name> <init>= <expr>"snapshots"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>SECONDARY_INDEX_NAME_SEPARATOR</name> <init>= <expr>"."</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>DataDirectory</name><index>[]</index></type> <name>dataFileLocations</name></decl>;</decl_stmt>
+    <expr_stmt><expr>static
+    <block>{
+        <expr><name><name>String</name><index>[]</index></name> <name>locations</name> = <call><name><name>DatabaseDescriptor</name>.<name>getAllDataFileLocations</name></name><argument_list>()</argument_list></call></expr>;
+        <expr><name>dataFileLocations</name> = new <name><name>DataDirectory</name><index>[<expr><name><name>locations</name>.<name>length</name></name></expr>]</index></name></expr>;
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>locations</name>.<name>length</name></name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+            <expr_stmt><expr><name><name>dataFileLocations</name><index>[<expr><name>i</name></expr>]</index></name> = new <call><name>DataDirectory</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name><name>locations</name><index>[<expr><name>i</name></expr>]</index></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></expr></expr_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>tablename</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>cfname</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>File</name><index>[]</index></type> <name>sstableDirectories</name></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Directories</name></type> <name>create</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tablename</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfname</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>idx</name> <init>= <expr><call><name><name>cfname</name>.<name>indexOf</name></name><argument_list>(<argument><expr><name>SECONDARY_INDEX_NAME_SEPARATOR</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>idx</name> &gt; 0</expr>)</condition><then>
+            <comment type="line">// secondary index, goes in the same directory than the base cf</comment>
+            <return>return <expr>new <call><name>Directories</name><argument_list>(<argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><call><name><name>cfname</name>.<name>substring</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return></then>
+        <else>else
+            <return>return <expr>new <call><name>Directories</name><argument_list>(<argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>)</argument_list></call></expr>;</return></else></if>
+    }</block></function>
+
+    <constructor><specifier>private</specifier> <name>Directories</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tablename</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfname</name></decl></param>, <param><decl><type><name>String</name></type> <name>directoryName</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>tablename</name></name> = <name>tablename</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>cfname</name></name> = <name>cfname</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>sstableDirectories</name></name> = new <name><name>File</name><index>[<expr><name><name>dataFileLocations</name>.<name>length</name></name></expr>]</index></name></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>dataFileLocations</name>.<name>length</name></name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+            <expr_stmt><expr><name><name>sstableDirectories</name><index>[<expr><name>i</name></expr>]</index></name> = new <call><name>File</name><argument_list>(<argument><expr><name><name>dataFileLocations</name><index>[<expr><name>i</name></expr>]</index></name>.<name>location</name></expr></argument>, <argument><expr><call><name>join</name><argument_list>(<argument><expr><name>tablename</name></expr></argument>, <argument><expr><name>directoryName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>File</name></type> <name>dir</name> <range>: <expr><name>sstableDirectories</name></expr></range></decl></init>) 
+            <block>{
+                <try>try 
+                <block>{
+                    <expr_stmt><expr><call><name><name>FileUtils</name>.<name>createDirectory</name></name><argument_list>(<argument><expr><name>dir</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>FSError</name></type> <name>e</name></decl></param>)</parameter_list> 
+                <block>{
+                    <comment type="line">// don't just let the default exception handler do this, we need the create loop to continue</comment>
+                    <expr_stmt><expr><call><name><name>FileUtils</name>.<name>handleFSError</name></name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></catch></try>
+            }</block></for>
+        }</block></then></if>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Returns SSTable location which is inside given data directory.
+     *
+     * @param dataDirectory
+     * @return SSTable location
+     */</comment>
+    <function><type><specifier>public</specifier> <name>File</name></type> <name>getLocationForDisk</name><parameter_list>(<param><decl><type><name>File</name></type> <name>dataDirectory</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>File</name></type> <name>dir</name> <range>: <expr><name>sstableDirectories</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>FileUtils</name>.<name>getCanonicalPath</name></name><argument_list>(<argument><expr><name>dir</name></expr></argument>)</argument_list></call>.<call><name>startsWith</name><argument_list>(<argument><expr><call><name><name>FileUtils</name>.<name>getCanonicalPath</name></name><argument_list>(<argument><expr><name>dataDirectory</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr><name>dir</name></expr>;</return></then></if>
+        }</block></for>
+        <return>return <expr>null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>File</name></type> <name>getDirectoryForNewSSTables</name><parameter_list>(<param><decl><type><name>long</name></type> <name>estimatedSize</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>path</name> <init>= <expr><call><name>getLocationWithMaximumAvailableSpace</name><argument_list>(<argument><expr><name>estimatedSize</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// Requesting GC has a chance to free space only if we're using mmap and a non SUN jvm</comment>
+        <if>if <condition>(<expr><name>path</name> == null
+            &amp;&amp; (<call><name><name>DatabaseDescriptor</name>.<name>getDiskAccessMode</name></name><argument_list>()</argument_list></call> == <name><name>Config</name>.<name>DiskAccessMode</name>.<name>mmap</name></name> || <call><name><name>DatabaseDescriptor</name>.<name>getIndexAccessMode</name></name><argument_list>()</argument_list></call> == <name><name>Config</name>.<name>DiskAccessMode</name>.<name>mmap</name></name>)
+            &amp;&amp; !<call><name><name>FileUtils</name>.<name>isCleanerAvailable</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Forcing GC to free up disk space.  Upgrade to the Oracle JVM to avoid this"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>requestGC</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// retry after GCing has forced unmap of compacted SSTables so they can be deleted</comment>
+            <comment type="line">// Note: GCInspector will do this already, but only sun JVM supports GCInspector so far</comment>
+            <expr_stmt><expr><call><name><name>SSTableDeletingTask</name>.<name>rescheduleFailedTasks</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr>10000</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+            <expr_stmt><expr><name>path</name> = <call><name>getLocationWithMaximumAvailableSpace</name><argument_list>(<argument><expr><name>estimatedSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <return>return <expr><name>path</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     * Loop through all the disks to see which disk has the max free space
+     * return the disk with max free space for compactions. If the size of the expected
+     * compacted file is greater than the max disk space available return null, we cannot
+     * do compaction in this case.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>File</name></type> <name>getLocationWithMaximumAvailableSpace</name><parameter_list>(<param><decl><type><name>long</name></type> <name>estimatedSize</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>maxFreeDisk</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>File</name></type> <name>maxLocation</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>File</name></type> <name>dir</name> <range>: <expr><name>sstableDirectories</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>BlacklistedDirectories</name>.<name>isUnwritable</name></name><argument_list>(<argument><expr><name>dir</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <decl_stmt><decl><type><name>long</name></type> <name>usableSpace</name> <init>= <expr><call><name><name>dir</name>.<name>getUsableSpace</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>maxFreeDisk</name> &lt; <name>usableSpace</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>maxFreeDisk</name> = <name>usableSpace</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name>maxLocation</name> = <name>dir</name></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+        <comment type="line">// Load factor of 0.9 we do not want to use the entire disk that is too risky.</comment>
+        <expr_stmt><expr><name>maxFreeDisk</name> = <call>(<name>long</name>) <argument_list>(<argument><expr>0.9 * <name>maxFreeDisk</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"expected data files size is %d; largest free partition (%s) has %d bytes free"</expr></argument>,
+                                   <argument><expr><name>estimatedSize</name></expr></argument>, <argument><expr><name>maxLocation</name></expr></argument>, <argument><expr><name>maxFreeDisk</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <return>return <expr><name>estimatedSize</name> &lt; <name>maxFreeDisk</name> ? <name>maxLocation</name> : null</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Find location which is capable of holding given {@code estimatedSize}.
+     * First it looks through for directory with no current task running and
+     * the most free space available.
+     * If no such directory is available, it just chose the one with the most
+     * free space available.
+     * If no directory can hold given {@code estimatedSize}, then returns null.
+     *
+     * @param estimatedSize estimated size you need to find location to fit
+     * @return directory capable of given estimated size, or null if none found
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>DataDirectory</name></type> <name>getLocationCapableOfSize</name><parameter_list>(<param><decl><type><name>long</name></type> <name>estimatedSize</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// sort by available disk space</comment>
+        <decl_stmt><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>DataDirectory</name></argument>&gt;</argument_list></name></type> <name>directories</name> <init>= <expr><call><name><name>ImmutableSortedSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><name>dataFileLocations</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// if there is disk with sufficient space and no activity running on it, then use it</comment>
+        <for>for (<init><decl><type><name>DataDirectory</name></type> <name>directory</name> <range>: <expr><name>directories</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>long</name></type> <name>spaceAvailable</name> <init>= <expr><call><name><name>directory</name>.<name>getEstimatedAvailableSpace</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>estimatedSize</name> &lt; <name>spaceAvailable</name> &amp;&amp; <call><name><name>directory</name>.<name>currentTasks</name>.<name>get</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+                <return>return <expr><name>directory</name></expr>;</return></then></if>
+        }</block></for>
+
+        <comment type="line">// if not, use the one that has largest free space</comment>
+        <if>if <condition>(<expr><name>estimatedSize</name> &lt; <call><name><name>directories</name>.<name>first</name></name><argument_list>()</argument_list></call>.<call><name>getEstimatedAvailableSpace</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><call><name><name>directories</name>.<name>first</name></name><argument_list>()</argument_list></call></expr>;</return></then>
+        <else>else
+            <return>return <expr>null</expr>;</return></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>File</name></type> <name>getSnapshotDirectory</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>, <param><decl><type><name>String</name></type> <name>snapshotName</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getOrCreate</name><argument_list>(<argument><expr><name><name>desc</name>.<name>directory</name></name></expr></argument>, <argument><expr><name>SNAPSHOT_SUBDIR</name></expr></argument>, <argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>File</name></type> <name>getBackupsDirectory</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getOrCreate</name><argument_list>(<argument><expr><name><name>desc</name>.<name>directory</name></name></expr></argument>, <argument><expr><name>BACKUPS_SUBDIR</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>SSTableLister</name></type> <name>sstableLister</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>SSTableLister</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>DataDirectory</name> <super><implements>implements <name><name>Comparable</name><argument_list>&lt;<argument><name>DataDirectory</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>File</name></type> <name>location</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>AtomicInteger</name></type> <name>currentTasks</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>AtomicLong</name></type> <name>estimatedWorkingSize</name> <init>= <expr>new <call><name>AtomicLong</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>DataDirectory</name><parameter_list>(<param><decl><type><name>File</name></type> <name>location</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>location</name></name> = <name>location</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/**
+         * @return estimated available disk space for bounded directory,
+         * excluding the expected size written by tasks in the queue.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>getEstimatedAvailableSpace</name><parameter_list>()</parameter_list>
+        <block>{
+            <comment type="line">// Load factor of 0.9 we do not want to use the entire disk that is too risky.</comment>
+            <return>return <expr><call>(<name>long</name>)<argument_list>(<argument><expr>0.9 * <call><name><name>location</name>.<name>getUsableSpace</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> - <call><name><name>estimatedWorkingSize</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>compareTo</name><parameter_list>(<param><decl><type><name>DataDirectory</name></type> <name>o</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// we want to sort by free space in descending order</comment>
+            <return>return <expr>-1 * <call><name><name>Longs</name>.<name>compare</name></name><argument_list>(<argument><expr><call><name>getEstimatedAvailableSpace</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>o</name>.<name>getEstimatedAvailableSpace</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>public</specifier> class <name>SSTableLister</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>skipTemporary</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>includeBackups</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>onlyBackups</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>nbFiles</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Descriptor</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>components</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Descriptor</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>filtered</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>snapshotName</name></decl>;</decl_stmt>
+
+        <function><type><specifier>public</specifier> <name>SSTableLister</name></type> <name>skipTemporary</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>b</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>filtered</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"list() has already been called"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><name>skipTemporary</name> = <name>b</name></expr>;</expr_stmt>
+            <return>return <expr><name>this</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>SSTableLister</name></type> <name>includeBackups</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>b</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>filtered</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"list() has already been called"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><name>includeBackups</name> = <name>b</name></expr>;</expr_stmt>
+            <return>return <expr><name>this</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>SSTableLister</name></type> <name>onlyBackups</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>b</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>filtered</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"list() has already been called"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><name>onlyBackups</name> = <name>b</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>includeBackups</name> = <name>b</name></expr>;</expr_stmt>
+            <return>return <expr><name>this</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>SSTableLister</name></type> <name>snapshots</name><parameter_list>(<param><decl><type><name>String</name></type> <name>sn</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>filtered</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"list() has already been called"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><name>snapshotName</name> = <name>sn</name></expr>;</expr_stmt>
+            <return>return <expr><name>this</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Descriptor</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>list</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>filter</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><call><name><name>ImmutableMap</name>.<name>copyOf</name></name><argument_list>(<argument><expr><name>components</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>File</name></argument>&gt;</argument_list></name></type> <name>listFiles</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>filter</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>File</name></argument>&gt;</argument_list></name></type> <name>l</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>File</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>nbFiles</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Descriptor</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>components</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <for>for (<init><decl><type><name>Component</name></type> <name>c</name> <range>: <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <expr_stmt><expr><call><name><name>l</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>filenameFor</name><argument_list>(<argument><expr><name>c</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></for>
+            <return>return <expr><name>l</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>filter</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>filtered</name></expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <for>for (<init><decl><type><name>File</name></type> <name>location</name> <range>: <expr><name>sstableDirectories</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>BlacklistedDirectories</name>.<name>isUnreadable</name></name><argument_list>(<argument><expr><name>location</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <if>if <condition>(<expr><name>snapshotName</name> != null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr>new <call><name>File</name><argument_list>(<argument><expr><name>location</name></expr></argument>, <argument><expr><call><name>join</name><argument_list>(<argument><expr><name>SNAPSHOT_SUBDIR</name></expr></argument>, <argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>listFiles</name><argument_list>(<argument><expr><call><name>getFilter</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <continue>continue;</continue>
+                }</block></then></if>
+
+                <if>if <condition>(<expr>!<name>onlyBackups</name></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>location</name>.<name>listFiles</name></name><argument_list>(<argument><expr><call><name>getFilter</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><name>includeBackups</name></expr>)</condition><then>
+                    <expr_stmt><expr>new <call><name>File</name><argument_list>(<argument><expr><name>location</name></expr></argument>, <argument><expr><name>BACKUPS_SUBDIR</name></expr></argument>)</argument_list></call>.<call><name>listFiles</name><argument_list>(<argument><expr><call><name>getFilter</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></for>
+            <expr_stmt><expr><name>filtered</name> = true</expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>FileFilter</name></type> <name>getFilter</name><parameter_list>()</parameter_list>
+        <block>{
+            <comment type="line">// Note: the prefix needs to include cfname + separator to distinguish between a cfs and it's secondary indexes</comment>
+            <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>sstablePrefix</name> <init>= <expr><name>tablename</name> + <name><name>Component</name>.<name>separator</name></name> + <name>cfname</name> + <name><name>Component</name>.<name>separator</name></name></expr></init></decl>;</decl_stmt>
+            <return>return <expr>new <class><super><name>FileFilter</name></super><argument_list>()</argument_list>
+            <block>{
+                <comment type="line">// This function always return false since accepts adds to the components map</comment>
+                <function><type><specifier>public</specifier> <name>boolean</name></type> <name>accept</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>)</parameter_list>
+                <block>{
+                    <comment type="line">// we are only interested in the SSTable files that belong to the specific ColumnFamily</comment>
+                    <if>if <condition>(<expr><call><name><name>file</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call> || !<call><name><name>file</name>.<name>getName</name></name><argument_list>()</argument_list></call>.<call><name>startsWith</name><argument_list>(<argument><expr><name>sstablePrefix</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <return>return <expr>false</expr>;</return></then></if>
+
+                    <decl_stmt><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Descriptor</name></argument>, <argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>pair</name> <init>= <expr><call><name><name>SSTable</name>.<name>tryComponentFromFilename</name></name><argument_list>(<argument><expr><call><name><name>file</name>.<name>getParentFile</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>file</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>pair</name> == null</expr>)</condition><then>
+                        <return>return <expr>false</expr>;</return></then></if>
+
+                    <if>if <condition>(<expr><name>skipTemporary</name> &amp;&amp; <name><name>pair</name>.<name>left</name>.<name>temporary</name></name></expr>)</condition><then>
+                        <return>return <expr>false</expr>;</return></then></if>
+
+                    <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>previous</name> <init>= <expr><call><name><name>components</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>pair</name>.<name>left</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>previous</name> == null</expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><name>previous</name> = new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>components</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>pair</name>.<name>left</name></name></expr></argument>, <argument><expr><name>previous</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                    <expr_stmt><expr><call><name><name>previous</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>pair</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>nbFiles</name>++</expr>;</expr_stmt>
+                    <return>return <expr>false</expr>;</return>
+                }</block></function>
+            }</block></class></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <function><type><specifier>public</specifier> <name>File</name></type> <name>tryGetLeveledManifest</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>File</name></type> <name>dir</name> <range>: <expr><name>sstableDirectories</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>File</name></type> <name>manifestFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>dir</name></expr></argument>, <argument><expr><name>cfname</name> + <name><name>LeveledManifest</name>.<name>EXTENSION</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>manifestFile</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Found manifest at {}"</expr></argument>, <argument><expr><name>manifestFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><name>manifestFile</name></expr>;</return>
+            }</block></then></if>
+        }</block></for>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"No level manifest found"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr>null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>File</name></type> <name>getOrCreateLeveledManifest</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>manifestFile</name> <init>= <expr><call><name>tryGetLeveledManifest</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>manifestFile</name> == null</expr>)</condition><then>
+            <expr_stmt><expr><name>manifestFile</name> = new <call><name>File</name><argument_list>(<argument><expr><name><name>sstableDirectories</name><index>[<expr>0</expr>]</index></name></expr></argument>, <argument><expr><name>cfname</name> + <name><name>LeveledManifest</name>.<name>EXTENSION</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <return>return <expr><name>manifestFile</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>snapshotLeveledManifest</name><parameter_list>(<param><decl><type><name>String</name></type> <name>snapshotName</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>manifest</name> <init>= <expr><call><name>tryGetLeveledManifest</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>manifest</name> != null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>File</name></type> <name>snapshotDirectory</name> <init>= <expr><call><name>getOrCreate</name><argument_list>(<argument><expr><call><name><name>manifest</name>.<name>getParentFile</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>SNAPSHOT_SUBDIR</name></expr></argument>, <argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>File</name></type> <name>target</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>snapshotDirectory</name></expr></argument>, <argument><expr><call><name><name>manifest</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>createHardLink</name></name><argument_list>(<argument><expr><name>manifest</name></expr></argument>, <argument><expr><name>target</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>snapshotExists</name><parameter_list>(<param><decl><type><name>String</name></type> <name>snapshotName</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>File</name></type> <name>dir</name> <range>: <expr><name>sstableDirectories</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>File</name></type> <name>snapshotDir</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>dir</name></expr></argument>, <argument><expr><call><name>join</name><argument_list>(<argument><expr><name>SNAPSHOT_SUBDIR</name></expr></argument>, <argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>snapshotDir</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr>true</expr>;</return></then></if>
+        }</block></for>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>clearSnapshot</name><parameter_list>(<param><decl><type><name>String</name></type> <name>snapshotName</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// If snapshotName is empty or null, we will delete the entire snapshot directory</comment>
+        <decl_stmt><decl><type><name>String</name></type> <name>tag</name> <init>= <expr><name>snapshotName</name> == null ? "" : <name>snapshotName</name></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>File</name></type> <name>dir</name> <range>: <expr><name>sstableDirectories</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>File</name></type> <name>snapshotDir</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>dir</name></expr></argument>, <argument><expr><call><name>join</name><argument_list>(<argument><expr><name>SNAPSHOT_SUBDIR</name></expr></argument>, <argument><expr><name>tag</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>snapshotDir</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Removing snapshot directory " + <name>snapshotDir</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <expr_stmt><expr><call><name><name>FileUtils</name>.<name>deleteRecursive</name></name><argument_list>(<argument><expr><name>snapshotDir</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+    }</block></function>
+
+    <comment type="line">// The snapshot must exist</comment>
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>snapshotCreationTime</name><parameter_list>(<param><decl><type><name>String</name></type> <name>snapshotName</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>File</name></type> <name>dir</name> <range>: <expr><name>sstableDirectories</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>File</name></type> <name>snapshotDir</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>dir</name></expr></argument>, <argument><expr><call><name>join</name><argument_list>(<argument><expr><name>SNAPSHOT_SUBDIR</name></expr></argument>, <argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>snapshotDir</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr><call><name><name>snapshotDir</name>.<name>lastModified</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+        }</block></for>
+        <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Snapshot " + <name>snapshotName</name> + " doesn't exist"</expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>File</name></type> <name>getOrCreate</name><parameter_list>(<param><decl><type><name>File</name></type> <name>base</name></decl></param>, <param><decl><type><name>String</name>...</type> <name>subdirs</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>dir</name> <init>= <expr><name>subdirs</name> == null || <name><name>subdirs</name>.<name>length</name></name> == 0 ? <name>base</name> : new <call><name>File</name><argument_list>(<argument><expr><name>base</name></expr></argument>, <argument><expr><call><name>join</name><argument_list>(<argument><expr><name>subdirs</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>dir</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>dir</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Invalid directory path %s: path exists but is not a directory"</expr></argument>, <argument><expr><name>dir</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></then>
+        <else>else <if>if <condition>(<expr>!<call><name><name>dir</name>.<name>mkdirs</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Unable to create directory " + <name>dir</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>dir</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if></else></if>
+        <return>return <expr><name>dir</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>String</name></type> <name>join</name><parameter_list>(<param><decl><type><name>String</name>...</type> <name>s</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><name>s</name></expr></argument>, <argument><expr><name><name>File</name>.<name>separator</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * To check if sstables needs migration, we look at the System directory.
+     * If it does not contain a directory for the schema cfs, we'll attempt a sstable
+     * migration.
+     *
+     * Note that it is mostly harmless to try a migration uselessly, except
+     * maybe for some wasted cpu cycles.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>sstablesNeedsMigration</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>boolean</name></type> <name>hasSystemKeyspace</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>DataDirectory</name></type> <name>dir</name> <range>: <expr><name>dataFileLocations</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>File</name></type> <name>systemDir</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name><name>dir</name>.<name>location</name></name></expr></argument>, <argument><expr><name><name>Table</name>.<name>SYSTEM_KS</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>hasSystemKeyspace</name> |= (<call><name><name>systemDir</name>.<name>exists</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>systemDir</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call>)</expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>File</name></type> <name>statusCFDir</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>systemDir</name></expr></argument>, <argument><expr><name><name>SystemTable</name>.<name>SCHEMA_KEYSPACES_CF</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>statusCFDir</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+        }</block></for>
+        <if>if <condition>(<expr>!<name>hasSystemKeyspace</name></expr>)</condition><then>
+            <comment type="line">// This is a brand new node.</comment>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <comment type="line">// Check whether the migration might create too long a filename</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>longestLocation</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>DataDirectory</name></type> <name>loc</name> <range>: <expr><name>dataFileLocations</name></expr></range></decl></init>)
+            <expr_stmt><expr><name>longestLocation</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>longestLocation</name></expr></argument>, <argument><expr><call><name><name>FileUtils</name>.<name>getCanonicalPath</name></name><argument_list>(<argument><expr><name><name>loc</name>.<name>location</name></name></expr></argument>)</argument_list></call>.<call><name>length</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <comment type="line">// Check that migration won't error out halfway through from too-long paths.  For Windows, we need to check</comment>
+        <comment type="line">// total path length &lt;= 255 (see http://msdn.microsoft.com/en-us/library/aa365247.aspx and discussion on CASSANDRA-2749);</comment>
+        <comment type="line">// elsewhere, we just need to make sure filename is &lt;= 255.</comment>
+        <for>for (<init><decl><type><name>KSMetaData</name></type> <name>ksm</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableDefinitions</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>ksname</name> <init>= <expr><name><name>ksm</name>.<name>name</name></name></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>CFMetaData</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>ksm</name>.<name>cfMetaData</name></name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>cfname</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <comment type="line">// max path is roughly (guess-estimate) &lt;location&gt;/ksname/cfname/snapshots/1324314347102-somename/ksname-cfname-tmp-hb-65536-Statistics.db</comment>
+                <if>if <condition>(<expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"os.name"</expr></argument>)</argument_list></call>.<call><name>startsWith</name><argument_list>(<argument><expr>"Windows"</expr></argument>)</argument_list></call>
+                    &amp;&amp; <name>longestLocation</name> + (<call><name><name>ksname</name>.<name>length</name></name><argument_list>()</argument_list></call> + <call><name><name>cfname</name>.<name>length</name></name><argument_list>()</argument_list></call>) * 2 + 63 &gt; 255</expr>)</condition><then>
+                <block>{
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Starting with 1.1, keyspace names and column family " +
+                                                             "names must be less than %s characters long. %s/%s doesn't" +
+                                                             " respect that restriction. Please rename your " +
+                                                             "keyspace/column families to respect that restriction " +
+                                                             "before updating."</expr></argument>, <argument><expr><name><name>Schema</name>.<name>NAME_LENGTH</name></name></expr></argument>, <argument><expr><name>ksname</name></expr></argument>, <argument><expr><name>cfname</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></then></if>
+
+                <if>if <condition>(<expr><call><name><name>ksm</name>.<name>name</name>.<name>length</name></name><argument_list>()</argument_list></call> + <call><name><name>cfname</name>.<name>length</name></name><argument_list>()</argument_list></call> + 28 &gt; 255</expr>)</condition><then>
+                <block>{
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Starting with 1.1, the keyspace name is included in data filenames.  For "
+                                               + <name><name>ksm</name>.<name>name</name></name> + "/" + <name>cfname</name> + ", this puts you over the largest possible filename of 255 characters"</expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></then></if>
+            }</block></for>
+        }</block></for>
+
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Move sstables from the pre-#2749 layout to their new location/names.
+     * This involves:
+     *   - moving each sstable to their CF specific directory
+     *   - rename the sstable to include the keyspace in the filename
+     *
+     * Note that this also move leveled manifests, snapshots and backups.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>migrateSSTables</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Upgrade from pre-1.1 version detected: migrating sstables to new directory layout"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <for>for (<init><decl><type><name>DataDirectory</name></type> <name>dir</name> <range>: <expr><name>dataFileLocations</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>dir</name>.<name>location</name>.<name>exists</name></name><argument_list>()</argument_list></call> || !<call><name><name>dir</name>.<name>location</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <decl_stmt><decl><type><name>File</name><index>[]</index></type> <name>ksDirs</name> <init>= <expr><call><name><name>dir</name>.<name>location</name>.<name>listFiles</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>ksDirs</name> != null</expr>)</condition><then>
+            <block>{
+                <for>for (<init><decl><type><name>File</name></type> <name>ksDir</name> <range>: <expr><name>ksDirs</name></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr>!<call><name><name>ksDir</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <continue>continue;</continue></then></if>
+
+                    <decl_stmt><decl><type><name>File</name><index>[]</index></type> <name>files</name> <init>= <expr><call><name><name>ksDir</name>.<name>listFiles</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>files</name> != null</expr>)</condition><then>
+                    <block>{
+                        <for>for (<init><decl><type><name>File</name></type> <name>file</name> <range>: <expr><name>files</name></expr></range></decl></init>)
+                            <expr_stmt><expr><call><name>migrateFile</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name>ksDir</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                    }</block></then></if>
+
+                    <expr_stmt><expr><call><name>migrateSnapshots</name><argument_list>(<argument><expr><name>ksDir</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>migrateBackups</name><argument_list>(<argument><expr><name>ksDir</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></then></if>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>migrateSnapshots</name><parameter_list>(<param><decl><type><name>File</name></type> <name>ksDir</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>snapshotDir</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>ksDir</name></expr></argument>, <argument><expr><name>SNAPSHOT_SUBDIR</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>!<call><name><name>snapshotDir</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>File</name><index>[]</index></type> <name>snapshots</name> <init>= <expr><call><name><name>snapshotDir</name>.<name>listFiles</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>snapshots</name> != null</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>File</name></type> <name>snapshot</name> <range>: <expr><name>snapshots</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr>!<call><name><name>snapshot</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <decl_stmt><decl><type><name>File</name><index>[]</index></type> <name>files</name> <init>= <expr><call><name><name>snapshot</name>.<name>listFiles</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>files</name> != null</expr>)</condition><then>
+                <block>{
+                    <for>for (<init><decl><type><name>File</name></type> <name>f</name> <range>: <expr><name>files</name></expr></range></decl></init>)
+                        <expr_stmt><expr><call><name>migrateFile</name><argument_list>(<argument><expr><name>f</name></expr></argument>, <argument><expr><name>ksDir</name></expr></argument>, <argument><expr><call><name>join</name><argument_list>(<argument><expr><name>SNAPSHOT_SUBDIR</name></expr></argument>, <argument><expr><call><name><name>snapshot</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                }</block></then></if>
+                <if>if <condition>(<expr>!<call><name><name>snapshot</name>.<name>delete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Old snapsot directory {} not deleted by migraation as it is not empty"</expr></argument>, <argument><expr><name>snapshot</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></for>
+        }</block></then></if>
+        <if>if <condition>(<expr>!<call><name><name>snapshotDir</name>.<name>delete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Old directory {} not deleted by migration as it is not empty"</expr></argument>, <argument><expr><name>snapshotDir</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>migrateBackups</name><parameter_list>(<param><decl><type><name>File</name></type> <name>ksDir</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>backupDir</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>ksDir</name></expr></argument>, <argument><expr><name>BACKUPS_SUBDIR</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>!<call><name><name>backupDir</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>File</name><index>[]</index></type> <name>files</name> <init>= <expr><call><name><name>backupDir</name>.<name>listFiles</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>files</name> != null</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>File</name></type> <name>f</name> <range>: <expr><name>files</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name>migrateFile</name><argument_list>(<argument><expr><name>f</name></expr></argument>, <argument><expr><name>ksDir</name></expr></argument>, <argument><expr><name>BACKUPS_SUBDIR</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block></then></if>
+        <if>if <condition>(<expr>!<call><name><name>backupDir</name>.<name>delete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Old directory {} not deleted by migration as it is not empty"</expr></argument>, <argument><expr><name>backupDir</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>migrateFile</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>, <param><decl><type><name>File</name></type> <name>ksDir</name></decl></param>, <param><decl><type><name>String</name></type> <name>additionalPath</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>file</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>name</name> <init>= <expr><call><name><name>file</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>isManifest</name> <init>= <expr><call><name><name>name</name>.<name>endsWith</name></name><argument_list>(<argument><expr><name><name>LeveledManifest</name>.<name>EXTENSION</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>separatorIndex</name> <init>= <expr><call><name><name>name</name>.<name>indexOf</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>separator</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>isManifest</name> || (<name>separatorIndex</name> &gt;= 0)</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>cfname</name> <init>= <expr><name>isManifest</name>
+                              ? <call><name><name>name</name>.<name>substring</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><call><name><name>name</name>.<name>length</name></name><argument_list>()</argument_list></call> - <call><name><name>LeveledManifest</name>.<name>EXTENSION</name>.<name>length</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+                              : <call><name><name>name</name>.<name>substring</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><name>separatorIndex</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <decl_stmt><decl><type><name>int</name></type> <name>idx</name> <init>= <expr><call><name><name>cfname</name>.<name>indexOf</name></name><argument_list>(<argument><expr><name>SECONDARY_INDEX_NAME_SEPARATOR</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// idx &gt; 0 =&gt; secondary index</comment>
+                <decl_stmt><decl><type><name>String</name></type> <name>dirname</name> <init>= <expr><name>idx</name> &gt; 0 ? <call><name><name>cfname</name>.<name>substring</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><name>idx</name></expr></argument>)</argument_list></call> : <name>cfname</name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>File</name></type> <name>destDir</name> <init>= <expr><call><name>getOrCreate</name><argument_list>(<argument><expr><name>ksDir</name></expr></argument>, <argument><expr><name>dirname</name></expr></argument>, <argument><expr><name>additionalPath</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <decl_stmt><decl><type><name>File</name></type> <name>destFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>destDir</name></expr></argument>, <argument><expr><name>isManifest</name> ? <name>name</name> : <call><name><name>ksDir</name>.<name>getName</name></name><argument_list>()</argument_list></call> + <name><name>Component</name>.<name>separator</name></name> + <name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[upgrade to 1.1] Moving %s to %s"</expr></argument>, <argument><expr><name>file</name></expr></argument>, <argument><expr><name>destFile</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>FileUtils</name>.<name>renameWithConfirm</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name>destFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Found unrecognized file {} while migrating sstables from pre 1.1 format, ignoring."</expr></argument>, <argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Failed migrating file %s from pre 1.1 format."</expr></argument>, <argument><expr><call><name><name>file</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="line">// Hack for tests, don't use otherwise</comment>
+    <function><type><specifier>static</specifier> <name>void</name></type> <name>overrideDataDirectoriesForTest</name><parameter_list>(<param><decl><type><name>String</name></type> <name>loc</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>dataFileLocations</name>.<name>length</name></name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+            <expr_stmt><expr><name><name>dataFileLocations</name><index>[<expr><name>i</name></expr>]</index></name> = new <call><name>DataDirectory</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>loc</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <comment type="line">// Hack for tests, don't use otherwise</comment>
+    <function><type><specifier>static</specifier> <name>void</name></type> <name>resetDataDirectoriesAfterTest</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>locations</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getAllDataFileLocations</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>locations</name>.<name>length</name></name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+            <expr_stmt><expr><name><name>dataFileLocations</name><index>[<expr><name>i</name></expr>]</index></name> = new <call><name>DataDirectory</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name><name>locations</name><index>[<expr><name>i</name></expr>]</index></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+}</block></class>
+</unit>

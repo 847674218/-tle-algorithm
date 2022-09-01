@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\utils\CounterId.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicReference</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>CopyOnWriteArrayList</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Objects</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>CounterColumn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>SystemTable</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>CounterId</name> <super><implements>implements <name><name>Comparable</name><argument_list>&lt;<argument><name>CounterId</name></argument>&gt;</argument_list></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CounterId</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>LENGTH</name> <init>= <expr>16</expr></init></decl>;</decl_stmt> <comment type="line">// we assume a fixed length size for all CounterIds</comment>
+
+    <comment type="line">// Lazy holder because this opens the system table and we want to avoid</comment>
+    <comment type="line">// having this triggered during class initialization</comment>
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>LocalIds</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>LocalCounterIdHistory</name></type> <name>instance</name> <init>= <expr>new <call><name>LocalCounterIdHistory</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    }</block></class>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ByteBuffer</name></type> <name>id</name></decl>;</decl_stmt>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>LocalCounterIdHistory</name></type> <name>localIds</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>LocalIds</name>.<name>instance</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>CounterId</name></type> <name>getLocalId</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>localIds</name><argument_list>()</argument_list></call>.<call><name><name>current</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Renew the local counter id.
+     * To use only when this strictly necessary, as using this will make all
+     * counter context grow with time.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>renewLocalId</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>renewLocalId</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>renewLocalId</name><parameter_list>(<param><decl><type><name>long</name></type> <name>now</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>localIds</name><argument_list>()</argument_list></call>.<call><name>renewCurrent</name><argument_list>(<argument><expr><name>now</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Return the list of old local counter id of this node.
+     * It is guaranteed that the returned list is sorted by growing counter id
+     * (and hence the first item will be the oldest counter id for this host)
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>List</name><argument_list>&lt;<argument><name>CounterIdRecord</name></argument>&gt;</argument_list></name></type> <name>getOldLocalCounterIds</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>localIds</name><argument_list>()</argument_list></call>.<name>olds</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Function for test purposes, do not use otherwise.
+     * Pack an int in a valid CounterId so that the resulting ids respects the
+     * numerical ordering. Used for creating handcrafted but easy to
+     * understand contexts in unit tests (see CounterContextTest).
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>CounterId</name></type> <name>fromInt</name><parameter_list>(<param><decl><type><name>int</name></type> <name>n</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>lowBits</name> <init>= <expr>0xC000000000000000L | <name>n</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name>CounterId</name><argument_list>(<argument><expr><call><name><name>ByteBuffer</name>.<name>allocate</name></name><argument_list>(<argument><expr>16</expr></argument>)</argument_list></call>.<call><name>putLong</name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call>.<call><name>putLong</name><argument_list>(<argument><expr>8</expr></argument>, <argument><expr><name>lowBits</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     * For performance reasons, this function interns the provided ByteBuffer.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>CounterId</name></type> <name>wrap</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>id</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>CounterId</name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>CounterId</name></type> <name>wrap</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>, <param><decl><type><name>int</name></type> <name>offset</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>dup</name> <init>= <expr><call><name><name>bb</name>.<name>duplicate</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>dup</name>.<name>position</name></name><argument_list>(<argument><expr><name>offset</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>dup</name>.<name>limit</name></name><argument_list>(<argument><expr><call><name><name>dup</name>.<name>position</name></name><argument_list>()</argument_list></call> + <name>LENGTH</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name>wrap</name><argument_list>(<argument><expr><name>dup</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <constructor><specifier>private</specifier> <name>CounterId</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>id</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>id</name>.<name>remaining</name></name><argument_list>()</argument_list></call> != <name>LENGTH</name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"A CounterId representation is exactly " + <name>LENGTH</name> + " bytes"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><name><name>this</name>.<name>id</name></name> = <name>id</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>CounterId</name></type> <name>generate</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>CounterId</name><argument_list>(<argument><expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>UUIDGen</name>.<name>getTimeUUIDBytes</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     * For performance reasons, this function returns a reference to the internal ByteBuffer. Clients not modify the
+     * result of this function.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>bytes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>id</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isLocalId</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>equals</name><argument_list>(<argument><expr><call><name>getLocalId</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>compareTo</name><parameter_list>(<param><decl><type><name>CounterId</name></type> <name>o</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ByteBufferUtil</name>.<name>compareSubArrays</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>id</name>.<name>position</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>o</name>.<name>id</name></name></expr></argument>, <argument><expr><call><name><name>o</name>.<name>id</name>.<name>position</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>CounterId</name>.<name>LENGTH</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>UUIDGen</name>.<name>getUUID</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>boolean</name></type> <name>equals</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>this</name> == <name>o</name></expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+        <if>if <condition>(<expr><name>o</name> == null || <call><name>getClass</name><argument_list>()</argument_list></call> != <call><name><name>o</name>.<name>getClass</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>CounterId</name></type> <name>otherId</name> <init>= <expr>(<name>CounterId</name>)<name>o</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>id</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>otherId</name>.<name>id</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>int</name></type> <name>hashCode</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>id</name>.<name>hashCode</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>OneShotRenewer</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>renewed</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>CounterId</name></type> <name>initialId</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>OneShotRenewer</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>renewed</name> = false</expr>;</expr_stmt>
+            <expr_stmt><expr><name>initialId</name> = <call><name>getLocalId</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>maybeRenew</name><parameter_list>(<param><decl><type><name>CounterColumn</name></type> <name>column</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr>!<name>renewed</name> &amp;&amp; <call><name><name>column</name>.<name>hasCounterId</name></name><argument_list>(<argument><expr><name>initialId</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name>renewLocalId</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>renewed</name> = true</expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>LocalCounterIdHistory</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>AtomicReference</name><argument_list>&lt;<argument><name>CounterId</name></argument>&gt;</argument_list></name></type> <name>current</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>CounterIdRecord</name></argument>&gt;</argument_list></name></type> <name>olds</name></decl>;</decl_stmt>
+
+        <constructor><name>LocalCounterIdHistory</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>CounterId</name></type> <name>id</name> <init>= <expr><call><name><name>SystemTable</name>.<name>getCurrentLocalCounterId</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>id</name> == null</expr>)</condition><then>
+            <block>{
+                <comment type="line">// no recorded local counter id, generating a new one and saving it</comment>
+                <expr_stmt><expr><name>id</name> = <call><name>generate</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"No saved local counter id, using newly generated: {}"</expr></argument>, <argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>SystemTable</name>.<name>writeCurrentLocalCounterId</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>current</name> = new <call><name><name>AtomicReference</name><argument_list>&lt;<argument><name>CounterId</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>olds</name> = new <call><name><name>CopyOnWriteArrayList</name><argument_list>&lt;<argument><name>CounterIdRecord</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Saved local counter id: {}"</expr></argument>, <argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>current</name> = new <call><name><name>AtomicReference</name><argument_list>&lt;<argument><name>CounterId</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>olds</name> = new <call><name><name>CopyOnWriteArrayList</name><argument_list>&lt;<argument><name>CounterIdRecord</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>SystemTable</name>.<name>getOldLocalCounterIds</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></constructor>
+
+        <function><type><specifier>synchronized</specifier> <name>void</name></type> <name>renewCurrent</name><parameter_list>(<param><decl><type><name>long</name></type> <name>now</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>CounterId</name></type> <name>newCounterId</name> <init>= <expr><call><name>generate</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>CounterId</name></type> <name>old</name> <init>= <expr><call><name><name>current</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>SystemTable</name>.<name>writeCurrentLocalCounterId</name></name><argument_list>(<argument><expr><name>old</name></expr></argument>, <argument><expr><name>newCounterId</name></expr></argument>, <argument><expr><name>now</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>current</name>.<name>set</name></name><argument_list>(<argument><expr><name>newCounterId</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>olds</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>CounterIdRecord</name><argument_list>(<argument><expr><name>old</name></expr></argument>, <argument><expr><name>now</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>CounterIdRecord</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>CounterId</name></type> <name>id</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>long</name></type> <name>timestamp</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>CounterIdRecord</name><parameter_list>(<param><decl><type><name>CounterId</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>id</name></name> = <name>id</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>timestamp</name></name> = <name>timestamp</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>boolean</name></type> <name>equals</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>this</name> == <name>o</name></expr>)</condition><then>
+                <return>return <expr>true</expr>;</return></then></if>
+            <if>if <condition>(<expr><name>o</name> == null || <call><name>getClass</name><argument_list>()</argument_list></call> != <call><name><name>o</name>.<name>getClass</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+
+            <decl_stmt><decl><type><name>CounterIdRecord</name></type> <name>otherRecord</name> <init>= <expr>(<name>CounterIdRecord</name>)<name>o</name></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>id</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>otherRecord</name>.<name>id</name></name></expr></argument>)</argument_list></call> &amp;&amp; <name>timestamp</name> == <name><name>otherRecord</name>.<name>timestamp</name></name></expr>;</return>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>int</name></type> <name>hashCode</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>Objects</name>.<name>hashCode</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"(%s, %d)"</expr></argument>, <argument><expr><call><name><name>id</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,23 @@
+private static void dropColumnFamily(String ksName, String cfName) throws IOException
+    {
+        KSMetaData ksm = Schema.instance.getTableDefinition(ksName);
+        assert ksm != null;
+        ColumnFamilyStore cfs = Table.open(ksName).getColumnFamilyStore(cfName);
+        assert cfs != null;
+
+        // reinitialize the table.
+        CFMetaData cfm = ksm.cfMetaData().get(cfName);
+
+        Schema.instance.purge(cfm);
+        Schema.instance.setTableDefinition(makeNewKeyspaceDefinition(ksm, cfm));
+
+        CompactionManager.instance.stopCompactionFor(Arrays.asList(cfm));
+
+        if (!StorageService.instance.isClientMode())
+        {
+            if (DatabaseDescriptor.isAutoSnapshot())
+                cfs.snapshot(Table.getTimestampedSnapshotName(cfs.columnFamily));
+            Table.open(ksm.name).dropCf(cfm.cfId);
+            MigrationManager.instance.notifyDropColumnFamily(cfm);
+        }
+    }

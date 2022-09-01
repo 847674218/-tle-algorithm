@@ -1,0 +1,42 @@
+public Future<?> buildIndexAsync()
+    {
+        // if we're just linking in the index to indexedColumns on an already-built index post-restart, we're done
+        boolean allAreBuilt = true;
+        for (ColumnDefinition cdef : columnDefs)
+        {
+            if (!SystemTable.isIndexBuilt(baseCfs.table.name, getNameForSystemTable(cdef.name)))
+            {
+                allAreBuilt = false;
+                break;
+            }
+        }
+
+        if (allAreBuilt)
+            return null;
+
+        // build it asynchronously; addIndex gets called by CFS open and schema update, neither of which
+        // we want to block for a long period.  (actual build is serialized on CompactionManager.)
+        Runnable runnable = new Runnable()
+        {
+            public void run()
+            {
+                try
+                {
+                    baseCfs.forceBlockingFlush();
+                    buildIndexBlocking();
+                }
+                catch (ExecutionException e)
+                {
+                    throw new RuntimeException(e);
+                }
+                catch (InterruptedException e)
+                {
+                    throw new AssertionError(e);
+                }
+            }
+        };
+        FutureTask<?> f = new FutureTask<Object>(runnable, null);
+
+        new Thread(f, "Creating index: " + getIndexName()).start();
+        return f;
+    }

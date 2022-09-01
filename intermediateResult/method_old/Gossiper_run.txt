@@ -1,0 +1,58 @@
+public void run()
+        {
+            try
+            {
+                //wait on messaging service to start listening
+                MessagingService.instance().waitUntilListening();
+
+                /* Update the local heartbeat counter. */
+                endpointStateMap.get(FBUtilities.getBroadcastAddress()).getHeartBeatState().updateHeartBeat();
+                if (logger.isTraceEnabled())
+                    logger.trace("My heartbeat is now " + endpointStateMap.get(FBUtilities.getBroadcastAddress()).getHeartBeatState().getHeartBeatVersion());
+                final List<GossipDigest> gDigests = new ArrayList<GossipDigest>();
+                Gossiper.instance.makeRandomGossipDigest(gDigests);
+
+                if ( gDigests.size() > 0 )
+                {
+                    MessageProducer prod = new MessageProducer()
+                    {
+                        public Message getMessage(Integer version) throws IOException
+                        {
+                            return makeGossipDigestSynMessage(gDigests, version);
+                        }
+                    };
+                    /* Gossip to some random live member */
+                    boolean gossipedToSeed = doGossipToLiveMember(prod);
+
+                    /* Gossip to some unreachable member with some probability to check if he is back up */
+                    doGossipToUnreachableMember(prod);
+
+                    /* Gossip to a seed if we did not do so above, or we have seen less nodes
+                       than there are seeds.  This prevents partitions where each group of nodes
+                       is only gossiping to a subset of the seeds.
+
+                       The most straightforward check would be to check that all the seeds have been
+                       verified either as live or unreachable.  To avoid that computation each round,
+                       we reason that:
+
+                       either all the live nodes are seeds, in which case non-seeds that come online
+                       will introduce themselves to a member of the ring by definition,
+
+                       or there is at least one non-seed node in the list, in which case eventually
+                       someone will gossip to it, and then do a gossip to a random seed from the
+                       gossipedToSeed check.
+
+                       See CASSANDRA-150 for more exposition. */
+                    if (!gossipedToSeed || liveEndpoints.size() < seeds.size())
+                        doGossipToSeed(prod);
+
+                    if (logger.isTraceEnabled())
+                        logger.trace("Performing status check ...");
+                    doStatusCheck();
+                }
+            }
+            catch (Exception e)
+            {
+                logger.error("Gossip error", e);
+            }
+        }

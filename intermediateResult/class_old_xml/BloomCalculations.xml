@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\utils\BloomCalculations.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>;</package>
+
+<comment type="block" format="javadoc">/**
+ * The following calculations are taken from:
+ * http://www.cs.wisc.edu/~cao/papers/summary-cache/node8.html
+ * "Bloom Filters - the math"
+ *
+ * This class's static methods are meant to facilitate the use of the Bloom
+ * Filter class by helping to choose correct values of 'bits per element' and
+ * 'number of hash functions, k'.
+ */</comment>
+<class>class <name>BloomCalculations</name> <block>{
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>minBuckets</name> <init>= <expr>2</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>minK</name> <init>= <expr>1</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>EXCESS</name> <init>= <expr>20</expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * In the following table, the row 'i' shows false positive rates if i buckets
+     * per element are used.  Column 'j' shows false positive rates if j hash
+     * functions are used.  The first row is 'i=0', the first column is 'j=0'.
+     * Each cell (i,j) the false positive rate determined by using i buckets per
+     * element and j hash functions.
+     */</comment>
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>double</name><index>[]</index><index>[]</index></type> <name>probs</name> <init>= <expr>new <name><name>double</name><index>[]</index><index>[]</index></name><block>{
+        <expr><block>{<expr>1.0</expr>}</block></expr>, <comment type="line">// dummy row representing 0 buckets per element</comment>
+        <expr><block>{<expr>1.0</expr>, <expr>1.0</expr>}</block></expr>, <comment type="line">// dummy row representing 1 buckets per element</comment>
+        <expr><block>{<expr>1.0</expr>, <expr>0.393</expr>,  <expr>0.400</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.283</expr>,  <expr>0.237</expr>,   <expr>0.253</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.221</expr>,  <expr>0.155</expr>,   <expr>0.147</expr>,   <expr>0.160</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.181</expr>,  <expr>0.109</expr>,   <expr>0.092</expr>,   <expr>0.092</expr>,   <expr>0.101</expr>}</block></expr>, <comment type="line">// 5</comment>
+        <expr><block>{<expr>1.0</expr>, <expr>0.154</expr>,  <expr>0.0804</expr>,  <expr>0.0609</expr>,  <expr>0.0561</expr>,  <expr>0.0578</expr>,   <expr>0.0638</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.133</expr>,  <expr>0.0618</expr>,  <expr>0.0423</expr>,  <expr>0.0359</expr>,  <expr>0.0347</expr>,   <expr>0.0364</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.118</expr>,  <expr>0.0489</expr>,  <expr>0.0306</expr>,  <expr>0.024</expr>,   <expr>0.0217</expr>,   <expr>0.0216</expr>,   <expr>0.0229</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.105</expr>,  <expr>0.0397</expr>,  <expr>0.0228</expr>,  <expr>0.0166</expr>,  <expr>0.0141</expr>,   <expr>0.0133</expr>,   <expr>0.0135</expr>,   <expr>0.0145</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.0952</expr>, <expr>0.0329</expr>,  <expr>0.0174</expr>,  <expr>0.0118</expr>,  <expr>0.00943</expr>,  <expr>0.00844</expr>,  <expr>0.00819</expr>,  <expr>0.00846</expr>}</block></expr>, <comment type="line">// 10</comment>
+        <expr><block>{<expr>1.0</expr>, <expr>0.0869</expr>, <expr>0.0276</expr>,  <expr>0.0136</expr>,  <expr>0.00864</expr>, <expr>0.0065</expr>,   <expr>0.00552</expr>,  <expr>0.00513</expr>,  <expr>0.00509</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.08</expr>,   <expr>0.0236</expr>,  <expr>0.0108</expr>,  <expr>0.00646</expr>, <expr>0.00459</expr>,  <expr>0.00371</expr>,  <expr>0.00329</expr>,  <expr>0.00314</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.074</expr>,  <expr>0.0203</expr>,  <expr>0.00875</expr>, <expr>0.00492</expr>, <expr>0.00332</expr>,  <expr>0.00255</expr>,  <expr>0.00217</expr>,  <expr>0.00199</expr>,  <expr>0.00194</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.0689</expr>, <expr>0.0177</expr>,  <expr>0.00718</expr>, <expr>0.00381</expr>, <expr>0.00244</expr>,  <expr>0.00179</expr>,  <expr>0.00146</expr>,  <expr>0.00129</expr>,  <expr>0.00121</expr>,  <expr>0.0012</expr>}</block></expr>,
+        <expr><block>{<expr>1.0</expr>, <expr>0.0645</expr>, <expr>0.0156</expr>,  <expr>0.00596</expr>, <expr>0.003</expr>,   <expr>0.00183</expr>,  <expr>0.00128</expr>,  <expr>0.001</expr>,    <expr>0.000852</expr>, <expr>0.000775</expr>, <expr>0.000744</expr>}</block></expr>, <comment type="line">// 15</comment>
+		<expr><block>{<expr>1.0</expr>, <expr>0.0606</expr>, <expr>0.0138</expr>,  <expr>0.005</expr>,   <expr>0.00239</expr>, <expr>0.00139</expr>,  <expr>0.000935</expr>, <expr>0.000702</expr>, <expr>0.000574</expr>, <expr>0.000505</expr>, <expr>0.00047</expr>,  <expr>0.000459</expr>}</block></expr>,
+		<expr><block>{<expr>1.0</expr>, <expr>0.0571</expr>, <expr>0.0123</expr>,  <expr>0.00423</expr>, <expr>0.00193</expr>, <expr>0.00107</expr>,  <expr>0.000692</expr>, <expr>0.000499</expr>, <expr>0.000394</expr>, <expr>0.000335</expr>, <expr>0.000302</expr>, <expr>0.000287</expr>, <expr>0.000284</expr>}</block></expr>,
+		<expr><block>{<expr>1.0</expr>, <expr>0.054</expr>,  <expr>0.0111</expr>,  <expr>0.00362</expr>, <expr>0.00158</expr>, <expr>0.000839</expr>, <expr>0.000519</expr>, <expr>0.00036</expr>,  <expr>0.000275</expr>, <expr>0.000226</expr>, <expr>0.000198</expr>, <expr>0.000183</expr>, <expr>0.000176</expr>}</block></expr>,
+		<expr><block>{<expr>1.0</expr>, <expr>0.0513</expr>, <expr>0.00998</expr>, <expr>0.00312</expr>, <expr>0.0013</expr>,  <expr>0.000663</expr>, <expr>0.000394</expr>, <expr>0.000264</expr>, <expr>0.000194</expr>, <expr>0.000155</expr>, <expr>0.000132</expr>, <expr>0.000118</expr>, <expr>0.000111</expr>, <expr>0.000109</expr>}</block></expr>,
+		<expr><block>{<expr>1.0</expr>, <expr>0.0488</expr>, <expr>0.00906</expr>, <expr>0.0027</expr>,  <expr>0.00108</expr>, <expr>0.00053</expr>,  <expr>0.000303</expr>, <expr>0.000196</expr>, <expr>0.00014</expr>,  <expr>0.000108</expr>, <expr>8.89e-05</expr>, <expr>7.77e-05</expr>, <expr>7.12e-05</expr>, <expr>6.79e-05</expr>, <expr>6.71e-05</expr>}</block></expr> <comment type="line">// 20</comment>
+    }</block></expr></init></decl>;</decl_stmt>  <comment type="line">// the first column is a dummy column representing K=0.</comment>
+
+	<comment type="block" format="javadoc">/**
+	 * The optimal number of hashes for a given number of bits per element.
+	 * These values are automatically calculated from the data above.
+	 */</comment>
+	<decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name><index>[]</index></type> <name>optKPerBuckets</name> <init>= <expr>new <name><name>int</name><index>[<expr><name><name>probs</name>.<name>length</name></name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+
+    <expr_stmt><expr>static
+    <block>{
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>probs</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name>double</name></type> <name>min</name> <init>= <expr><name><name>Double</name>.<name>MAX_VALUE</name></name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>double</name><index>[]</index></type> <name>prob</name> <init>= <expr><name><name>probs</name><index>[<expr><name>i</name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>int</name></type> <name>j</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>j</name> &lt; <name><name>prob</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>j</name>++</expr></incr>)
+            <block>{
+                <if>if <condition>(<expr><name><name>prob</name><index>[<expr><name>j</name></expr>]</index></name> &lt; <name>min</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>min</name> = <name><name>prob</name><index>[<expr><name>j</name></expr>]</index></name></expr>;</expr_stmt>
+                    <expr_stmt><expr><name><name>optKPerBuckets</name><index>[<expr><name>i</name></expr>]</index></name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>minK</name></expr></argument>, <argument><expr><name>j</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt/></block></then></if></block></for></block></for>}</block></expr></expr_stmt>
+            }</block></class>
+        }
+    }
+
+    <comment type="block" format="javadoc">/**
+     * Given the number of buckets that can be used per element, return a
+     * specification that minimizes the false positive rate.
+     *
+     * @param bucketsPerElement The number of buckets per element for the filter.
+     * @return A spec that minimizes the false positive rate.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>BloomSpecification</name></type> <name>computeBloomSpec</name><parameter_list>(<param><decl><type><name>int</name></type> <name>bucketsPerElement</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>bucketsPerElement</name> &gt;= 1</expr>;</assert>
+        <assert>assert <expr><name>bucketsPerElement</name> &lt;= <name><name>probs</name>.<name>length</name></name> - 1</expr>;</assert>
+        <return>return <expr>new <call><name>BloomSpecification</name><argument_list>(<argument><expr><name><name>optKPerBuckets</name><index>[<expr><name>bucketsPerElement</name></expr>]</index></name></expr></argument>, <argument><expr><name>bucketsPerElement</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * A wrapper class that holds two key parameters for a Bloom Filter: the
+     * number of hash functions used, and the number of buckets per element used.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>BloomSpecification</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>final</specifier> <name>int</name></type> <name>K</name></decl>;</decl_stmt> <comment type="line">// number of hash functions.</comment>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>int</name></type> <name>bucketsPerElement</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>BloomSpecification</name><parameter_list>(<param><decl><type><name>int</name></type> <name>k</name></decl></param>, <param><decl><type><name>int</name></type> <name>bucketsPerElement</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>K</name> = <name>k</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>bucketsPerElement</name></name> = <name>bucketsPerElement</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"BloomSpecification(K=%d, bucketsPerElement=%d)"</expr></argument>, <argument><expr><name>K</name></expr></argument>, <argument><expr><name>bucketsPerElement</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Given a maximum tolerable false positive probability, compute a Bloom
+     * specification which will give less than the specified false positive rate,
+     * but minimize the number of buckets per element and the number of hash
+     * functions used.  Because bandwidth (and therefore total bitvector size)
+     * is considered more expensive than computing power, preference is given
+     * to minimizing buckets per element rather than number of hash functions.
+     *
+     * @param maxBucketsPerElement The maximum number of buckets available for the filter.
+     * @param maxFalsePosProb The maximum tolerable false positive rate.
+     * @return A Bloom Specification which would result in a false positive rate
+     * less than specified by the function call
+     * @throws UnsupportedOperationException if a filter satisfying the parameters cannot be met
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>BloomSpecification</name></type> <name>computeBloomSpec</name><parameter_list>(<param><decl><type><name>int</name></type> <name>maxBucketsPerElement</name></decl></param>, <param><decl><type><name>double</name></type> <name>maxFalsePosProb</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>maxBucketsPerElement</name> &gt;= 1</expr>;</assert>
+        <assert>assert <expr><name>maxBucketsPerElement</name> &lt;= <name><name>probs</name>.<name>length</name></name> - 1</expr>;</assert>
+        <decl_stmt><decl><type><name>int</name></type> <name>maxK</name> <init>= <expr><name><name>probs</name><index>[<expr><name>maxBucketsPerElement</name></expr>]</index></name>.<name>length</name> - 1</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// Handle the trivial cases</comment>
+        <if>if<condition>(<expr><name>maxFalsePosProb</name> &gt;= <name><name>probs</name><index>[<expr><name>minBuckets</name></expr>]</index><index>[<expr><name>minK</name></expr>]</index></name></expr>)</condition><then> <block>{
+            <return>return <expr>new <call><name>BloomSpecification</name><argument_list>(<argument><expr>2</expr></argument>, <argument><expr><name><name>optKPerBuckets</name><index>[<expr>2</expr>]</index></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then></if>
+        <if>if <condition>(<expr><name>maxFalsePosProb</name> &lt; <name><name>probs</name><index>[<expr><name>maxBucketsPerElement</name></expr>]</index><index>[<expr><name>maxK</name></expr>]</index></name></expr>)</condition><then> <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Unable to satisfy %s with %s buckets per element"</expr></argument>,
+                                                                  <argument><expr><name>maxFalsePosProb</name></expr></argument>, <argument><expr><name>maxBucketsPerElement</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+
+        <comment type="line">// First find the minimal required number of buckets:</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>bucketsPerElement</name> <init>= <expr>2</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>K</name> <init>= <expr><name><name>optKPerBuckets</name><index>[<expr>2</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <while>while<condition>(<expr><name><name>probs</name><index>[<expr><name>bucketsPerElement</name></expr>]</index><index>[<expr><name>K</name></expr>]</index></name> &gt; <name>maxFalsePosProb</name></expr>)</condition><block>{
+            <expr_stmt><expr><name>bucketsPerElement</name>++</expr>;</expr_stmt>
+            <expr_stmt><expr><name>K</name> = <name><name>optKPerBuckets</name><index>[<expr><name>bucketsPerElement</name></expr>]</index></name></expr>;</expr_stmt>
+        }</block></while>
+        <comment type="line">// Now that the number of buckets is sufficient, see if we can relax K</comment>
+        <comment type="line">// without losing too much precision.</comment>
+        <while>while<condition>(<expr><name><name>probs</name><index>[<expr><name>bucketsPerElement</name></expr>]</index><index>[<expr><name>K</name> - 1</expr>]</index></name> &lt;= <name>maxFalsePosProb</name></expr>)</condition><block>{
+            <expr_stmt><expr><name>K</name>--</expr>;</expr_stmt>
+        }</block></while>
+
+        <return>return <expr>new <call><name>BloomSpecification</name><argument_list>(<argument><expr><name>K</name></expr></argument>, <argument><expr><name>bucketsPerElement</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Calculates the maximum number of buckets per element that this implementation
+     * can support.  Crucially, it will lower the bucket count if necessary to meet
+     * BitSet's size restrictions.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>maxBucketsPerElement</name><parameter_list>(<param><decl><type><name>long</name></type> <name>numElements</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>numElements</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>1</expr></argument>, <argument><expr><name>numElements</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>double</name></type> <name>v</name> <init>= <expr>(<name><name>Long</name>.<name>MAX_VALUE</name></name> - <name>EXCESS</name>) / (<name>double</name>)<name>numElements</name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>v</name> &lt; 1.0</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"Cannot compute probabilities for " + <name>numElements</name> + " elements."</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+        <return>return <expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name><name>BloomCalculations</name>.<name>probs</name>.<name>length</name></name> - 1</expr></argument>, <argument><expr>(<name>int</name>)<name>v</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}
+</unit>

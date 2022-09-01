@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\commitlog\CommitLogArchiver.java"><comment type="block">/*
+ * 
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ * 
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ * 
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>commitlog</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>InputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>text</name>.<name>ParseException</name></name>;</import>
+<import>import <name><name>java</name>.<name>text</name>.<name>SimpleDateFormat</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Properties</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>JMXEnabledThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>WrappedRunnable</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Strings</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>CommitLogArchiver</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CommitLogArchiver</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>archivePending</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>ExecutorService</name></type> <name>executor</name> <init>= <expr>new <call><name>JMXEnabledThreadPoolExecutor</name><argument_list>(<argument><expr>"commitlog_archiver"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>archiveCommand</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>restoreCommand</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>restoreDirectories</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>long</name></type> <name>restorePointInTime</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CommitLogArchiver</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Properties</name></type> <name>commitlog_commands</name> <init>= <expr>new <call><name>Properties</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>InputStream</name></type> <name>stream</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>stream</name> = <call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getClassLoader</name><argument_list>()</argument_list></call>.<call><name>getResourceAsStream</name><argument_list>(<argument><expr>"commitlog_archiving.properties"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>stream</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"No commitlog_archiving properties found; archive + pitr will be disabled"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>archiveCommand</name> = null</expr>;</expr_stmt>
+                <expr_stmt><expr><name>restoreCommand</name> = null</expr>;</expr_stmt>
+                <expr_stmt><expr><name>restoreDirectories</name> = null</expr>;</expr_stmt>
+                <expr_stmt><expr><name>restorePointInTime</name> = <name><name>Long</name>.<name>MAX_VALUE</name></name></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name><name>commitlog_commands</name>.<name>load</name></name><argument_list>(<argument><expr><name>stream</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>archiveCommand</name> = <call><name><name>commitlog_commands</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"archive_command"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>restoreCommand</name> = <call><name><name>commitlog_commands</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"restore_command"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>restoreDirectories</name> = <call><name><name>commitlog_commands</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"restore_directories"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>String</name></type> <name>targetTime</name> <init>= <expr><call><name><name>commitlog_commands</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"restore_point_in_time"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>restorePointInTime</name> = <call><name><name>Strings</name>.<name>isNullOrEmpty</name></name><argument_list>(<argument><expr><name>targetTime</name></expr></argument>)</argument_list></call> ? <name><name>Long</name>.<name>MAX_VALUE</name></name> : new <call><name>SimpleDateFormat</name><argument_list>(<argument><expr>"yyyy:MM:dd HH:mm:ss"</expr></argument>)</argument_list></call>.<call><name>parse</name><argument_list>(<argument><expr><name>targetTime</name></expr></argument>)</argument_list></call>.<call><name>getTime</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>ParseException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Unable to parse restore target time"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></else></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Unable to load commitlog_archiving.properties"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>stream</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>maybeArchive</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>String</name></type> <name>path</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>String</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>Strings</name>.<name>isNullOrEmpty</name></name><argument_list>(<argument><expr><name>archiveCommand</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name><name>archivePending</name>.<name>put</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><call><name><name>executor</name>.<name>submit</name></name><argument_list>(<argument><expr>new <class><super><name>WrappedRunnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>protected</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>command</name> <init>= <expr><call><name><name>archiveCommand</name>.<name>replace</name></name><argument_list>(<argument><expr>"%name"</expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>command</name> = <call><name><name>command</name>.<name>replace</name></name><argument_list>(<argument><expr>"%path"</expr></argument>, <argument><expr><name>path</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>exec</name><argument_list>(<argument><expr><name>command</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>maybeWaitForArchiving</name><parameter_list>(<param><decl><type><name>String</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>f</name> <init>= <expr><call><name><name>archivePending</name>.<name>remove</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>f</name> == null</expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if> <comment type="line">// archiving disabled</comment>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>f</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>e</name>.<name>getCause</name></name><argument_list>()</argument_list></call> instanceof <name>IOException</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Looks like the archiving of file {} failed earlier, cassandra is going to ignore this segment for now."</expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr>false</expr>;</return>
+            }</block></then></if>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>maybeRestoreArchive</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>Strings</name>.<name>isNullOrEmpty</name></name><argument_list>(<argument><expr><name>restoreDirectories</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <for>for (<init><decl><type><name>String</name></type> <name>dir</name> <range>: <expr><call><name><name>restoreDirectories</name>.<name>split</name></name><argument_list>(<argument><expr>","</expr></argument>)</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>File</name><index>[]</index></type> <name>files</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>dir</name></expr></argument>)</argument_list></call>.<call><name>listFiles</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>files</name> == null</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Unable to list director " + <name>dir</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+            <for>for (<init><decl><type><name>File</name></type> <name>fromFile</name> <range>: <expr><name>files</name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>File</name></type> <name>toFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getCommitLogLocation</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>new <call><name>CommitLogDescriptor</name><argument_list>(<argument><expr><call><name><name>CommitLogSegment</name>.<name>getNextId</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>fileName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>String</name></type> <name>command</name> <init>= <expr><call><name><name>restoreCommand</name>.<name>replace</name></name><argument_list>(<argument><expr>"%from"</expr></argument>, <argument><expr><call><name><name>fromFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>command</name> = <call><name><name>command</name>.<name>replace</name></name><argument_list>(<argument><expr>"%to"</expr></argument>, <argument><expr><call><name><name>toFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name>exec</name><argument_list>(<argument><expr><name>command</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></for>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>exec</name><parameter_list>(<param><decl><type><name>String</name></type> <name>command</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>ProcessBuilder</name></type> <name>pb</name> <init>= <expr>new <call><name>ProcessBuilder</name><argument_list>(<argument><expr><call><name><name>command</name>.<name>split</name></name><argument_list>(<argument><expr>" "</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>pb</name>.<name>redirectErrorStream</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>exec</name></name><argument_list>(<argument><expr><name>pb</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+}</block></class>
+</unit>

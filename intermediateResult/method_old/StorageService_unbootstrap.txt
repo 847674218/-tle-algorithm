@@ -1,0 +1,32 @@
+private void unbootstrap(final Runnable onFinish)
+    {
+        Map<String, Multimap<Range<Token>, InetAddress>> rangesToStream = new HashMap<String, Multimap<Range<Token>, InetAddress>>();
+
+        for (final String table : Schema.instance.getNonSystemTables())
+        {
+            Multimap<Range<Token>, InetAddress> rangesMM = getChangedRangesForLeaving(table, FBUtilities.getBroadcastAddress());
+
+            if (logger_.isDebugEnabled())
+                logger_.debug("Ranges needing transfer are [" + StringUtils.join(rangesMM.keySet(), ",") + "]");
+
+            rangesToStream.put(table, rangesMM);
+        }
+
+        setMode(Mode.LEAVING, "streaming data to other nodes", true);
+
+        CountDownLatch latch = streamRanges(rangesToStream);
+
+        // wait for the transfer runnables to signal the latch.
+        logger_.debug("waiting for stream aks.");
+        try
+        {
+            latch.await();
+        }
+        catch (InterruptedException e)
+        {
+            throw new RuntimeException(e);
+        }
+        logger_.debug("stream acks all received.");
+        leaveRing();
+        onFinish.run();
+    }

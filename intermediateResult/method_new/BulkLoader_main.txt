@@ -1,0 +1,55 @@
+public static void main(String args[]) throws IOException
+    {
+        LoaderOptions options = LoaderOptions.parseArgs(args);
+        try
+        {
+            OutputHandler handler = new OutputHandler.SystemOutput(options.verbose, options.debug);
+            SSTableLoader loader = new SSTableLoader(options.directory, new ExternalClient(handler, options.hosts, options.rpcPort, options.user, options.passwd), handler);
+            DatabaseDescriptor.setStreamThroughputOutboundMegabitsPerSec(options.throttle);
+            SSTableLoader.LoaderFuture future = loader.stream(options.ignores);
+
+            if (options.noProgress)
+            {
+                future.get();
+            }
+            else
+            {
+                ProgressIndicator indicator = new ProgressIndicator(future.getPendingFiles());
+                indicator.start();
+                System.out.println("");
+                boolean printEnd = false;
+                while (!future.isDone())
+                {
+                    if (indicator.printProgress())
+                    {
+                        // We're done with streaming
+                        System.out.println("\nWaiting for targets to rebuild indexes ...");
+                        printEnd = true;
+                        future.get();
+                        assert future.isDone();
+                    }
+                    else
+                    {
+                        try { Thread.sleep(1000L); } catch (Exception e) {}
+                    }
+                }
+                if (!printEnd)
+                    indicator.printProgress();
+                if (future.hadFailures())
+                {
+                    System.err.println("Streaming to the following hosts failed:");
+                    System.err.println(future.getFailedHosts());
+                    System.exit(1);
+                }
+            }
+
+            System.exit(0); // We need that to stop non daemonized threads
+        }
+        catch (Exception e)
+        {
+            System.err.println(e.getMessage());
+            if (options.debug)
+                e.printStackTrace(System.err);
+            System.exit(1);
+        }
+    }

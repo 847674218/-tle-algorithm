@@ -1,0 +1,32 @@
+public void snapshotWithoutFlush(String snapshotName)
+    {
+        for (ColumnFamilyStore cfs : concatWithIndexes())
+        {
+            DataTracker.View currentView = cfs.markCurrentViewReferenced();
+
+            try
+            {
+                for (SSTableReader ssTable : currentView.sstables)
+                {
+                    File snapshotDirectory = Directories.getSnapshotDirectory(ssTable.descriptor, snapshotName);
+
+                    // hard links
+                    ssTable.createLinks(snapshotDirectory.getPath());
+                    if (logger.isDebugEnabled())
+                        logger.debug("Snapshot for " + table + " keyspace data file " + ssTable.getFilename() +
+                                     " created in " + snapshotDirectory);
+                }
+
+                if (cfs.compactionStrategy instanceof LeveledCompactionStrategy)
+                    cfs.directories.snapshotLeveledManifest(snapshotName);
+            }
+            catch (IOException e)
+            {
+                throw new IOError(e);
+            }
+            finally
+            {
+                SSTableReader.releaseReferences(currentView.sstables);
+            }
+        }
+    }

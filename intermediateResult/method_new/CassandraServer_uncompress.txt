@@ -1,0 +1,57 @@
+private static String uncompress(ByteBuffer query, Compression compression) throws InvalidRequestException
+    {
+        String queryString = null;
+
+        // Decompress the query string.
+        try
+        {
+            switch (compression)
+            {
+                case GZIP:
+                    DataOutputBuffer decompressed = new DataOutputBuffer();
+                    byte[] outBuffer = new byte[1024], inBuffer = new byte[1024];
+
+                    Inflater decompressor = new Inflater();
+
+                    int lenRead = 0;
+                    while (true)
+                    {
+                        if (decompressor.needsInput())
+                            lenRead = query.remaining() < 1024 ? query.remaining() : 1024;
+                        query.get(inBuffer, 0, lenRead);
+                        decompressor.setInput(inBuffer, 0, lenRead);
+
+                        int lenWrite = 0;
+                        while ((lenWrite = decompressor.inflate(outBuffer)) != 0)
+                            decompressed.write(outBuffer, 0, lenWrite);
+
+                        if (decompressor.finished())
+                            break;
+                    }
+
+                    decompressor.end();
+
+                    queryString = new String(decompressed.getData(), 0, decompressed.size(), "UTF-8");
+                    break;
+                case NONE:
+                    try
+                    {
+                        queryString = ByteBufferUtil.string(query);
+                    }
+                    catch (CharacterCodingException ex)
+                    {
+                        throw new InvalidRequestException(ex.getMessage());
+                    }
+                    break;
+            }
+        }
+        catch (DataFormatException e)
+        {
+            throw new InvalidRequestException("Error deflating query string.");
+        }
+        catch (UnsupportedEncodingException e)
+        {
+            throw new InvalidRequestException("Unknown query string encoding.");
+        }
+        return queryString;
+    }

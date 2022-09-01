@@ -1,0 +1,32 @@
+static ColumnFamily resolveSuperset(Iterable<ColumnFamily> versions)
+    {
+        assert Iterables.size(versions) > 0;
+
+        ColumnFamily resolved = null;
+        for (ColumnFamily cf : versions)
+        {
+            if (cf == null)
+                continue;
+
+            if (resolved == null)
+                resolved = cf.cloneMeShallow();
+            else
+                resolved.delete(cf);
+        }
+        if (resolved == null)
+            return null;
+
+        // mimic the collectCollatedColumn + removeDeleted path that getColumnFamily takes.
+        // this will handle removing columns and subcolumns that are supressed by a row or
+        // supercolumn tombstone.
+        QueryFilter filter = new QueryFilter(null, new QueryPath(resolved.metadata().cfName), new IdentityQueryFilter());
+        List<CloseableIterator<IColumn>> iters = new ArrayList<CloseableIterator<IColumn>>();
+        for (ColumnFamily version : versions)
+        {
+            if (version == null)
+                continue;
+            iters.add(FBUtilities.closeableIterator(version.iterator()));
+        }
+        filter.collateColumns(resolved, iters, Integer.MIN_VALUE);
+        return ColumnFamilyStore.removeDeleted(resolved, Integer.MIN_VALUE);
+    }

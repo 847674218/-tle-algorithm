@@ -1,0 +1,123 @@
+private ColumnFamily collectTimeOrderedData()
+    {
+        logger.debug("collectTimeOrderedData");
+
+        // AtomicSortedColumns doesn't work for super columi ns (see #3821)
+        ISortedColumns.Factory factory = mutableColumns
+                                       ? cfs.metadata.cfType == ColumnFamilyType.Super ? ThreadSafeSortedColumns.factory() : AtomicSortedColumns.factory()
+                                       : TreeMapBackedSortedColumns.factory();
+        ColumnFamily container = ColumnFamily.create(cfs.metadata, factory, filter.filter.isReversed());
+        List<IColumnIterator> iterators = new ArrayList<IColumnIterator>();
+        ColumnFamilyStore.ViewFragment view = cfs.markReferenced(filter.key);
+        try
+        {
+            for (Memtable memtable : view.memtables)
+            {
+                IColumnIterator iter = filter.getMemtableColumnIterator(memtable);
+                if (iter != null)
+                {
+                    iterators.add(iter);
+                    container.delete(iter.getColumnFamily());
+                    while (iter.hasNext())
+                        container.addColumn(iter.next());
+                }
+            }
+
+            // avoid changing the filter columns of the original filter
+            // (reduceNameFilter removes columns that are known to be irrelevant)
+            TreeSet<ByteBuffer> filterColumns = new TreeSet<ByteBuffer>(((NamesQueryFilter) filter.filter).columns);
+            QueryFilter reducedFilter = new QueryFilter(filter.key, filter.path, new NamesQueryFilter(filterColumns));
+
+            /* add the SSTables on disk */
+            Collections.sort(view.sstables, SSTable.maxTimestampComparator);
+
+            // read sorted sstables
+            long mostRecentRowTombstone = Long.MIN_VALUE;
+            for (SSTableReader sstable : view.sstables)
+            {
+                // if we've already seen a row tombstone with a timestamp greater 
+                // than the most recent update to this sstable, we're done, since the rest of the sstables
+                // will also be older
+                if (sstable.getMaxTimestamp() < mostRecentRowTombstone)
+                    break;
+                
+                long currentMaxTs = sstable.getMaxTimestamp();
+                reduceNameFilter(reducedFilter, container, currentMaxTs);
+                if (((NamesQueryFilter) reducedFilter.filter).columns.isEmpty())
+                    break;
+
+                IColumnIterator iter = reducedFilter.getSSTableColumnIterator(sstable);
+                iterators.add(iter);
+                if (iter.getColumnFamily() != null)
+                {
+                    ColumnFamily cf = iter.getColumnFamily();
+                    if (cf.isMarkedForDelete())
+                    {
+                        // track the most recent row level tombstone we encounter
+                        mostRecentRowTombstone = cf.getMarkedForDeleteAt();
+                    }
+                    
+                    container.delete(cf);
+                    sstablesIterated++;
+                    while (iter.hasNext())
+                        container.addColumn(iter.next());
+                }
+            }
+
+            // we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)
+            // and "there used to be data, but it's gone now" (we should cache the empty CF so we don't need to rebuild that slower)
+            if (iterators.isEmpty())
+                return null;
+
+            // do a final collate.  toCollate is boilerplate required to provide a CloseableIterator
+            final ColumnFamily c2 = container;
+            CloseableIterator<IColumn> toCollate = new SimpleAbstractColumnIterator()
+            {
+                final Iterator<IColumn> iter = c2.iterator();
+
+                protected IColumn computeNext()
+                {
+                    return iter.hasNext() ? iter.next() : endOfData();
+                }
+
+                public ColumnFamily getColumnFamily()
+                {
+                    return c2;
+                }
+
+                public DecoratedKey getKey()
+                {
+                    return filter.key;
+                }
+            };
+            ColumnFamily returnCF = container.cloneMeShallow();
+            filter.collateColumns(returnCF, Collections.singletonList(toCollate), gcBefore);
+
+            // "hoist up" the requested data into a more recent sstable
+            if (sstablesIterated > cfs.getMinimumCompactionThreshold()
+                && !cfs.isCompactionDisabled()
+                && cfs.getCompactionStrategy() instanceof SizeTieredCompactionStrategy)
+            {
+                RowMutation rm = new RowMutation(cfs.table.name, new Row(filter.key, returnCF.cloneMe()));
+                try
+                {
+                    // skipping commitlog and index updates is fine since we're just de-fragmenting existing data
+                    Table.open(rm.getTable()).apply(rm, false, false);
+                }
+                catch (IOException e)
+                {
+                    // log and allow the result to be returned
+                    logger.error("Error re-writing read results", e);
+                }
+            }
+
+            // Caller is responsible for final removeDeletedCF.  This is important for cacheRow to work correctly:
+            return returnCF;
+        }
+        finally
+        {
+            for (IColumnIterator iter : iterators)
+                FileUtils.closeQuietly(iter);
+            SSTableReader.releaseReferences(view.sstables);
+        }
+    }

@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\hadoop\ColumnFamilyOutputFormat.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>hadoop</name></name>;</package>
+
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TTransport</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>auth</name>.<name>IAuthenticator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>conf</name>.<name>Configuration</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>TException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TSocket</name></name>;</import>
+
+<import>import <name><name>javax</name>.<name>security</name>.<name>auth</name>.<name>login</name>.<name>LoginException</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * The &lt;code&gt;ColumnFamilyOutputFormat&lt;/code&gt; acts as a Hadoop-specific
+ * OutputFormat that allows reduce tasks to store keys (and corresponding
+ * values) as Cassandra rows (and respective columns) in a given
+ * ColumnFamily.
+ *
+ * &lt;p&gt;
+ * As is the case with the {@link ColumnFamilyInputFormat}, you need to set the
+ * Keyspace and ColumnFamily in your
+ * Hadoop job Configuration. The {@link ConfigHelper} class, through its
+ * {@link ConfigHelper#setOutputColumnFamily} method, is provided to make this
+ * simple.
+ * &lt;/p&gt;
+ *
+ * &lt;p&gt;
+ * For the sake of performance, this class employs a lazy write-back caching
+ * mechanism, where its record writer batches mutations created based on the
+ * reduce's inputs (in a task-specific map), and periodically makes the changes
+ * official by sending a batch mutate request to Cassandra.
+ * &lt;/p&gt;
+ */</comment>
+<class><specifier>public</specifier> class <name>ColumnFamilyOutputFormat</name> <super><extends>extends <name><name>OutputFormat</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name><name>List</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></extends>
+    <implements>implements <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name><name>OutputFormat</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name><name>List</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>ColumnFamilyOutputFormat</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>BATCH_THRESHOLD</name> <init>= <expr>"mapreduce.output.columnfamilyoutputformat.batch.threshold"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>QUEUE_SIZE</name> <init>= <expr>"mapreduce.output.columnfamilyoutputformat.queue.size"</expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Check for validity of the output-specification for the job.
+     *
+     * @param context
+     *            information about the job
+     * @throws IOException
+     *             when output should not be attempted
+     */</comment>
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>checkOutputSpecs</name><parameter_list>(<param><decl><type><name>JobContext</name></type> <name>context</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>checkOutputSpecs</name><argument_list>(<argument><expr><call><name><name>context</name>.<name>getConfiguration</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>checkOutputSpecs</name><parameter_list>(<param><decl><type><name>Configuration</name></type> <name>conf</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getOutputKeyspace</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null || <call><name><name>ConfigHelper</name>.<name>getOutputColumnFamily</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"you must set the keyspace and columnfamily with setColumnFamily()"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getOutputPartitioner</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"You must set the output partitioner to the one used by your Cassandra cluster"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getOutputInitialAddress</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"You must set the initial output address to a Cassandra node"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * The OutputCommitter for this format does not write any data to the DFS.
+     *
+     * @param context
+     *            the task context
+     * @return an output committer
+     * @throws IOException
+     * @throws InterruptedException
+     */</comment>
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>OutputCommitter</name></type> <name>getOutputCommitter</name><parameter_list>(<param><decl><type><name>TaskAttemptContext</name></type> <name>context</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr>new <call><name>NullOutputCommitter</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** Fills the deprecated OutputFormat interface for streaming. */</comment>
+    <function><type><annotation>@<name>Deprecated</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>checkOutputSpecs</name><parameter_list>(<param><decl><type><name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>fs</name>.<name>FileSystem</name></name></type> <name>filesystem</name></decl></param>, <param><decl><type><name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name>JobConf</name></name></type> <name>job</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>checkOutputSpecs</name><argument_list>(<argument><expr><name>job</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** Fills the deprecated OutputFormat interface for streaming. */</comment>
+    <function><type><annotation>@<name>Deprecated</name></annotation>
+    <specifier>public</specifier> <name>ColumnFamilyRecordWriter</name></type> <name>getRecordWriter</name><parameter_list>(<param><decl><type><name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>fs</name>.<name>FileSystem</name></name></type> <name>filesystem</name></decl></param>, <param><decl><type><name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name>JobConf</name></name></type> <name>job</name></decl></param>, <param><decl><type><name>String</name></type> <name>name</name></decl></param>, <param><decl><type><name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>util</name>.<name>Progressable</name></name></type> <name>progress</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr>new <call><name>ColumnFamilyRecordWriter</name><argument_list>(<argument><expr><name>job</name></expr></argument>, <argument><expr>new <call><name>Progressable</name><argument_list>(<argument><expr><name>progress</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Get the {@link RecordWriter} for the given task.
+     *
+     * @param context
+     *            the information about the current task.
+     * @return a {@link RecordWriter} to write the output for the job.
+     * @throws IOException
+     */</comment>
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>ColumnFamilyRecordWriter</name></type> <name>getRecordWriter</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>TaskAttemptContext</name></type> <name>context</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr>new <call><name>ColumnFamilyRecordWriter</name><argument_list>(<argument><expr><name>context</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Return a client based on the given socket that points to the configured
+     * keyspace, and is logged in with the configured credentials.
+     *
+     * @param socket  a socket pointing to a particular node, seed or otherwise
+     * @param conf a job configuration
+     * @return a cassandra client
+     * @throws InvalidRequestException
+     * @throws TException
+     * @throws AuthenticationException
+     * @throws AuthorizationException
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Cassandra</name>.<name>Client</name></name></type> <name>createAuthenticatedClient</name><parameter_list>(<param><decl><type><name>TSocket</name></type> <name>socket</name></decl></param>, <param><decl><type><name>Configuration</name></type> <name>conf</name></decl></param>)</parameter_list>
+            <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument>, <argument><expr><name>TException</name></expr></argument>, <argument><expr><name>AuthenticationException</name></expr></argument>, <argument><expr><name>AuthorizationException</name></expr></argument>, <argument><expr><name>LoginException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Creating authenticated client for CF output format"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>TTransport</name></type> <name>transport</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getOutputTransportFactory</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call>.<call><name>openTransport</name><argument_list>(<argument><expr><name>socket</name></expr></argument>, <argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>TBinaryProtocol</name></type> <name>binaryProtocol</name> <init>= <expr>new <call><name>TBinaryProtocol</name><argument_list>(<argument><expr><name>transport</name></expr></argument>, <argument><expr>true</expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Cassandra</name>.<name>Client</name></name></type> <name>client</name> <init>= <expr>new <call><name><name>Cassandra</name>.<name>Client</name></name><argument_list>(<argument><expr><name>binaryProtocol</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>client</name>.<name>set_keyspace</name></name><argument_list>(<argument><expr><call><name><name>ConfigHelper</name>.<name>getOutputKeyspace</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getOutputKeyspaceUserName</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>creds</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>creds</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>USERNAME_KEY</name></name></expr></argument>, <argument><expr><call><name><name>ConfigHelper</name>.<name>getOutputKeyspaceUserName</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>creds</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>PASSWORD_KEY</name></name></expr></argument>, <argument><expr><call><name><name>ConfigHelper</name>.<name>getOutputKeyspacePassword</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>AuthenticationRequest</name></type> <name>authRequest</name> <init>= <expr>new <call><name>AuthenticationRequest</name><argument_list>(<argument><expr><name>creds</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>client</name>.<name>login</name></name><argument_list>(<argument><expr><name>authRequest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Authenticated client for CF output format created successfully"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>client</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * An {@link OutputCommitter} that does nothing.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>NullOutputCommitter</name> <super><extends>extends <name>OutputCommitter</name></extends></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>abortTask</name><parameter_list>(<param><decl><type><name>TaskAttemptContext</name></type> <name>taskContext</name></decl></param>)</parameter_list> <block>{ }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>cleanupJob</name><parameter_list>(<param><decl><type><name>JobContext</name></type> <name>jobContext</name></decl></param>)</parameter_list> <block>{ }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>commitTask</name><parameter_list>(<param><decl><type><name>TaskAttemptContext</name></type> <name>taskContext</name></decl></param>)</parameter_list> <block>{ }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>needsTaskCommit</name><parameter_list>(<param><decl><type><name>TaskAttemptContext</name></type> <name>taskContext</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>false</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>setupJob</name><parameter_list>(<param><decl><type><name>JobContext</name></type> <name>jobContext</name></decl></param>)</parameter_list> <block>{ }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>setupTask</name><parameter_list>(<param><decl><type><name>TaskAttemptContext</name></type> <name>taskContext</name></decl></param>)</parameter_list> <block>{ }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,676 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\DefsTable.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutionException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Future</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>MapDifference</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Maps</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>avro</name>.<name>io</name>.<name>BinaryDecoder</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>avro</name>.<name>io</name>.<name>DecoderFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>avro</name>.<name>specific</name>.<name>SpecificDatumReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>avro</name>.<name>specific</name>.<name>SpecificRecord</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryPath</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AsciiType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>UTF8Type</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>migration</name>.<name>avro</name>.<name>KsDef</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>MigrationManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * SCHEMA_{KEYSPACES, COLUMNFAMILIES, COLUMNS}_CF are used to store Keyspace/ColumnFamily attributes to make schema
+ * load/distribution easy, it replaces old mechanism when local migrations where serialized, stored in system.Migrations
+ * and used for schema distribution.
+ *
+ * SCHEMA_KEYSPACES_CF layout:
+ *
+ * &lt;key (AsciiType)&gt;
+ *   ascii =&gt; json_serialized_value
+ *   ...
+ * &lt;/key&gt;
+ *
+ * Where &lt;key&gt; is a name of keyspace e.g. "ks".
+ *
+ * SCHEMA_COLUMNFAMILIES_CF layout:
+ *
+ * &lt;key (AsciiType)&gt;
+ *     composite(ascii, ascii) =&gt; json_serialized_value
+ * &lt;/key&gt;
+ *
+ * Where &lt;key&gt; is a name of keyspace e.g. "ks"., first component of the column name is name of the ColumnFamily, last
+ * component is the name of the ColumnFamily attribute.
+ *
+ * SCHEMA_COLUMNS_CF layout:
+ *
+ * &lt;key (AsciiType)&gt;
+ *     composite(ascii, ascii, ascii) =&gt; json_serialized value
+ * &lt;/key&gt;
+ *
+ * Where &lt;key&gt; is a name of keyspace e.g. "ks".
+ *
+ * Column names where made composite to support 3-level nesting which represents following structure:
+ * "ColumnFamily name":"column name":"column attribute" =&gt; "value"
+ *
+ * Example of schema (using CLI):
+ *
+ * schema_keyspaces
+ * ----------------
+ * RowKey: ks
+ *  =&gt; (column=durable_writes, value=true, timestamp=1327061028312185000)
+ *  =&gt; (column=name, value="ks", timestamp=1327061028312185000)
+ *  =&gt; (column=replication_factor, value=0, timestamp=1327061028312185000)
+ *  =&gt; (column=strategy_class, value="org.apache.cassandra.locator.NetworkTopologyStrategy", timestamp=1327061028312185000)
+ *  =&gt; (column=strategy_options, value={"datacenter1":"1"}, timestamp=1327061028312185000)
+ *
+ * schema_columnfamilies
+ * ---------------------
+ * RowKey: ks
+ *  =&gt; (column=cf:bloom_filter_fp_chance, value=0.0, timestamp=1327061105833119000)
+ *  =&gt; (column=cf:caching, value="NONE", timestamp=1327061105833119000)
+ *  =&gt; (column=cf:column_type, value="Standard", timestamp=1327061105833119000)
+ *  =&gt; (column=cf:comment, value="ColumnFamily", timestamp=1327061105833119000)
+ *  =&gt; (column=cf:default_validation_class, value="org.apache.cassandra.db.marshal.BytesType", timestamp=1327061105833119000)
+ *  =&gt; (column=cf:gc_grace_seconds, value=864000, timestamp=1327061105833119000)
+ *  =&gt; (column=cf:id, value=1000, timestamp=1327061105833119000)
+ *  =&gt; (column=cf:key_alias, value="S0VZ", timestamp=1327061105833119000)
+ *  ... part of the output omitted.
+ *
+ * schema_columns
+ * --------------
+ * RowKey: ks
+ *  =&gt; (column=cf:c:index_name, value=null, timestamp=1327061105833119000)
+ *  =&gt; (column=cf:c:index_options, value=null, timestamp=1327061105833119000)
+ *  =&gt; (column=cf:c:index_type, value=null, timestamp=1327061105833119000)
+ *  =&gt; (column=cf:c:name, value="aGVsbG8=", timestamp=1327061105833119000)
+ *  =&gt; (column=cf:c:validation_class, value="org.apache.cassandra.db.marshal.AsciiType", timestamp=1327061105833119000)
+ */</comment>
+<class><specifier>public</specifier> class <name>DefsTable</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>DefsTable</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// unbuffered decoders</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>DecoderFactory</name></type> <name>DIRECT_DECODERS</name> <init>= <expr>new <call><name>DecoderFactory</name><argument_list>()</argument_list></call>.<call><name>configureDirectDecoder</name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// column name for the schema storing serialized keyspace definitions</comment>
+    <comment type="line">// NB: must be an invalid keyspace name</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>ByteBuffer</name></type> <name>DEFINITION_SCHEMA_COLUMN_NAME</name> <init>= <expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"Avro/Schema"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>OLD_MIGRATIONS_CF</name> <init>= <expr>"Migrations"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>OLD_SCHEMA_CF</name> <init>= <expr>"Schema"</expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* dumps current keyspace definitions to storage */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>dumpToStorage</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>KSMetaData</name></argument>&gt;</argument_list></name></type> <name>keyspaces</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>timestamp</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>KSMetaData</name></type> <name>ksMetaData</name> <range>: <expr><name>keyspaces</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>ksMetaData</name>.<name>toSchema</name></name><argument_list>(<argument><expr><name>timestamp</name></expr></argument>)</argument_list></call>.<call><name>apply</name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Load keyspace definitions for the system keyspace (system.SCHEMA_KEYSPACES_CF)
+     *
+     * @return Collection of found keyspace definitions
+     *
+     * @throws IOException if failed to read SCHEMA_KEYSPACES_CF
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>KSMetaData</name></argument>&gt;</argument_list></name></type> <name>loadFromTable</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>serializedSchema</name> <init>= <expr><call><name><name>SystemTable</name>.<name>serializedSchema</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_KEYSPACES_CF</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>KSMetaData</name></argument>&gt;</argument_list></name></type> <name>keyspaces</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>KSMetaData</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>serializedSchema</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>Row</name></type> <name>row</name> <range>: <expr><name>serializedSchema</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name>invalidSchemaRow</name><argument_list>(<argument><expr><name>row</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <expr_stmt><expr><call><name><name>keyspaces</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>KSMetaData</name>.<name>fromSchema</name></name><argument_list>(<argument><expr><name>row</name></expr></argument>, <argument><expr><call><name>serializedColumnFamilies</name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <return>return <expr><name>keyspaces</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>fixSchemaNanoTimestamps</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>fixSchemaNanoTimestamp</name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_KEYSPACES_CF</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>fixSchemaNanoTimestamp</name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNFAMILIES_CF</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>fixSchemaNanoTimestamp</name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNS_CF</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>fixSchemaNanoTimestamp</name><parameter_list>(<param><decl><type><name>String</name></type> <name>columnFamily</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name>columnFamily</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>boolean</name></type> <name>needsCleanup</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Date</name></type> <name>now</name> <init>= <expr>new <call><name>Date</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>rows</name> <init>= <expr><call><name><name>SystemTable</name>.<name>serializedSchema</name></name><argument_list>(<argument><expr><name>columnFamily</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <label><name>row_check_loop</name>:</label>
+        <for>for (<init><decl><type><name>Row</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name>invalidSchemaRow</name><argument_list>(<argument><expr><name>row</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <for>for (<init><decl><type><name>IColumn</name></type> <name>column</name> <range>: <expr><name><name>row</name>.<name>cf</name>.<name>columns</name></name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>Date</name></type> <name>columnDate</name> <init>= <expr>new <call><name>Date</name><argument_list>(<argument><expr><call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><call><name><name>columnDate</name>.<name>after</name></name><argument_list>(<argument><expr><name>now</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name>Date</name></type> <name>micros</name> <init>= <expr>new <call><name>Date</name><argument_list>(<argument><expr><call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call> / 1000</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// assume that it was in micros</comment>
+
+                    <decl_stmt><decl><type><name>Calendar</name></type> <name>calendar</name> <init>= <expr><call><name><name>Calendar</name>.<name>getInstance</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>calendar</name>.<name>setTime</name></name><argument_list>(<argument><expr><name>micros</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                    <if>if <condition>(<expr>(<call><name><name>micros</name>.<name>before</name></name><argument_list>(<argument><expr><name>now</name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>calendar</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>Calendar</name>.<name>YEAR</name></name></expr></argument>)</argument_list></call> == 1970) || <call><name><name>micros</name>.<name>after</name></name><argument_list>(<argument><expr><name>now</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><name>needsCleanup</name> = true</expr>;</expr_stmt>
+                        <break>break row_check_loop;</break>
+                    }</block></then></if>
+                }</block></then>
+                <else>else <comment type="line">// millis and we have to fix it to micros</comment>
+                <block>{
+                    <expr_stmt><expr><name>needsCleanup</name> = true</expr>;</expr_stmt>
+                    <break>break row_check_loop;</break>
+                }</block></else></if>
+            }</block></for>
+        }</block></for>
+
+        <if>if <condition>(<expr>!<name>needsCleanup</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Fixing timestamps of schema ColumnFamily " + <name>columnFamily</name> + "..."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>cfs</name>.<name>truncate</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>microTimestamp</name> <init>= <expr><call><name><name>now</name>.<name>getTime</name></name><argument_list>()</argument_list></call> * 1000</expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>Row</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name>invalidSchemaRow</name><argument_list>(<argument><expr><name>row</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <decl_stmt><decl><type><name>RowMutation</name></type> <name>mutation</name> <init>= <expr>new <call><name>RowMutation</name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>, <argument><expr><name><name>row</name>.<name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name>IColumn</name></type> <name>column</name> <range>: <expr><name><name>row</name>.<name>cf</name>.<name>columns</name></name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>column</name>.<name>isLive</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>mutation</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name>columnFamily</name></expr></argument>, <argument><expr>null</expr></argument>, <argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>column</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>microTimestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></for>
+
+            <expr_stmt><expr><call><name><name>mutation</name>.<name>apply</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <comment type="line">// flush immediately because we read schema before replaying the commitlog</comment>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>cfs</name>.<name>forceBlockingFlush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Could not flush after fixing schema timestamps"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>invalidSchemaRow</name><parameter_list>(<param><decl><type><name>Row</name></type> <name>row</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name><name>row</name>.<name>cf</name></name> == null || (<call><name><name>row</name>.<name>cf</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>row</name>.<name>cf</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call>)</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>ByteBuffer</name></type> <name>searchComposite</name><parameter_list>(<param><decl><type><name>String</name></type> <name>name</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>start</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>name</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>nameBytes</name> <init>= <expr><call><name><name>UTF8Type</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>length</name> <init>= <expr><call><name><name>nameBytes</name>.<name>remaining</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>bytes</name> <init>= <expr>new <name><name>byte</name><index>[<expr>2 + <name>length</name> + 1</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name><name>bytes</name><index>[<expr>0</expr>]</index></name> = <call>(<name>byte</name>)<argument_list>(<argument><expr>(<name>length</name> &gt;&gt; 8) &amp; 0xFF</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>bytes</name><index>[<expr>1</expr>]</index></name> = <call>(<name>byte</name>)<argument_list>(<argument><expr><name>length</name> &amp; 0xFF</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>arrayCopy</name></name><argument_list>(<argument><expr><name>nameBytes</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>bytes</name></expr></argument>, <argument><expr>2</expr></argument>, <argument><expr><name>length</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>bytes</name><index>[<expr><name><name>bytes</name>.<name>length</name></name> - 1</expr>]</index></name> = <call>(<name>byte</name>)<argument_list>(<argument><expr><name>start</name> ? 0 : 1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><name>bytes</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>Row</name></type> <name>serializedColumnFamilies</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>ksNameKey</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfsStore</name> <init>= <expr><call><name><name>SystemTable</name>.<name>schemaCFS</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNFAMILIES_CF</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name>Row</name><argument_list>(<argument><expr><name>ksNameKey</name></expr></argument>, <argument><expr><call><name><name>cfsStore</name>.<name>getColumnFamily</name></name><argument_list>(<argument><expr><call><name><name>QueryFilter</name>.<name>getIdentityFilter</name></name><argument_list>(<argument><expr><name>ksNameKey</name></expr></argument>, <argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNFAMILIES_CF</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Loads a version of keyspace definitions from storage (using old SCHEMA_CF as a data source)
+     * Note: If definitions where found in SCHEMA_CF this method would load them into new schema handling table KEYSPACE_CF
+     *
+     * @param version The version of the latest migration.
+     *
+     * @return Collection of found keyspace definitions
+     *
+     * @throws IOException if failed to read SCHEMA_CF or failed to deserialize Avro schema
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <specifier>synchronized</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>KSMetaData</name></argument>&gt;</argument_list></name></type> <name>loadFromStorage</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>vkey</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>decorateKey</name><argument_list>(<argument><expr><call><name>toUTF8Bytes</name><argument_list>(<argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Table</name></type> <name>defs</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfStore</name> <init>= <expr><call><name><name>defs</name>.<name>getColumnFamilyStore</name></name><argument_list>(<argument><expr><name>OLD_SCHEMA_CF</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>cfStore</name>.<name>getColumnFamily</name></name><argument_list>(<argument><expr><call><name><name>QueryFilter</name>.<name>getIdentityFilter</name></name><argument_list>(<argument><expr><name>vkey</name></expr></argument>, <argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name>OLD_SCHEMA_CF</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>IColumn</name></type> <name>avroschema</name> <init>= <expr><call><name><name>cf</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>DEFINITION_SCHEMA_COLUMN_NAME</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>KSMetaData</name></argument>&gt;</argument_list></name></type> <name>keyspaces</name> <init>= <expr><call><name><name>Collections</name>.<name>emptyList</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>avroschema</name> != null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>value</name> <init>= <expr><call><name><name>avroschema</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>org</name>.<name>apache</name>.<name>avro</name>.<name>Schema</name></name></type> <name>schema</name> <init>= <expr><call><name><name>org</name>.<name>apache</name>.<name>avro</name>.<name>Schema</name>.<name>parse</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>string</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// deserialize keyspaces using schema</comment>
+            <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>columns</name> <init>= <expr><call><name><name>cf</name>.<name>getSortedColumns</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>keyspaces</name> = new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>KSMetaData</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>columns</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <for>for (<init><decl><type><name>IColumn</name></type> <name>column</name> <range>: <expr><name>columns</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>DEFINITION_SCHEMA_COLUMN_NAME</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+                <decl_stmt><decl><type><name>KsDef</name></type> <name>ks</name> <init>= <expr><call><name>deserializeAvro</name><argument_list>(<argument><expr><name>schema</name></expr></argument>, <argument><expr><call><name><name>column</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>new <call><name>KsDef</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>keyspaces</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>Avro</name>.<name>ksFromAvro</name></name><argument_list>(<argument><expr><name>ks</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+
+            <comment type="line">// store deserialized keyspaces into new place</comment>
+            <expr_stmt><expr><call><name>dumpToStorage</name><argument_list>(<argument><expr><name>keyspaces</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name>flushSchemaCFs</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Truncating deprecated system column families (migrations, schema)..."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>dropColumnFamily</name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>, <argument><expr><name>OLD_MIGRATIONS_CF</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>dropColumnFamily</name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>, <argument><expr><name>OLD_SCHEMA_CF</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <return>return <expr><name>keyspaces</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Merge remote schema in form of row mutations with local and mutate ks/cf metadata objects
+     * (which also involves fs operations on add/drop ks/cf)
+     *
+     * @param data The data of the message from remote node with schema information
+     * @param version The version of the message
+     *
+     * @throws ConfigurationException If one of metadata attributes has invalid value
+     * @throws IOException If data was corrupted during transportation or failed to apply fs operations
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>mergeRemoteSchema</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>data</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_117</name></name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Can't accept schema migrations from Cassandra versions previous to 1.1.6, please update first."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name>mergeSchema</name><argument_list>(<argument><expr><call><name><name>MigrationManager</name>.<name>deserializeMigrationMessage</name></name><argument_list>(<argument><expr><name>data</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>mergeSchema</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>RowMutation</name></argument>&gt;</argument_list></name></type> <name>mutations</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// current state of the schema</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>oldKeyspaces</name> <init>= <expr><call><name><name>SystemTable</name>.<name>getSchema</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_KEYSPACES_CF</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>oldColumnFamilies</name> <init>= <expr><call><name><name>SystemTable</name>.<name>getSchema</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNFAMILIES_CF</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>RowMutation</name></type> <name>mutation</name> <range>: <expr><name>mutations</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>mutation</name>.<name>apply</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+
+        <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name>flushSchemaCFs</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>updateVersionAndAnnounce</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// with new data applied</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>newKeyspaces</name> <init>= <expr><call><name><name>SystemTable</name>.<name>getSchema</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_KEYSPACES_CF</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>newColumnFamilies</name> <init>= <expr><call><name><name>SystemTable</name>.<name>getSchema</name></name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNFAMILIES_CF</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>keyspacesToDrop</name> <init>= <expr><call><name>mergeKeyspaces</name><argument_list>(<argument><expr><name>oldKeyspaces</name></expr></argument>, <argument><expr><name>newKeyspaces</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>mergeColumnFamilies</name><argument_list>(<argument><expr><name>oldColumnFamilies</name></expr></argument>, <argument><expr><name>newColumnFamilies</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// it is safe to drop a keyspace only when all nested ColumnFamilies where deleted</comment>
+        <for>for (<init><decl><type><name>String</name></type> <name>keyspaceToDrop</name> <range>: <expr><name>keyspacesToDrop</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name>dropKeyspace</name><argument_list>(<argument><expr><name>keyspaceToDrop</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>mergeKeyspaces</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>old</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>updated</name></decl></param>)</parameter_list>
+            <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// calculate the difference between old and new states (note that entriesOnlyLeft() will be always empty)</comment>
+        <decl_stmt><decl><type><name><name>MapDifference</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>diff</name> <init>= <expr><call><name><name>Maps</name>.<name>difference</name></name><argument_list>(<argument><expr><name>old</name></expr></argument>, <argument><expr><name>updated</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="block" format="javadoc">/**
+         * At first step we check if any new keyspaces were added.
+         */</comment>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>diff</name>.<name>entriesOnlyOnRight</name></name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>ksAttrs</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// we don't care about nested ColumnFamilies here because those are going to be processed separately</comment>
+            <if>if <condition>(<expr>!<call><name><name>ksAttrs</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name>addKeyspace</name><argument_list>(<argument><expr><call><name><name>KSMetaData</name>.<name>fromSchema</name></name><argument_list>(<argument><expr>new <call><name>Row</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>CFMetaData</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+
+        <comment type="block" format="javadoc">/**
+         * At second step we check if there were any keyspaces re-created, in this context
+         * re-created means that they were previously deleted but still exist in the low-level schema as empty keys
+         */</comment>
+
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name><name>MapDifference</name>.<name><name>ValueDifference</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>modifiedEntries</name> <init>= <expr><call><name><name>diff</name>.<name>entriesDiffering</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// instead of looping over all modified entries and skipping processed keys all the time</comment>
+        <comment type="line">// we would rather store "left to process" items and iterate over them removing already met keys</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>&gt;</argument_list></name></type> <name>leftToProcess</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>modifiedEntries</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name><name>MapDifference</name>.<name><name>ValueDifference</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>modifiedEntries</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>prevValue</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>leftValue</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>newValue</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>rightValue</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><call><name><name>prevValue</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name>addKeyspace</name><argument_list>(<argument><expr><call><name><name>KSMetaData</name>.<name>fromSchema</name></name><argument_list>(<argument><expr>new <call><name>Row</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>newValue</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>CFMetaData</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <continue>continue;</continue>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name><name>leftToProcess</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <if>if <condition>(<expr><call><name><name>leftToProcess</name>.<name>size</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+            <return>return <expr><call><name><name>Collections</name>.<name>emptySet</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+        <comment type="block" format="javadoc">/**
+         * At final step we updating modified keyspaces and saving keyspaces drop them later
+         */</comment>
+
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>keyspacesToDrop</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>DecoratedKey</name></type> <name>key</name> <range>: <expr><name>leftToProcess</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>MapDifference</name>.<name><name>ValueDifference</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>valueDiff</name> <init>= <expr><call><name><name>modifiedEntries</name>.<name>get</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>newState</name> <init>= <expr><call><name><name>valueDiff</name>.<name>rightValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><call><name><name>newState</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>keyspacesToDrop</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>AsciiType</name>.<name>instance</name>.<name>getString</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name>updateKeyspace</name><argument_list>(<argument><expr><call><name><name>KSMetaData</name>.<name>fromSchema</name></name><argument_list>(<argument><expr>new <call><name>Row</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>newState</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>CFMetaData</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></for>
+
+        <return>return <expr><name>keyspacesToDrop</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>mergeColumnFamilies</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>old</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>updated</name></decl></param>)</parameter_list>
+            <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// calculate the difference between old and new states (note that entriesOnlyLeft() will be always empty)</comment>
+        <decl_stmt><decl><type><name><name>MapDifference</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>diff</name> <init>= <expr><call><name><name>Maps</name>.<name>difference</name></name><argument_list>(<argument><expr><name>old</name></expr></argument>, <argument><expr><name>updated</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// check if any new Keyspaces with ColumnFamilies were added.</comment>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>diff</name>.<name>entriesOnlyOnRight</name></name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cfAttrs</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr>!<call><name><name>cfAttrs</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+               <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>CFMetaData</name></argument>&gt;</argument_list></name></type> <name>cfDefs</name> <init>= <expr><call><name><name>KSMetaData</name>.<name>deserializeColumnFamilies</name></name><argument_list>(<argument><expr>new <call><name>Row</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cfAttrs</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfDef</name> <range>: <expr><call><name><name>cfDefs</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name>addColumnFamily</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></then></if>
+        }</block></for>
+
+        <comment type="line">// deal with modified ColumnFamilies (remember that all of the keyspace nested ColumnFamilies are put to the single row)</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name><name>MapDifference</name>.<name><name>ValueDifference</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>modifiedEntries</name> <init>= <expr><call><name><name>diff</name>.<name>entriesDiffering</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>DecoratedKey</name></type> <name>keyspace</name> <range>: <expr><call><name><name>modifiedEntries</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>MapDifference</name>.<name><name>ValueDifference</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></name></type> <name>valueDiff</name> <init>= <expr><call><name><name>modifiedEntries</name>.<name>get</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>prevValue</name> <init>= <expr><call><name><name>valueDiff</name>.<name>leftValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// state before external modification</comment>
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>newValue</name> <init>= <expr><call><name><name>valueDiff</name>.<name>rightValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// updated state</comment>
+
+            <decl_stmt><decl><type><name>Row</name></type> <name>newRow</name> <init>= <expr>new <call><name>Row</name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>newValue</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><call><name><name>prevValue</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then> <comment type="line">// whole keyspace was deleted and now it's re-created</comment>
+            <block>{
+                <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfm</name> <range>: <expr><call><name><name>KSMetaData</name>.<name>deserializeColumnFamilies</name></name><argument_list>(<argument><expr><name>newRow</name></expr></argument>)</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name>addColumnFamily</name><argument_list>(<argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></then>
+            <else>else <if>if <condition>(<expr><call><name><name>newValue</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then> <comment type="line">// whole keyspace is deleted</comment>
+            <block>{
+                <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfm</name> <range>: <expr><call><name><name>KSMetaData</name>.<name>deserializeColumnFamilies</name></name><argument_list>(<argument><expr>new <call><name>Row</name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>prevValue</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name>dropColumnFamily</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></then>
+            <else>else <comment type="line">// has modifications in the nested ColumnFamilies, need to perform nested diff to determine what was really changed</comment>
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>ksName</name> <init>= <expr><call><name><name>AsciiType</name>.<name>instance</name>.<name>getString</name></name><argument_list>(<argument><expr><name><name>keyspace</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>CFMetaData</name></argument>&gt;</argument_list></name></type> <name>oldCfDefs</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>CFMetaData</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfm</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getKSMetaData</name></name><argument_list>(<argument><expr><name>ksName</name></expr></argument>)</argument_list></call>.<call><name>cfMetaData</name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>oldCfDefs</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+                <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>CFMetaData</name></argument>&gt;</argument_list></name></type> <name>newCfDefs</name> <init>= <expr><call><name><name>KSMetaData</name>.<name>deserializeColumnFamilies</name></name><argument_list>(<argument><expr><name>newRow</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <decl_stmt><decl><type><name><name>MapDifference</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>CFMetaData</name></argument>&gt;</argument_list></name></type> <name>cfDefDiff</name> <init>= <expr><call><name><name>Maps</name>.<name>difference</name></name><argument_list>(<argument><expr><name>oldCfDefs</name></expr></argument>, <argument><expr><name>newCfDefs</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfDef</name> <range>: <expr><call><name><name>cfDefDiff</name>.<name>entriesOnlyOnRight</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name>addColumnFamily</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+                <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfDef</name> <range>: <expr><call><name><name>cfDefDiff</name>.<name>entriesOnlyOnLeft</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name>dropColumnFamily</name><argument_list>(<argument><expr><name><name>cfDef</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfDef</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+                <for>for (<init><decl><type><name><name>MapDifference</name>.<name><name>ValueDifference</name><argument_list>&lt;<argument><name>CFMetaData</name></argument>&gt;</argument_list></name></name></type> <name>cfDef</name> <range>: <expr><call><name><name>cfDefDiff</name>.<name>entriesDiffering</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name>updateColumnFamily</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>rightValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></else></if></else></if>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>addKeyspace</name><parameter_list>(<param><decl><type><name>KSMetaData</name></type> <name>ksm</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getKSMetaData</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call> == null</expr>;</assert>
+        <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>load</name></name><argument_list>(<argument><expr><name>ksm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>addColumnFamily</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>cfm</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call> == null</expr>;</assert>
+        <decl_stmt><decl><type><name>KSMetaData</name></type> <name>ksm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableDefinition</name></name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>ksm</name> = <call><name><name>KSMetaData</name>.<name>cloneWith</name></name><argument_list>(<argument><expr><name>ksm</name></expr></argument>, <argument><expr><call><name><name>Iterables</name>.<name>concat</name></name><argument_list>(<argument><expr><call><name><name>ksm</name>.<name>cfMetaData</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>load</name></name><argument_list>(<argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// make sure it's init-ed w/ the old definitions first,</comment>
+        <comment type="line">// since we're going to call initCf on the new one manually</comment>
+        <expr_stmt><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>setTableDefinition</name></name><argument_list>(<argument><expr><name>ksm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call>.<call><name>initCf</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>cfId</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>updateKeyspace</name><parameter_list>(<param><decl><type><name>KSMetaData</name></type> <name>newState</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>KSMetaData</name></type> <name>oldKsm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getKSMetaData</name></name><argument_list>(<argument><expr><name><name>newState</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>oldKsm</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><name>KSMetaData</name></type> <name>newKsm</name> <init>= <expr><call><name><name>KSMetaData</name>.<name>cloneWith</name></name><argument_list>(<argument><expr><call><name><name>oldKsm</name>.<name>reloadAttributes</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>oldKsm</name>.<name>cfMetaData</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>setTableDefinition</name></name><argument_list>(<argument><expr><name>newKsm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>newState</name>.<name>name</name></name></expr></argument>)</argument_list></call>.<call><name>createReplicationStrategy</name><argument_list>(<argument><expr><name>newKsm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// It's too late to throw a configuration exception, we should have catch those previously</comment>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>updateColumnFamily</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>newState</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>CFMetaData</name></type> <name>cfm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><name><name>newState</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name><name>newState</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>cfm</name> != null</expr>;</assert>
+        <expr_stmt><expr><call><name><name>cfm</name>.<name>reload</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>Table</name></type> <name>table</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>cfm</name>.<name>ksName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>table</name>.<name>getColumnFamilyStore</name></name><argument_list>(<argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call>.<call><name>reload</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>dropKeyspace</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ksName</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>KSMetaData</name></type> <name>ksm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableDefinition</name></name><argument_list>(<argument><expr><name>ksName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>snapshotName</name> <init>= <expr><call><name><name>Table</name>.<name>getTimestampedSnapshotName</name></name><argument_list>(<argument><expr><name>ksName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>CompactionManager</name>.<name>instance</name>.<name>stopCompactionFor</name></name><argument_list>(<argument><expr><call><name><name>ksm</name>.<name>cfMetaData</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// remove all cfs from the table instance.</comment>
+        <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfm</name> <range>: <expr><call><name><name>ksm</name>.<name>cfMetaData</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>purge</name></name><argument_list>(<argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>isAutoSnapshot</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>cfs</name>.<name>snapshot</name></name><argument_list>(<argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <expr_stmt><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call>.<call><name>dropCf</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>cfId</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+
+        <comment type="line">// remove the table from the static instances.</comment>
+        <expr_stmt><expr><call><name><name>Table</name>.<name>clear</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>clearTableDefinition</name></name><argument_list>(<argument><expr><name>ksm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>dropColumnFamily</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ksName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>KSMetaData</name></type> <name>ksm</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableDefinition</name></name><argument_list>(<argument><expr><name>ksName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>ksm</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>ksName</name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>cfs</name> != null</expr>;</assert>
+
+        <comment type="line">// reinitialize the table.</comment>
+        <decl_stmt><decl><type><name>CFMetaData</name></type> <name>cfm</name> <init>= <expr><call><name><name>ksm</name>.<name>cfMetaData</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>purge</name></name><argument_list>(<argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>Schema</name>.<name>instance</name>.<name>setTableDefinition</name></name><argument_list>(<argument><expr><call><name>makeNewKeyspaceDefinition</name><argument_list>(<argument><expr><name>ksm</name></expr></argument>, <argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>CompactionManager</name>.<name>instance</name>.<name>stopCompactionFor</name></name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>cfm</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>isClientMode</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>isAutoSnapshot</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>cfs</name>.<name>snapshot</name></name><argument_list>(<argument><expr><call><name><name>Table</name>.<name>getTimestampedSnapshotName</name></name><argument_list>(<argument><expr><name><name>cfs</name>.<name>columnFamily</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>ksm</name>.<name>name</name></name></expr></argument>)</argument_list></call>.<call><name>dropCf</name><argument_list>(<argument><expr><name><name>cfm</name>.<name>cfId</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>KSMetaData</name></type> <name>makeNewKeyspaceDefinition</name><parameter_list>(<param><decl><type><name>KSMetaData</name></type> <name>ksm</name></decl></param>, <param><decl><type><name>CFMetaData</name></type> <name>toExclude</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// clone ksm but do not include the new def</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>CFMetaData</name></argument>&gt;</argument_list></name></type> <name>newCfs</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>CFMetaData</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>ksm</name>.<name>cfMetaData</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>newCfs</name>.<name>remove</name></name><argument_list>(<argument><expr><name>toExclude</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <assert>assert <expr><call><name><name>newCfs</name>.<name>size</name></name><argument_list>()</argument_list></call> == <call><name><name>ksm</name>.<name>cfMetaData</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> - 1</expr>;</assert>
+        <return>return <expr><call><name><name>KSMetaData</name>.<name>cloneWith</name></name><argument_list>(<argument><expr><name>ksm</name></expr></argument>, <argument><expr><name>newCfs</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>flushSchemaCFs</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>flushSchemaCF</name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_KEYSPACES_CF</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>flushSchemaCF</name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNFAMILIES_CF</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>flushSchemaCF</name><argument_list>(<argument><expr><name><name>SystemTable</name>.<name>SCHEMA_COLUMNS_CF</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>flushSchemaCF</name><parameter_list>(<param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>flush</name> <init>= <expr><call><name><name>SystemTable</name>.<name>schemaCFS</name></name><argument_list>(<argument><expr><name>cfName</name></expr></argument>)</argument_list></call>.<call><name>forceFlush</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>flush</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>waitOnFuture</name></name><argument_list>(<argument><expr><name>flush</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>ByteBuffer</name></type> <name>toUTF8Bytes</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr><call><name><name>version</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Deserialize a single object based on the given Schema.
+     *
+     * @param writer writer's schema
+     * @param bytes Array to deserialize from
+     * @param ob An empty object to deserialize into (must not be null).
+     *
+     * @return serialized Avro object
+     *
+     * @throws IOException if deserialization failed
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <argument_list>&lt;<argument><name>T</name> <extends>extends <name>SpecificRecord</name></extends></argument>&gt;</argument_list> <name>T</name></type> <name>deserializeAvro</name><parameter_list>(<param><decl><type><name><name>org</name>.<name>apache</name>.<name>avro</name>.<name>Schema</name></name></type> <name>writer</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bytes</name></decl></param>, <param><decl><type><name>T</name></type> <name>ob</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>BinaryDecoder</name></type> <name>dec</name> <init>= <expr><call><name><name>DIRECT_DECODERS</name>.<name>createBinaryDecoder</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>getArray</name></name><argument_list>(<argument><expr><name>bytes</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>SpecificDatumReader</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>reader</name> <init>= <expr>new <call><name><name>SpecificDatumReader</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>writer</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>reader</name>.<name>setExpected</name></name><argument_list>(<argument><expr><call><name><name>ob</name>.<name>getSchema</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>reader</name>.<name>read</name></name><argument_list>(<argument><expr><name>ob</name></expr></argument>, <argument><expr><name>dec</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

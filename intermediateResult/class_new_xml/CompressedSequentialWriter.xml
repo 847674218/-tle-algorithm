@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\io\compress\CompressedSequentialWriter.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>compress</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>EOFException</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>zip</name>.<name>CRC32</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>zip</name>.<name>Checksum</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSReadError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSWriteError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>CorruptSSTableException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableMetadata</name>.<name>Collector</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileMark</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>SequentialWriter</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>CompressedSequentialWriter</name> <super><extends>extends <name>SequentialWriter</name></extends></super>
+<block>{
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>SequentialWriter</name></type> <name>open</name><parameter_list>(<param><decl><type><name>String</name></type> <name>dataFilePath</name></decl></param>,
+                                        <param><decl><type><name>String</name></type> <name>indexFilePath</name></decl></param>,
+                                        <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>,
+                                        <param><decl><type><name>CompressionParameters</name></type> <name>parameters</name></decl></param>,
+                                        <param><decl><type><name>Collector</name></type> <name>sstableMetadataCollector</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>CompressedSequentialWriter</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><name>dataFilePath</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>indexFilePath</name></expr></argument>, <argument><expr><name>skipIOCache</name></expr></argument>, <argument><expr><name>parameters</name></expr></argument>, <argument><expr><name>sstableMetadataCollector</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// holds offset in the file where current chunk should be written</comment>
+    <comment type="line">// changed only by flush() method where data buffer gets compressed and stored to the file</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>chunkOffset</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// index file writer (random I/O)</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>CompressionMetadata</name>.<name>Writer</name></name></type> <name>metadataWriter</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ICompressor</name></type> <name>compressor</name></decl>;</decl_stmt>
+
+    <comment type="line">// used to store compressed data</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ICompressor</name>.<name>WrappedArray</name></name></type> <name>compressed</name></decl>;</decl_stmt>
+
+    <comment type="line">// holds a number of already written chunks</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>chunkCount</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Checksum</name></type> <name>checksum</name> <init>= <expr>new <call><name>CRC32</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>originalSize</name> <init>= <expr>0</expr></init>, <name>compressedSize</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Collector</name></type> <name>sstableMetadataCollector</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CompressedSequentialWriter</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>,
+                                      <param><decl><type><name>String</name></type> <name>indexFilePath</name></decl></param>,
+                                      <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>,
+                                      <param><decl><type><name>CompressionParameters</name></type> <name>parameters</name></decl></param>,
+                                      <param><decl><type><name>Collector</name></type> <name>sstableMetadataCollector</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><call><name><name>parameters</name>.<name>chunkLength</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>skipIOCache</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>compressor</name></name> = <name><name>parameters</name>.<name>sstableCompressor</name></name></expr>;</expr_stmt>
+
+        <comment type="line">// buffer for compression should be the same size as buffer itself</comment>
+        <expr_stmt><expr><name>compressed</name> = new <call><name><name>ICompressor</name>.<name>WrappedArray</name></name><argument_list>(<argument><expr>new <name><name>byte</name><index>[<expr><call><name><name>compressor</name>.<name>initialCompressedBufferLength</name></name><argument_list>(<argument><expr><name><name>buffer</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="block">/* Index File (-CompressionInfo.db component) and it's header */</comment>
+        <expr_stmt><expr><name>metadataWriter</name> = <call><name><name>CompressionMetadata</name>.<name>Writer</name>.<name>open</name></name><argument_list>(<argument><expr><name>indexFilePath</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>metadataWriter</name>.<name>writeHeader</name></name><argument_list>(<argument><expr><name>parameters</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name><name>this</name>.<name>sstableMetadataCollector</name></name> = <name>sstableMetadataCollector</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>long</name></type> <name>getOnDiskFilePointer</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>out</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSReadError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>sync</name><parameter_list>()</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>flush</name><parameter_list>()</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>protected</specifier> <name>void</name></type> <name>flushData</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>seekToChunkStart</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+
+        <decl_stmt><decl><type><name>int</name></type> <name>compressedLength</name></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <comment type="line">// compressing data with buffer re-use</comment>
+            <expr_stmt><expr><name>compressedLength</name> = <call><name><name>compressor</name>.<name>compress</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>validBufferBytes</name></expr></argument>, <argument><expr><name>compressed</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Compression exception"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw> <comment type="line">// shouldn't happen</comment>
+        }</block></catch></try>
+
+        <expr_stmt><expr><name>originalSize</name> += <name>validBufferBytes</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>compressedSize</name> += <name>compressedLength</name></expr>;</expr_stmt>
+
+        <comment type="line">// update checksum</comment>
+        <expr_stmt><expr><call><name><name>checksum</name>.<name>update</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>validBufferBytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <comment type="line">// write an offset of the newly written chunk to the index file</comment>
+            <expr_stmt><expr><call><name><name>metadataWriter</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name>chunkOffset</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>chunkCount</name>++</expr>;</expr_stmt>
+
+            <assert>assert <expr><name>compressedLength</name> &lt;= <name><name>compressed</name>.<name>buffer</name>.<name>length</name></name></expr>;</assert>
+
+            <comment type="line">// write data itself</comment>
+            <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr><name><name>compressed</name>.<name>buffer</name></name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>compressedLength</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// write corresponding checksum</comment>
+            <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr>(<name>int</name>) <call><name><name>checksum</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <comment type="line">// reset checksum object to the blank state for re-use</comment>
+        <expr_stmt><expr><call><name><name>checksum</name>.<name>reset</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// next chunk should be written right after current + length of the checksum (int)</comment>
+        <expr_stmt><expr><name>chunkOffset</name> += <name>compressedLength</name> + 4</expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>FileMark</name></type> <name>mark</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>CompressedFileWriterMark</name><argument_list>(<argument><expr><name>chunkOffset</name></expr></argument>, <argument><expr><name>current</name></expr></argument>, <argument><expr><name>validBufferBytes</name></expr></argument>, <argument><expr><name>chunkCount</name> + 1</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>resetAndTruncate</name><parameter_list>(<param><decl><type><name>FileMark</name></type> <name>mark</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>mark</name> instanceof <name>CompressedFileWriterMark</name></expr>;</assert>
+
+        <decl_stmt><decl><type><name>CompressedFileWriterMark</name></type> <name>realMark</name> <init>= <expr>(<name>CompressedFileWriterMark</name>) <name>mark</name></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// reset position</comment>
+        <expr_stmt><expr><name>current</name> = <name><name>realMark</name>.<name>uncDataOffset</name></name></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name><name>realMark</name>.<name>chunkOffset</name></name> == <name>chunkOffset</name></expr>)</condition><then> <comment type="line">// current buffer</comment>
+        <block>{
+            <comment type="line">// just reset a buffer offset and return</comment>
+            <expr_stmt><expr><name>validBufferBytes</name> = <name><name>realMark</name>.<name>bufferOffset</name></name></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <comment type="line">// synchronize current buffer with disk</comment>
+        <comment type="line">// because we don't want any data loss</comment>
+        <expr_stmt><expr><call><name>syncInternal</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// setting marker as a current offset</comment>
+        <expr_stmt><expr><name>chunkOffset</name> = <name><name>realMark</name>.<name>chunkOffset</name></name></expr>;</expr_stmt>
+
+        <comment type="line">// compressed chunk size (- 4 bytes reserved for checksum)</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>chunkSize</name> <init>= <expr><call>(<name>int</name>) <argument_list>(<argument><expr><call><name><name>metadataWriter</name>.<name>chunkOffsetBy</name></name><argument_list>(<argument><expr><name><name>realMark</name>.<name>nextChunkIndex</name></name></expr></argument>)</argument_list></call> - <name>chunkOffset</name> - 4</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name><name>compressed</name>.<name>buffer</name>.<name>length</name></name> &lt; <name>chunkSize</name></expr>)</condition><then>
+            <expr_stmt><expr><name><name>compressed</name>.<name>buffer</name></name> = new <name><name>byte</name><index>[<expr><name>chunkSize</name></expr>]</index></name></expr>;</expr_stmt></then></if>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>out</name>.<name>seek</name></name><argument_list>(<argument><expr><name>chunkOffset</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>out</name>.<name>readFully</name></name><argument_list>(<argument><expr><name><name>compressed</name>.<name>buffer</name></name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>chunkSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>int</name></type> <name>validBytes</name></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <comment type="line">// decompress data chunk and store its length</comment>
+                <expr_stmt><expr><name>validBytes</name> = <call><name><name>compressor</name>.<name>uncompress</name></name><argument_list>(<argument><expr><name><name>compressed</name>.<name>buffer</name></name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>chunkSize</name></expr></argument>, <argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>CorruptBlockException</name><argument_list>(<argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>chunkOffset</name></expr></argument>, <argument><expr><name>chunkSize</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+
+            <expr_stmt><expr><call><name><name>checksum</name>.<name>update</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>validBytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><call><name><name>out</name>.<name>readInt</name></name><argument_list>()</argument_list></call> != (<name>int</name>) <call><name><name>checksum</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>CorruptBlockException</name><argument_list>(<argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>chunkOffset</name></expr></argument>, <argument><expr><name>chunkSize</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>CorruptBlockException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>EOFException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr>new <call><name>CorruptBlockException</name><argument_list>(<argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>chunkOffset</name></expr></argument>, <argument><expr><name>chunkSize</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSReadError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><call><name><name>checksum</name>.<name>reset</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// reset buffer</comment>
+        <expr_stmt><expr><name>validBufferBytes</name> = <name><name>realMark</name>.<name>bufferOffset</name></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>bufferOffset</name> = <name>current</name> - <name>validBufferBytes</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>chunkCount</name> = <name><name>realMark</name>.<name>nextChunkIndex</name></name> - 1</expr>;</expr_stmt>
+
+        <comment type="line">// truncate data and index file</comment>
+        <expr_stmt><expr><call><name>truncate</name><argument_list>(<argument><expr><name>chunkOffset</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>metadataWriter</name>.<name>resetAndTruncate</name></name><argument_list>(<argument><expr><name><name>realMark</name>.<name>nextChunkIndex</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Seek to the offset where next compressed data chunk should be stored.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>seekToChunkStart</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name>getOnDiskFilePointer</name><argument_list>()</argument_list></call> != <name>chunkOffset</name></expr>)</condition><then>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>out</name>.<name>seek</name></name><argument_list>(<argument><expr><name>chunkOffset</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>FSReadError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>buffer</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if> <comment type="line">// already closed</comment>
+
+        <expr_stmt><expr><call><name><name>super</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>addCompressionRatio</name></name><argument_list>(<argument><expr><name>compressedSize</name></expr></argument>, <argument><expr><name>originalSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>metadataWriter</name>.<name>finalizeHeader</name></name><argument_list>(<argument><expr><name>current</name></expr></argument>, <argument><expr><name>chunkCount</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>metadataWriter</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Class to hold a mark to the position of the file
+     */</comment>
+    <class><specifier>protected</specifier> <specifier>static</specifier> class <name>CompressedFileWriterMark</name> <super><implements>implements <name>FileMark</name></implements></super>
+    <block>{
+        <comment type="line">// chunk offset in the compressed file</comment>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>long</name></type> <name>chunkOffset</name></decl>;</decl_stmt>
+        <comment type="line">// uncompressed data offset (real data offset)</comment>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>long</name></type> <name>uncDataOffset</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>final</specifier> <name>int</name></type> <name>bufferOffset</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>int</name></type> <name>nextChunkIndex</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>CompressedFileWriterMark</name><parameter_list>(<param><decl><type><name>long</name></type> <name>chunkOffset</name></decl></param>, <param><decl><type><name>long</name></type> <name>uncDataOffset</name></decl></param>, <param><decl><type><name>int</name></type> <name>bufferOffset</name></decl></param>, <param><decl><type><name>int</name></type> <name>nextChunkIndex</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>chunkOffset</name></name> = <name>chunkOffset</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>uncDataOffset</name></name> = <name>uncDataOffset</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>bufferOffset</name></name> = <name>bufferOffset</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>nextChunkIndex</name></name> = <name>nextChunkIndex</name></expr>;</expr_stmt>
+        }</block></constructor>
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,342 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\io\sstable\SSTable.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>charset</name>.<name>Charset</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>CopyOnWriteArraySet</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Predicates</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Collections2</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Ordering</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Sets</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>io</name>.<name>Files</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DecoratedKey</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowIndexEntry</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>IPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSWriteError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>RandomAccessReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>HeapAllocator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * This class is built on top of the SequenceFile. It stores
+ * data on disk in sorted fashion. However the sorting is upto
+ * the application. This class expects keys to be handed to it
+ * in sorted order.
+ *
+ * A separate index file is maintained as well, containing the
+ * SSTable keys and the offset into the SSTable at which they are found.
+ * Every 1/indexInterval key is read into memory when the SSTable is opened.
+ *
+ * Finally, a bloom filter file is also kept for the keys in each SSTable.
+ */</comment>
+<class><specifier>public</specifier> <specifier>abstract</specifier> class <name>SSTable</name>
+<block>{
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// TODO: replace with 'Component' objects</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>COMPONENT_DATA</name> <init>= <expr><name><name>Component</name>.<name>Type</name>.<name>DATA</name>.<name>repr</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>COMPONENT_INDEX</name> <init>= <expr><name><name>Component</name>.<name>Type</name>.<name>PRIMARY_INDEX</name>.<name>repr</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>COMPONENT_FILTER</name> <init>= <expr><name><name>Component</name>.<name>Type</name>.<name>FILTER</name>.<name>repr</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>COMPONENT_STATS</name> <init>= <expr><name><name>Component</name>.<name>Type</name>.<name>STATS</name>.<name>repr</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>COMPONENT_DIGEST</name> <init>= <expr><name><name>Component</name>.<name>Type</name>.<name>DIGEST</name>.<name>repr</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>COMPONENT_SUMMARY</name> <init>= <expr><name><name>Component</name>.<name>Type</name>.<name>SUMMARY</name>.<name>repr</name></name></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>TEMPFILE_MARKER</name> <init>= <expr>"tmp"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>TOMBSTONE_HISTOGRAM_BIN_SIZE</name> <init>= <expr>100</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>maxTimestampComparator</name> <init>= <expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+    <block>{
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>o1</name></decl></param>, <param><decl><type><name>SSTableReader</name></type> <name>o2</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>long</name></type> <name>ts1</name> <init>= <expr><call><name><name>o1</name>.<name>getMaxTimestamp</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>ts2</name> <init>= <expr><call><name><name>o2</name>.<name>getMaxTimestamp</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr>(<name>ts1</name> &gt; <name>ts2</name> ? -1 : (<name>ts1</name> == <name>ts2</name> ? 0 : 1))</expr>;</return>
+        }</block></function>
+    }</block></class></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Descriptor</name></type> <name>descriptor</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>CFMetaData</name></type> <name>metadata</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>IPartitioner</name></type> <name>partitioner</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>compression</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>first</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>last</name></decl>;</decl_stmt>
+
+    <constructor><specifier>protected</specifier> <name>SSTable</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>descriptor</name></decl></param>, <param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>IPartitioner</name></type> <name>partitioner</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>, <argument><expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>partitioner</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>protected</specifier> <name>SSTable</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>descriptor</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name></decl></param>, <param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>IPartitioner</name></type> <name>partitioner</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// In almost all cases, metadata shouldn't be null, but allowing null allows to create a mostly functional SSTable without</comment>
+        <comment type="line">// full schema definition. SSTableLoader use that ability</comment>
+        <assert>assert <expr><name>descriptor</name> != null</expr>;</assert>
+        <assert>assert <expr><name>components</name> != null</expr>;</assert>
+        <assert>assert <expr><name>partitioner</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><name><name>this</name>.<name>descriptor</name></name> = <name>descriptor</name></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>dataComponents</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>components</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Component</name></type> <name>component</name> <range>: <expr><name>components</name></expr></range></decl></init>)
+            <assert>assert <expr><name><name>component</name>.<name>type</name></name> != <name><name>Component</name>.<name>Type</name>.<name>COMPACTED_MARKER</name></name></expr>;</assert></for>
+
+        <expr_stmt><expr><name><name>this</name>.<name>compression</name></name> = <call><name><name>dataComponents</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>COMPRESSION_INFO</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>components</name></name> = new <call><name><name>CopyOnWriteArraySet</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>dataComponents</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>metadata</name></name> = <name>metadata</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>partitioner</name></name> = <name>partitioner</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstableComparator</name> <init>= <expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+    <block>{
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>o1</name></decl></param>, <param><decl><type><name>SSTableReader</name></type> <name>o2</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>o1</name>.<name>first</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>o2</name>.<name>first</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Ordering</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstableOrdering</name> <init>= <expr><call><name><name>Ordering</name>.<name>from</name></name><argument_list>(<argument><expr><name>sstableComparator</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * We use a ReferenceQueue to manage deleting files that have been compacted
+     * and for which no more SSTable references exist.  But this is not guaranteed
+     * to run for each such file because of the semantics of the JVM gc.  So,
+     * we write a marker to `compactedFilename` when a file is compacted;
+     * if such a marker exists on startup, the file should be removed.
+     *
+     * This method will also remove SSTables that are marked as temporary.
+     *
+     * @return true if the file was deleted
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>delete</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// remove the DATA component first if it exists</comment>
+        <if>if <condition>(<expr><call><name><name>components</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>deleteWithConfirm</name></name><argument_list>(<argument><expr><call><name><name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <for>for (<init><decl><type><name>Component</name></type> <name>component</name> <range>: <expr><name>components</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>component</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>)</argument_list></call> || <call><name><name>component</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>COMPACTED_MARKER</name></name></expr></argument>)</argument_list></call> || <call><name><name>component</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>SUMMARY</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>deleteWithConfirm</name></name><argument_list>(<argument><expr><call><name><name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <comment type="line">// remove the COMPACTED_MARKER component last if it exists</comment>
+        <comment type="line">// Note: newly created sstable should not have a marker, but we keep this for now to make sure</comment>
+        <comment type="line">// we don't leave older marker around</comment>
+        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>COMPACTED_MARKER</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>SUMMARY</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Deleted {}"</expr></argument>, <argument><expr><name>desc</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * If the given @param key occupies only part of a larger buffer, allocate a new buffer that is only
+     * as large as necessary.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>DecoratedKey</name></type> <name>getMinimalKey</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>key</name>.<name>key</name>.<name>position</name></name><argument_list>()</argument_list></call> &gt; 0 || <call><name><name>key</name>.<name>key</name>.<name>hasRemaining</name></name><argument_list>()</argument_list></call>
+                                       ? new <call><name>DecoratedKey</name><argument_list>(<argument><expr><name><name>key</name>.<name>token</name></name></expr></argument>, <argument><expr><call><name><name>HeapAllocator</name>.<name>instance</name>.<name>clone</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>
+                                       : <name>key</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getFilename</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>COMPONENT_DATA</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getIndexFilename</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>COMPONENT_INDEX</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getColumnFamilyName</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>descriptor</name>.<name>cfname</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getTableName</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>descriptor</name>.<name>ksname</name></name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return A Descriptor,Component pair. If component is of unknown type, returns CUSTOM component.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Pair</name><argument_list>&lt;<argument><name>Descriptor</name></argument>,<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>tryComponentFromFilename</name><parameter_list>(<param><decl><type><name>File</name></type> <name>dir</name></decl></param>, <param><decl><type><name>String</name></type> <name>name</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>Component</name>.<name>fromFilename</name></name><argument_list>(<argument><expr><name>dir</name></expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Discovers existing components for the descriptor. Slow: only intended for use outside the critical path.
+     */</comment>
+    <function><type><specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>componentsFor</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>Descriptor</name></type> <name>desc</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <try>try
+            <block>{
+                <return>return <expr><call><name>readTOC</name><argument_list>(<argument><expr><name>desc</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>FileNotFoundException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name> <init>= <expr><call><name>discoverComponentsFor</name><argument_list>(<argument><expr><name>desc</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>components</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><name>components</name></expr>;</return></then></if> <comment type="line">// sstable doesn't exist yet</comment>
+
+                <if>if <condition>(<expr>!<call><name><name>components</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>TOC</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>components</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>TOC</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <expr_stmt><expr><call><name>appendTOC</name><argument_list>(<argument><expr><name>desc</name></expr></argument>, <argument><expr><name>components</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><name>components</name></expr>;</return>
+            }</block></catch></try>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>discoverComponentsFor</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name><name>Component</name>.<name>Type</name></name></argument>&gt;</argument_list></name></type> <name>knownTypes</name> <init>= <expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>TYPES</name></name></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>Type</name>.<name>CUSTOM</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name> <init>= <expr><call><name><name>Sets</name>.<name>newHashSetWithExpectedSize</name></name><argument_list>(<argument><expr><call><name><name>knownTypes</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Component</name>.<name>Type</name></name></type> <name>componentType</name> <range>: <expr><name>knownTypes</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>Component</name></type> <name>component</name> <init>= <expr>new <call><name>Component</name><argument_list>(<argument><expr><name>componentType</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>exists</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>components</name>.<name>add</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <return>return <expr><name>components</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** @return An estimate of the number of keys contained in the given index file. */</comment>
+    <function><type><name>long</name></type> <name>estimateRowsFromIndex</name><parameter_list>(<param><decl><type><name>RandomAccessReader</name></type> <name>ifile</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// collect sizes for the first 10000 keys, or first 10 megabytes of data</comment>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>int</name></type> <name>SAMPLES_CAP</name> <init>= <expr>10000</expr></init>, <name>BYTES_CAP</name> <init>= <expr>(<name>int</name>)<call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr>10000000</expr></argument>, <argument><expr><call><name><name>ifile</name>.<name>length</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>keys</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><call><name><name>ifile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> &lt; <name>BYTES_CAP</name> &amp;&amp; <name>keys</name> &lt; <name>SAMPLES_CAP</name></expr>)</condition>
+        <block>{
+            <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>skipShortLength</name></name><argument_list>(<argument><expr><name>ifile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>RowIndexEntry</name>.<name>serializer</name>.<name>skip</name></name><argument_list>(<argument><expr><name>ifile</name></expr></argument>, <argument><expr><name><name>descriptor</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>keys</name>++</expr>;</expr_stmt>
+        }</block></while>
+        <assert>assert <expr><name>keys</name> &gt; 0 &amp;&amp; <call><name><name>ifile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> &gt; 0 &amp;&amp; <call><name><name>ifile</name>.<name>length</name></name><argument_list>()</argument_list></call> &gt; 0 : "Unexpected empty index file: " + <name>ifile</name></expr>;</assert>
+        <decl_stmt><decl><type><name>long</name></type> <name>estimatedRows</name> <init>= <expr><call><name><name>ifile</name>.<name>length</name></name><argument_list>()</argument_list></call> / (<call><name><name>ifile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> / <name>keys</name>)</expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>ifile</name>.<name>seek</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>estimatedRows</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>getTotalBytes</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>sum</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><name>sum</name> += <call><name><name>sstable</name>.<name>onDiskLength</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>sum</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>bytesOnDisk</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>bytes</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Component</name></type> <name>component</name> <range>: <expr><name>components</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><name>bytes</name> += new <call><name>File</name><argument_list>(<argument><expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>length</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>bytes</name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call> + "(" +
+               "path='" + <call><name>getFilename</name><argument_list>()</argument_list></call> + '\'' +
+               ')'</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Reads the list of components from the TOC component.
+     * @return set of components found in the TOC
+     */</comment>
+    <function><type><specifier>protected</specifier> <specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>readTOC</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>descriptor</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>tocFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>TOC</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>componentNames</name> <init>= <expr><call><name><name>Files</name>.<name>readLines</name></name><argument_list>(<argument><expr><name>tocFile</name></expr></argument>, <argument><expr><call><name><name>Charset</name>.<name>defaultCharset</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name> <init>= <expr><call><name><name>Sets</name>.<name>newHashSetWithExpectedSize</name></name><argument_list>(<argument><expr><call><name><name>componentNames</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>String</name></type> <name>componentName</name> <range>: <expr><name>componentNames</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>Component</name></type> <name>component</name> <init>= <expr>new <call><name>Component</name><argument_list>(<argument><expr><call><name><name>Component</name>.<name>Type</name>.<name>fromRepresentation</name></name><argument_list>(<argument><expr><name>componentName</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>componentName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>!new <call><name>File</name><argument_list>(<argument><expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>exists</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Missing component: " + <call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name><name>components</name>.<name>add</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></for>
+        <return>return <expr><name>components</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Appends new component names to the TOC component.
+     */</comment>
+    <function><type><specifier>protected</specifier> <specifier>static</specifier> <name>void</name></type> <name>appendTOC</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>descriptor</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>tocFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>TOC</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>PrintWriter</name></type> <name>w</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>w</name> = new <call><name>PrintWriter</name><argument_list>(<argument><expr>new <call><name>FileWriter</name><argument_list>(<argument><expr><name>tocFile</name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name>Component</name></type> <name>component</name> <range>: <expr><name>components</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>w</name>.<name>println</name></name><argument_list>(<argument><expr><name><name>component</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>tocFile</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>w</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Registers new custom components. Used by custom compaction strategies.
+     * Adding a component for the second time is a no-op.
+     * Don't remove this - this method is a part of the public API, intended for use by custom compaction strategies.
+     * @param newComponents collection of components to be added
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>addComponents</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>newComponents</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>componentsToAdd</name> <init>= <expr><call><name><name>Collections2</name>.<name>filter</name></name><argument_list>(<argument><expr><name>newComponents</name></expr></argument>, <argument><expr><call><name><name>Predicates</name>.<name>not</name></name><argument_list>(<argument><expr><call><name><name>Predicates</name>.<name>in</name></name><argument_list>(<argument><expr><name>components</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>appendTOC</name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>, <argument><expr><name>componentsToAdd</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>components</name>.<name>addAll</name></name><argument_list>(<argument><expr><name>componentsToAdd</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+}</block></class>
+</unit>

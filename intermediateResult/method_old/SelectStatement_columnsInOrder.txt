@@ -1,0 +1,39 @@
+private Iterable<IColumn> columnsInOrder(final ColumnFamily cf, final List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        // If the restriction for the last column alias is an IN, respect
+        // requested order
+        Restriction last = columnRestrictions[columnRestrictions.length - 1];
+        if (last == null || !last.isEquality())
+            return cf.getSortedColumns();
+
+        ColumnNameBuilder builder = cfDef.getColumnNameBuilder();
+        for (int i = 0; i < columnRestrictions.length - 1; i++)
+            builder.add(columnRestrictions[i].eqValues.get(0), Relation.Type.EQ, variables);
+
+        final List<ByteBuffer> requested = new ArrayList<ByteBuffer>(last.eqValues.size());
+        Iterator<Term> iter = last.eqValues.iterator();
+        while (iter.hasNext())
+        {
+            Term t = iter.next();
+            ColumnNameBuilder b = iter.hasNext() ? builder.copy() : builder;
+            requested.add(b.add(t, Relation.Type.EQ, variables).build());
+        }
+
+        return new Iterable<IColumn>()
+        {
+            public Iterator<IColumn> iterator()
+            {
+                return new AbstractIterator<IColumn>()
+                {
+                    Iterator<ByteBuffer> iter = requested.iterator();
+                    public IColumn computeNext()
+                    {
+                        if (!iter.hasNext())
+                            return endOfData();
+                        IColumn column = cf.getColumn(iter.next());
+                        return column == null ? computeNext() : column;
+                    }
+                };
+            }
+        };
+    }

@@ -1,0 +1,32 @@
+private IFilter computeInitialFilter()
+        {
+            if (originalFilter instanceof SliceQueryFilter)
+            {
+                // if we have a high chance of getting all the columns in a single index slice (and it's not too costly), do that.
+                // otherwise, the extraFilter (lazily created) will fetch by name the columns referenced by the additional expressions.
+                if (cfs.getMaxRowSize() < DatabaseDescriptor.getColumnIndexSize())
+                {
+                    logger.debug("Expanding slice filter to entire row to cover additional expressions");
+                    return new SliceQueryFilter(ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                ((SliceQueryFilter) originalFilter).reversed,
+                                                Integer.MAX_VALUE);
+                }
+            }
+            else
+            {
+                logger.debug("adding columns to original Filter to cover additional expressions");
+                assert originalFilter instanceof NamesQueryFilter;
+                SortedSet<ByteBuffer> columns = new TreeSet<ByteBuffer>(cfs.getComparator());
+                for (IndexExpression expr : clause)
+                {
+                    columns.add(expr.column_name);
+                }
+                if (columns.size() > 0)
+                {
+                    columns.addAll(((NamesQueryFilter) originalFilter).columns);
+                    return new NamesQueryFilter(columns);
+                }
+            }
+            return originalFilter;
+        }

@@ -1,0 +1,56 @@
+private void stream() throws IOException
+    {
+        ByteBuffer HeaderBuffer = MessagingService.instance().constructStreamHeader(header, false, Gossiper.instance.getVersion(to));
+        // write header (this should not be compressed for compatibility with other messages)
+        output.write(ByteBufferUtil.getArray(HeaderBuffer));
+
+        if (header.file == null)
+            return;
+
+        // TODO just use a raw RandomAccessFile since we're managing our own buffer here
+        RandomAccessReader file = (header.file.sstable.compression) // try to skip kernel page cache if possible
+                                ? CompressedRandomAccessReader.open(header.file.getFilename(), header.file.sstable.getCompressionMetadata(), true)
+                                : RandomAccessReader.open(new File(header.file.getFilename()), true);
+
+        // setting up data compression stream
+        compressedoutput = new LZFOutputStream(output);
+
+        MessagingService.instance().incrementActiveStreamsOutbound();
+        try
+        {
+            // stream each of the required sections of the file
+            for (Pair<Long, Long> section : header.file.sections)
+            {
+                // seek to the beginning of the section
+                file.seek(section.left);
+
+                // length of the section to stream
+                long length = section.right - section.left;
+                // tracks write progress
+                long bytesTransferred = 0;
+
+                while (bytesTransferred < length)
+                {
+                    long lastWrite = write(file, length, bytesTransferred);
+                    bytesTransferred += lastWrite;
+                    // store streaming progress
+                    header.file.progress += lastWrite;
+                }
+
+                // make sure that current section is send
+                compressedoutput.flush();
+
+                if (logger.isDebugEnabled())
+                    logger.debug("Bytes transferred " + bytesTransferred + "/" + header.file.size);
+            }
+            // receive reply confirmation
+            receiveReply();
+        }
+        finally
+        {
+            MessagingService.instance().decrementActiveStreamsOutbound();
+
+            // no matter what happens close file
+            FileUtils.closeQuietly(file);
+        }
+    }

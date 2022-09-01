@@ -1,0 +1,65 @@
+private void doValidationCompaction(ColumnFamilyStore cfs, AntiEntropyService.Validator validator) throws IOException
+    {
+        // this isn't meant to be race-proof, because it's not -- it won't cause bugs for a CFS to be dropped
+        // mid-validation, or to attempt to validate a droped CFS.  this is just a best effort to avoid useless work,
+        // particularly in the scenario where a validation is submitted before the drop, and there are compactions
+        // started prior to the drop keeping some sstables alive.  Since validationCompaction can run
+        // concurrently with other compactions, it would otherwise go ahead and scan those again.
+        if (!cfs.isValid())
+            return;
+
+        Collection<SSTableReader> sstables;
+        if (cfs.table.snapshotExists(validator.request.sessionid))
+        {
+            // If there is a snapshot created for the session then read from there.
+            sstables = cfs.getSnapshotSSTableReader(validator.request.sessionid);
+        }
+        else
+        {
+            // flush first so everyone is validating data that is as similar as possible
+            try
+            {
+                StorageService.instance.forceTableFlush(cfs.table.name, cfs.getColumnFamilyName());
+            }
+            catch (ExecutionException e)
+            {
+                throw new IOException(e);
+            }
+            catch (InterruptedException e)
+            {
+                throw new AssertionError(e);
+            }
+
+            // we don't mark validating sstables as compacting in DataTracker, so we have to mark them referenced
+            // instead so they won't be cleaned up if they do get compacted during the validation
+            sstables = cfs.markCurrentSSTablesReferenced();
+        }
+
+        CompactionIterable ci = new ValidationCompactionIterable(cfs, sstables, validator.request.range);
+        CloseableIterator<AbstractCompactedRow> iter = ci.iterator();
+        validationExecutor.beginCompaction(ci);
+        try
+        {
+            Iterator<AbstractCompactedRow> nni = Iterators.filter(iter, Predicates.notNull());
+
+            // validate the CF as we iterate over it
+            validator.prepare(cfs);
+            while (nni.hasNext())
+            {
+                if (ci.isStopRequested())
+                    throw new CompactionInterruptedException(ci.getCompactionInfo());
+                AbstractCompactedRow row = nni.next();
+                validator.add(row);
+            }
+            validator.complete();
+        }
+        finally
+        {
+            SSTableReader.releaseReferences(sstables);
+            iter.close();
+            if (cfs.table.snapshotExists(validator.request.sessionid))
+                cfs.table.clearSnapshot(validator.request.sessionid);
+
+            validationExecutor.finishCompaction(ci);
+        }
+    }

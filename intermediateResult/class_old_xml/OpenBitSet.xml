@@ -1,0 +1,516 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\utils\obs\OpenBitSet.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>obs</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>util</name>.<name>Arrays</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>Serializable</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>BitSet</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * An "open" BitSet implementation that allows direct access to the arrays of words
+ * storing the bits.  Derived from Lucene's OpenBitSet, but with a paged backing array
+ * (see bits delaration, below).
+ * &lt;p/&gt;
+ * Unlike java.util.bitset, the fact that bits are packed into an array of longs
+ * is part of the interface.  This allows efficient implementation of other algorithms
+ * by someone other than the author.  It also allows one to efficiently implement
+ * alternate serialization or interchange formats.
+ * &lt;p/&gt;
+ * &lt;code&gt;OpenBitSet&lt;/code&gt; is faster than &lt;code&gt;java.util.BitSet&lt;/code&gt; in most operations
+ * and *much* faster at calculating cardinality of sets and results of set operations.
+ * It can also handle sets of larger cardinality (up to 64 * 2**32-1)
+ * &lt;p/&gt;
+ * The goals of &lt;code&gt;OpenBitSet&lt;/code&gt; are the fastest implementation possible, and
+ * maximum code reuse.  Extra safety and encapsulation
+ * may always be built on top, but if that's built in, the cost can never be removed (and
+ * hence people re-implement their own version in order to get better performance).
+ * If you want a "safe", totally encapsulated (and slower and limited) BitSet
+ * class, use &lt;code&gt;java.util.BitSet&lt;/code&gt;.
+ */</comment>
+
+<class><specifier>public</specifier> class <name>OpenBitSet</name> <super><implements>implements <name>Serializable</name></implements></super> <block>{
+  <comment type="block" format="javadoc">/**
+   * We break the bitset up into multiple arrays to avoid promotion failure caused by attempting to allocate
+   * large, contiguous arrays (CASSANDRA-2466).  All sub-arrays but the last are uniformly PAGE_SIZE words;
+   * to avoid waste in small bloom filters (of which Cassandra has many: one per row) the last sub-array
+   * is sized to exactly the remaining number of words required to achieve the desired set size (CASSANDRA-3618).
+   */</comment>
+  <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name><index>[]</index><index>[]</index></type> <name>bits</name></decl>;</decl_stmt>
+  <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>wlen</name></decl>;</decl_stmt> <comment type="line">// number of words (elements) used in the array</comment>
+  <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>pageCount</name></decl>;</decl_stmt>
+  <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>PAGE_SIZE</name> <init>= <expr>4096</expr></init></decl>;</decl_stmt>
+
+  <comment type="block" format="javadoc">/**
+   * Constructs an OpenBitSet large enough to hold numBits.
+   * @param numBits
+   */</comment>
+  <constructor><specifier>public</specifier> <name>OpenBitSet</name><parameter_list>(<param><decl><type><name>long</name></type> <name>numBits</name></decl></param>)</parameter_list>
+  <block>{
+      <expr_stmt><expr><name>wlen</name> = <call><name>bits2words</name><argument_list>(<argument><expr><name>numBits</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+      <decl_stmt><decl><type><name>int</name></type> <name>lastPageSize</name> <init>= <expr><name>wlen</name> % <name>PAGE_SIZE</name></expr></init></decl>;</decl_stmt>
+      <decl_stmt><decl><type><name>int</name></type> <name>fullPageCount</name> <init>= <expr><name>wlen</name> / <name>PAGE_SIZE</name></expr></init></decl>;</decl_stmt>
+      <expr_stmt><expr><name>pageCount</name> = <name>fullPageCount</name> + (<name>lastPageSize</name> == 0 ? 0 : 1)</expr>;</expr_stmt>
+
+      <expr_stmt><expr><name>bits</name> = new <name><name>long</name><index>[<expr><name>pageCount</name></expr>]</index><index>[]</index></name></expr>;</expr_stmt>
+
+      <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>fullPageCount</name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+          <expr_stmt><expr><name><name>bits</name><index>[<expr><name>i</name></expr>]</index></name> = new <name><name>long</name><index>[<expr><name>PAGE_SIZE</name></expr>]</index></name></expr>;</expr_stmt></for>
+
+      <if>if <condition>(<expr><name>lastPageSize</name> != 0</expr>)</condition><then>
+          <expr_stmt><expr><name><name>bits</name><index>[<expr><name><name>bits</name>.<name>length</name></name> - 1</expr>]</index></name> = new <name><name>long</name><index>[<expr><name>lastPageSize</name></expr>]</index></name></expr>;</expr_stmt></then></if>
+  }</block></constructor>
+
+  <constructor><specifier>public</specifier> <name>OpenBitSet</name><parameter_list>()</parameter_list> <block>{
+    <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr>64</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+  }</block></constructor>
+
+  <comment type="block" format="javadoc">/**
+   * @return the pageSize
+   */</comment>
+  <function><type><specifier>public</specifier> <name>int</name></type> <name>getPageSize</name><parameter_list>()</parameter_list>
+  <block>{
+      <return>return <expr><name>PAGE_SIZE</name></expr>;</return>
+  }</block></function>
+
+  <function><type><specifier>public</specifier> <name>int</name></type> <name>getPageCount</name><parameter_list>()</parameter_list>
+  <block>{
+      <return>return <expr><name>pageCount</name></expr>;</return>
+  }</block></function>
+
+  <function><type><specifier>public</specifier> <name>long</name><index>[]</index></type> <name>getPage</name><parameter_list>(<param><decl><type><name>int</name></type> <name>pageIdx</name></decl></param>)</parameter_list>
+  <block>{
+      <return>return <expr><name><name>bits</name><index>[<expr><name>pageIdx</name></expr>]</index></name></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** Contructs an OpenBitset from a BitSet
+  */</comment>
+  <constructor><specifier>public</specifier> <name>OpenBitSet</name><parameter_list>(<param><decl><type><name>BitSet</name></type> <name>bits</name></decl></param>)</parameter_list> <block>{
+    <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><call><name><name>bits</name>.<name>length</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+  }</block></constructor>
+
+  <comment type="block" format="javadoc">/** Returns the current capacity in bits (1 greater than the index of the last bit) */</comment>
+  <function><type><specifier>public</specifier> <name>long</name></type> <name>capacity</name><parameter_list>()</parameter_list> <block>{ <return>return <expr>((<name>long</name>)<name>wlen</name>) &lt;&lt; 6</expr>;</return> }</block></function>
+
+ <comment type="block" format="javadoc">/**
+  * Returns the current capacity of this set.  Included for
+  * compatibility.  This is *not* equal to {@link #cardinality}
+  */</comment>
+  <function><type><specifier>public</specifier> <name>long</name></type> <name>size</name><parameter_list>()</parameter_list> <block>{
+      <return>return <expr><call><name>capacity</name><argument_list>()</argument_list></call></expr>;</return>
+  }</block></function>
+
+  <comment type="line">// @Override -- not until Java 1.6</comment>
+  <function><type><specifier>public</specifier> <name>long</name></type> <name>length</name><parameter_list>()</parameter_list> <block>{
+    <return>return <expr><call><name>capacity</name><argument_list>()</argument_list></call></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** Returns true if there are no set bits */</comment>
+  <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isEmpty</name><parameter_list>()</parameter_list> <block>{ <return>return <expr><call><name>cardinality</name><argument_list>()</argument_list></call>==0</expr>;</return> }</block></function>
+
+
+  <comment type="block" format="javadoc">/** Expert: gets the number of longs in the array that are in use */</comment>
+  <function><type><specifier>public</specifier> <name>int</name></type> <name>getNumWords</name><parameter_list>()</parameter_list> <block>{ <return>return <expr><name>wlen</name></expr>;</return> }</block></function>
+
+
+  <comment type="block" format="javadoc">/**
+   * Returns true or false for the specified bit index.
+   * The index should be less than the OpenBitSet size
+   */</comment>
+  <function><type><specifier>public</specifier> <name>boolean</name></type> <name>get</name><parameter_list>(<param><decl><type><name>int</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name>index</name> &gt;&gt; 6</expr></init></decl>;</decl_stmt>               <comment type="line">// div 64</comment>
+    <comment type="line">// signed shift will keep a negative index and force an</comment>
+    <comment type="line">// array-index-out-of-bounds-exception, removing the need for an explicit check.</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr><name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>           <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <comment type="line">// TODO perfectionist one can implement this using bit operations</comment>
+    <return>return <expr>(<name><name>bits</name><index>[<expr><name>i</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>i</name> % <name>PAGE_SIZE</name></expr> ]</index></name> &amp; <name>bitmask</name>) != 0</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/**
+   * Returns true or false for the specified bit index.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>boolean</name></type> <name>get</name><parameter_list>(<param><decl><type><name>long</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr><name>index</name> &gt;&gt; 6</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>               <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr>(<name>int</name>)<name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>           <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <comment type="line">// TODO perfectionist one can implement this using bit operations</comment>
+    <return>return <expr>(<name><name>bits</name><index>[<expr><name>i</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>i</name> % <name>PAGE_SIZE</name></expr> ]</index></name> &amp; <name>bitmask</name>) != 0</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** returns 1 if the bit is set, 0 if not.
+   * The index should be less than the OpenBitSet size
+   */</comment>
+  <function><type><specifier>public</specifier> <name>int</name></type> <name>getBit</name><parameter_list>(<param><decl><type><name>int</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name>index</name> &gt;&gt; 6</expr></init></decl>;</decl_stmt>                <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr><name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>            <comment type="line">// mod 64</comment>
+    <return>return <expr>(<call>(<name>int</name>)<argument_list>(<argument><expr><name><name>bits</name><index>[<expr><name>i</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>i</name> % <name>PAGE_SIZE</name></expr> ]</index></name>&gt;&gt;&gt;<name>bit</name></expr></argument>)</argument_list></call>) &amp; 0x01</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/**
+   * Sets the bit at the specified index.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>set</name><parameter_list>(<param><decl><type><name>long</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr><name>index</name> &gt;&gt; 6</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr>(<name>int</name>)<name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[ <expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr> ]</index><index>[ <expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr> ]</index></name> |= <name>bitmask</name></expr>;</expr_stmt>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/**
+   * Sets the bit at the specified index.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>set</name><parameter_list>(<param><decl><type><name>int</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><name>index</name> &gt;&gt; 6</expr></init></decl>;</decl_stmt>      <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr><name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>     <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[ <expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr> ]</index><index>[ <expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr> ]</index></name> |= <name>bitmask</name></expr>;</expr_stmt>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/**
+   * clears a bit.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>clear</name><parameter_list>(<param><decl><type><name>int</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><name>index</name> &gt;&gt; 6</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr><name>index</name> &amp; 0x03f</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp;= ~<name>bitmask</name></expr>;</expr_stmt>
+    <comment type="line">// hmmm, it takes one more instruction to clear than it does to set... any</comment>
+    <comment type="line">// way to work around this?  If there were only 63 bits per word, we could</comment>
+    <comment type="line">// use a right shift of 10111111...111 in binary to position the 0 in the</comment>
+    <comment type="line">// correct place (using sign extension).</comment>
+    <comment type="line">// Could also use Long.rotateRight() or rotateLeft() *if* they were converted</comment>
+    <comment type="line">// by the JVM into a native instruction.</comment>
+    <comment type="line">// bits[word] &amp;= Long.rotateLeft(0xfffffffe,bit);</comment>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/**
+   * clears a bit.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>clear</name><parameter_list>(<param><decl><type><name>long</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr><name>index</name> &gt;&gt; 6</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr>(<name>int</name>)<name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>     <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp;= ~<name>bitmask</name></expr>;</expr_stmt>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/**
+   * Clears a range of bits.  Clearing past the end does not change the size of the set.
+   *
+   * @param startIndex lower index
+   * @param endIndex one-past the last bit to clear
+   */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>clear</name><parameter_list>(<param><decl><type><name>int</name></type> <name>startIndex</name></decl></param>, <param><decl><type><name>int</name></type> <name>endIndex</name></decl></param>)</parameter_list> <block>{
+    <if>if <condition>(<expr><name>endIndex</name> &lt;= <name>startIndex</name></expr>)</condition><then> <return>return;</return></then></if>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>startWord</name> <init>= <expr>(<name>startIndex</name>&gt;&gt;6)</expr></init></decl>;</decl_stmt>
+    <if>if <condition>(<expr><name>startWord</name> &gt;= <name>wlen</name></expr>)</condition><then> <return>return;</return></then></if>
+
+    <comment type="line">// since endIndex is one past the end, this is index of the last</comment>
+    <comment type="line">// word to be changed.</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>endWord</name>   <init>= <expr>((<name>endIndex</name>-1)&gt;&gt;6)</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><name>long</name></type> <name>startmask</name> <init>= <expr>-1L &lt;&lt; <name>startIndex</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>endmask</name> <init>= <expr>-1L &gt;&gt;&gt; -<name>endIndex</name></expr></init></decl>;</decl_stmt>  <comment type="line">// 64-(endIndex&amp;0x3f) is the same as -endIndex due to wrap</comment>
+
+    <comment type="line">// invert masks since we are clearing</comment>
+    <expr_stmt><expr><name>startmask</name> = ~<name>startmask</name></expr>;</expr_stmt>
+    <expr_stmt><expr><name>endmask</name> = ~<name>endmask</name></expr>;</expr_stmt>
+
+    <if>if <condition>(<expr><name>startWord</name> == <name>endWord</name></expr>)</condition><then> <block>{
+      <expr_stmt><expr><name><name>bits</name><index>[<expr><name>startWord</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>startWord</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp;= (<name>startmask</name> | <name>endmask</name>)</expr>;</expr_stmt>
+      <return>return;</return>
+    }</block></then></if>
+
+
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>startWord</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>startWord</name> % <name>PAGE_SIZE</name></expr>]</index></name>  &amp;= <name>startmask</name></expr>;</expr_stmt>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>middle</name> <init>= <expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>wlen</name></expr></argument>, <argument><expr><name>endWord</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <if>if <condition>(<expr><name>startWord</name> / <name>PAGE_SIZE</name> == <name>middle</name> / <name>PAGE_SIZE</name></expr>)</condition><then>
+    <block>{
+        <expr_stmt><expr><call><name><name>Arrays</name>.<name>fill</name></name><argument_list>(<argument><expr><name><name>bits</name><index>[<expr><name>startWord</name>/<name>PAGE_SIZE</name></expr>]</index></name></expr></argument>, <argument><expr>(<name>startWord</name>+1) % <name>PAGE_SIZE</name></expr></argument>, <argument><expr><name>middle</name> % <name>PAGE_SIZE</name></expr></argument>, <argument><expr>0L</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></then> <else>else
+    <block>{
+        <while>while <condition>(<expr>++<name>startWord</name>&lt;<name>middle</name></expr>)</condition>
+            <expr_stmt><expr><name><name>bits</name><index>[<expr><name>startWord</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>startWord</name> % <name>PAGE_SIZE</name></expr>]</index></name> = 0L</expr>;</expr_stmt></while>
+    }</block></else></if>
+    <if>if <condition>(<expr><name>endWord</name> &lt; <name>wlen</name></expr>)</condition><then> <block>{
+      <expr_stmt><expr><name><name>bits</name><index>[<expr><name>endWord</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>endWord</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp;= <name>endmask</name></expr>;</expr_stmt>
+    }</block></then></if>
+  }</block></function>
+
+
+  <comment type="block" format="javadoc">/** Clears a range of bits.  Clearing past the end does not change the size of the set.
+   *
+   * @param startIndex lower index
+   * @param endIndex one-past the last bit to clear
+   */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>clear</name><parameter_list>(<param><decl><type><name>long</name></type> <name>startIndex</name></decl></param>, <param><decl><type><name>long</name></type> <name>endIndex</name></decl></param>)</parameter_list> <block>{
+    <if>if <condition>(<expr><name>endIndex</name> &lt;= <name>startIndex</name></expr>)</condition><then> <return>return;</return></then></if>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>startWord</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr><name>startIndex</name>&gt;&gt;6</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <if>if <condition>(<expr><name>startWord</name> &gt;= <name>wlen</name></expr>)</condition><then> <return>return;</return></then></if>
+
+    <comment type="line">// since endIndex is one past the end, this is index of the last</comment>
+    <comment type="line">// word to be changed.</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>endWord</name>   <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr>(<name>endIndex</name>-1)&gt;&gt;6</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><name>long</name></type> <name>startmask</name> <init>= <expr>-1L &lt;&lt; <name>startIndex</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name></type> <name>endmask</name> <init>= <expr>-1L &gt;&gt;&gt; -<name>endIndex</name></expr></init></decl>;</decl_stmt>  <comment type="line">// 64-(endIndex&amp;0x3f) is the same as -endIndex due to wrap</comment>
+
+    <comment type="line">// invert masks since we are clearing</comment>
+    <expr_stmt><expr><name>startmask</name> = ~<name>startmask</name></expr>;</expr_stmt>
+    <expr_stmt><expr><name>endmask</name> = ~<name>endmask</name></expr>;</expr_stmt>
+
+    <if>if <condition>(<expr><name>startWord</name> == <name>endWord</name></expr>)</condition><then> <block>{
+        <expr_stmt><expr><name><name>bits</name><index>[<expr><name>startWord</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>startWord</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp;= (<name>startmask</name> | <name>endmask</name>)</expr>;</expr_stmt>
+        <return>return;</return>
+    }</block></then></if>
+
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>startWord</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>startWord</name> % <name>PAGE_SIZE</name></expr>]</index></name>  &amp;= <name>startmask</name></expr>;</expr_stmt>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>middle</name> <init>= <expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>wlen</name></expr></argument>, <argument><expr><name>endWord</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <if>if <condition>(<expr><name>startWord</name> / <name>PAGE_SIZE</name> == <name>middle</name> / <name>PAGE_SIZE</name></expr>)</condition><then>
+    <block>{
+        <expr_stmt><expr><call><name><name>Arrays</name>.<name>fill</name></name><argument_list>(<argument><expr><name><name>bits</name><index>[<expr><name>startWord</name>/<name>PAGE_SIZE</name></expr>]</index></name></expr></argument>, <argument><expr>(<name>startWord</name>+1) % <name>PAGE_SIZE</name></expr></argument>, <argument><expr><name>middle</name> % <name>PAGE_SIZE</name></expr></argument>, <argument><expr>0L</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></then> <else>else
+    <block>{
+        <while>while <condition>(<expr>++<name>startWord</name>&lt;<name>middle</name></expr>)</condition>
+            <expr_stmt><expr><name><name>bits</name><index>[<expr><name>startWord</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>startWord</name> % <name>PAGE_SIZE</name></expr>]</index></name> = 0L</expr>;</expr_stmt></while>
+    }</block></else></if>
+    <if>if <condition>(<expr><name>endWord</name> &lt; <name>wlen</name></expr>)</condition><then> <block>{
+        <expr_stmt><expr><name><name>bits</name><index>[<expr><name>endWord</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>endWord</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp;= <name>endmask</name></expr>;</expr_stmt>
+    }</block></then></if>
+  }</block></function>
+
+
+
+  <comment type="block" format="javadoc">/** Sets a bit and returns the previous value.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>boolean</name></type> <name>getAndSet</name><parameter_list>(<param><decl><type><name>int</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><name>index</name> &gt;&gt; 6</expr></init></decl>;</decl_stmt>      <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr><name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>     <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>boolean</name></type> <name>val</name> <init>= <expr>(<name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp; <name>bitmask</name>) != 0</expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> |= <name>bitmask</name></expr>;</expr_stmt>
+    <return>return <expr><name>val</name></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** Sets a bit and returns the previous value.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>boolean</name></type> <name>getAndSet</name><parameter_list>(<param><decl><type><name>long</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr><name>index</name> &gt;&gt; 6</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>      <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr>(<name>int</name>)<name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>     <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>boolean</name></type> <name>val</name> <init>= <expr>(<name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp; <name>bitmask</name>) != 0</expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> |= <name>bitmask</name></expr>;</expr_stmt>
+    <return>return <expr><name>val</name></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** flips a bit.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>flip</name><parameter_list>(<param><decl><type><name>int</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><name>index</name> &gt;&gt; 6</expr></init></decl>;</decl_stmt>      <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr><name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>     <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> ^= <name>bitmask</name></expr>;</expr_stmt>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/**
+   * flips a bit.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>flip</name><parameter_list>(<param><decl><type><name>long</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr><name>index</name> &gt;&gt; 6</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>   <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr>(<name>int</name>)<name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>       <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> ^= <name>bitmask</name></expr>;</expr_stmt>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** flips a bit and returns the resulting bit value.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>boolean</name></type> <name>flipAndGet</name><parameter_list>(<param><decl><type><name>int</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><name>index</name> &gt;&gt; 6</expr></init></decl>;</decl_stmt>      <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr><name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>     <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> ^= <name>bitmask</name></expr>;</expr_stmt>
+    <return>return <expr>(<name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp; <name>bitmask</name>) != 0</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** flips a bit and returns the resulting bit value.
+   * The index should be less than the OpenBitSet size.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>boolean</name></type> <name>flipAndGet</name><parameter_list>(<param><decl><type><name>long</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>wordNum</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr><name>index</name> &gt;&gt; 6</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>   <comment type="line">// div 64</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>bit</name> <init>= <expr>(<name>int</name>)<name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>       <comment type="line">// mod 64</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>bitmask</name> <init>= <expr>1L &lt;&lt; <name>bit</name></expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr><name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> ^= <name>bitmask</name></expr>;</expr_stmt>
+    <return>return <expr>(<name><name>bits</name><index>[<expr><name>wordNum</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>wordNum</name> % <name>PAGE_SIZE</name></expr>]</index></name> &amp; <name>bitmask</name>) != 0</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** @return the number of set bits */</comment>
+  <function><type><specifier>public</specifier> <name>long</name></type> <name>cardinality</name><parameter_list>()</parameter_list>
+  <block>{
+    <decl_stmt><decl><type><name>long</name></type> <name>bitCount</name> <init>= <expr>0L</expr></init></decl>;</decl_stmt>
+    <for>for (<init><decl><type><name>int</name></type> <name>i</name><init>=<expr><call><name>getPageCount</name><argument_list>()</argument_list></call></expr></init></decl>;</init><condition><expr><name>i</name>--&gt;0</expr>;</condition><incr/>)
+        <expr_stmt><expr><name>bitCount</name>+=<call><name><name>BitUtil</name>.<name>pop_array</name></name><argument_list>(<argument><expr><name><name>bits</name><index>[<expr><name>i</name></expr>]</index></name></expr></argument>,<argument><expr>0</expr></argument>,<argument><expr><name>wlen</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+    <return>return <expr><name>bitCount</name></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** Returns the index of the first set bit starting at the index specified.
+   *  -1 is returned if there are no more set bits.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>int</name></type> <name>nextSetBit</name><parameter_list>(<param><decl><type><name>int</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name>index</name>&gt;&gt;6</expr></init></decl>;</decl_stmt>
+    <if>if <condition>(<expr><name>i</name>&gt;=<name>wlen</name></expr>)</condition><then> <return>return <expr>-1</expr>;</return></then></if>
+    <decl_stmt><decl><type><name>int</name></type> <name>subIndex</name> <init>= <expr><name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt>      <comment type="line">// index within the word</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>word</name> <init>= <expr><name><name>bits</name><index>[<expr><name>i</name> / <name>PAGE_SIZE</name></expr>]</index><index>[ <expr><name>i</name> % <name>PAGE_SIZE</name></expr>]</index></name> &gt;&gt; <name>subIndex</name></expr></init></decl>;</decl_stmt>  <comment type="line">// skip all the bits to the right of index</comment>
+
+    <if>if <condition>(<expr><name>word</name>!=0</expr>)</condition><then> <block>{
+      <return>return <expr>(<name>i</name>&lt;&lt;6) + <name>subIndex</name> + <call><name><name>BitUtil</name>.<name>ntz</name></name><argument_list>(<argument><expr><name>word</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></then></if>
+
+    <while>while<condition>(<expr>++<name>i</name> &lt; <name>wlen</name></expr>)</condition> <block>{
+      <expr_stmt><expr><name>word</name> = <name><name>bits</name><index>[<expr><name>i</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>i</name> % <name>PAGE_SIZE</name></expr>]</index></name></expr>;</expr_stmt>
+      <if>if <condition>(<expr><name>word</name>!=0</expr>)</condition><then> <return>return <expr>(<name>i</name>&lt;&lt;6) + <call><name><name>BitUtil</name>.<name>ntz</name></name><argument_list>(<argument><expr><name>word</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+    }</block></while>
+
+    <return>return <expr>-1</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** Returns the index of the first set bit starting at the index specified.
+   *  -1 is returned if there are no more set bits.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>long</name></type> <name>nextSetBit</name><parameter_list>(<param><decl><type><name>long</name></type> <name>index</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr><name>index</name>&gt;&gt;&gt;6</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <if>if <condition>(<expr><name>i</name>&gt;=<name>wlen</name></expr>)</condition><then> <return>return <expr>-1</expr>;</return></then></if>
+    <decl_stmt><decl><type><name>int</name></type> <name>subIndex</name> <init>= <expr>(<name>int</name>)<name>index</name> &amp; 0x3f</expr></init></decl>;</decl_stmt> <comment type="line">// index within the word</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>word</name> <init>= <expr><name><name>bits</name><index>[<expr><name>i</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>i</name> % <name>PAGE_SIZE</name></expr>]</index></name> &gt;&gt;&gt; <name>subIndex</name></expr></init></decl>;</decl_stmt>  <comment type="line">// skip all the bits to the right of index</comment>
+
+    <if>if <condition>(<expr><name>word</name>!=0</expr>)</condition><then> <block>{
+      <return>return <expr>(((<name>long</name>)<name>i</name>)&lt;&lt;6) + (<name>subIndex</name> + <call><name><name>BitUtil</name>.<name>ntz</name></name><argument_list>(<argument><expr><name>word</name></expr></argument>)</argument_list></call>)</expr>;</return>
+    }</block></then></if>
+
+    <while>while<condition>(<expr>++<name>i</name> &lt; <name>wlen</name></expr>)</condition> <block>{
+      <expr_stmt><expr><name>word</name> = <name><name>bits</name><index>[<expr><name>i</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>i</name> % <name>PAGE_SIZE</name></expr>]</index></name></expr>;</expr_stmt>
+      <if>if <condition>(<expr><name>word</name>!=0</expr>)</condition><then> <return>return <expr>(((<name>long</name>)<name>i</name>)&lt;&lt;6) + <call><name><name>BitUtil</name>.<name>ntz</name></name><argument_list>(<argument><expr><name>word</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+    }</block></while>
+
+    <return>return <expr>-1</expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** this = this AND other */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>intersect</name><parameter_list>(<param><decl><type><name>OpenBitSet</name></type> <name>other</name></decl></param>)</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>newLen</name><init>= <expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>wlen</name></name></expr></argument>,<argument><expr><name><name>other</name>.<name>wlen</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name><index>[]</index><index>[]</index></type> <name>thisArr</name> <init>= <expr><name><name>this</name>.<name>bits</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>long</name><index>[]</index><index>[]</index></type> <name>otherArr</name> <init>= <expr><name><name>other</name>.<name>bits</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>int</name></type> <name>thisPageSize</name> <init>= <expr><name><name>this</name>.<name>PAGE_SIZE</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>int</name></type> <name>otherPageSize</name> <init>= <expr><name><name>other</name>.<name>PAGE_SIZE</name></name></expr></init></decl>;</decl_stmt>
+    <comment type="line">// testing against zero can be more efficient</comment>
+    <decl_stmt><decl><type><name>int</name></type> <name>pos</name><init>=<expr><name>newLen</name></expr></init></decl>;</decl_stmt>
+    <while>while<condition>(<expr>--<name>pos</name>&gt;=0</expr>)</condition> <block>{
+      <expr_stmt><expr><name><name>thisArr</name><index>[<expr><name>pos</name> / <name>thisPageSize</name></expr>]</index><index>[ <expr><name>pos</name> % <name>thisPageSize</name></expr>]</index></name> &amp;= <name><name>otherArr</name><index>[<expr><name>pos</name> / <name>otherPageSize</name></expr>]</index><index>[<expr><name>pos</name> % <name>otherPageSize</name></expr>]</index></name></expr>;</expr_stmt>
+    }</block></while>
+
+    <if>if <condition>(<expr><name><name>this</name>.<name>wlen</name></name> &gt; <name>newLen</name></expr>)</condition><then> <block>{
+      <comment type="line">// fill zeros from the new shorter length to the old length</comment>
+      <for>for (<init><expr><name>pos</name>=<name>wlen</name></expr>;</init><condition><expr><name>pos</name>--&gt;<name>newLen</name></expr>;</condition><incr/>)
+          <expr_stmt><expr><name><name>thisArr</name><index>[<expr><name>pos</name> / <name>thisPageSize</name></expr>]</index><index>[ <expr><name>pos</name> % <name>thisPageSize</name></expr>]</index></name> =0</expr>;</expr_stmt></for>
+    }</block></then></if>
+    <expr_stmt><expr><name><name>this</name>.<name>wlen</name></name> = <name>newLen</name></expr>;</expr_stmt>
+  }</block></function>
+
+  <comment type="line">// some BitSet compatability methods</comment>
+
+  <comment type="line">//** see {@link intersect} */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>and</name><parameter_list>(<param><decl><type><name>OpenBitSet</name></type> <name>other</name></decl></param>)</parameter_list> <block>{
+    <expr_stmt><expr><call><name>intersect</name><argument_list>(<argument><expr><name>other</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** Lowers numWords, the number of words in use,
+   * by checking for trailing zero words.
+   */</comment>
+  <function><type><specifier>public</specifier> <name>void</name></type> <name>trimTrailingZeros</name><parameter_list>()</parameter_list> <block>{
+    <decl_stmt><decl><type><name>int</name></type> <name>idx</name> <init>= <expr><name>wlen</name>-1</expr></init></decl>;</decl_stmt>
+    <while>while <condition>(<expr><name>idx</name>&gt;=0 &amp;&amp; <name><name>bits</name><index>[<expr><name>idx</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>idx</name> % <name>PAGE_SIZE</name></expr>]</index></name>==0</expr>)</condition> <expr_stmt><expr><name>idx</name>--</expr>;</expr_stmt></while>
+    <expr_stmt><expr><name>wlen</name> = <name>idx</name>+1</expr>;</expr_stmt>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** returns the number of 64 bit words it would take to hold numBits */</comment>
+  <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>bits2words</name><parameter_list>(<param><decl><type><name>long</name></type> <name>numBits</name></decl></param>)</parameter_list> <block>{
+   <return>return <expr><call>(<name>int</name>)<argument_list>(<argument><expr>((<name>numBits</name>-1)&gt;&gt;&gt;6)+1</expr></argument>)</argument_list></call></expr>;</return>
+  }</block></function>
+
+  <comment type="block" format="javadoc">/** returns true if both sets have the same bits set */</comment>
+  <function><type><annotation>@<name>Override</name></annotation>
+  <specifier>public</specifier> <name>boolean</name></type> <name>equals</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list> <block>{
+    <if>if <condition>(<expr><name>this</name> == <name>o</name></expr>)</condition><then> <return>return <expr>true</expr>;</return></then></if>
+    <if>if <condition>(<expr>!(<name>o</name> instanceof <name>OpenBitSet</name>)</expr>)</condition><then> <return>return <expr>false</expr>;</return></then></if>
+    <decl_stmt><decl><type><name>OpenBitSet</name></type> <name>a</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>OpenBitSet</name></type> <name>b</name> <init>= <expr>(<name>OpenBitSet</name>)<name>o</name></expr></init></decl>;</decl_stmt>
+    <comment type="line">// make a the larger set.</comment>
+    <if>if <condition>(<expr><name><name>b</name>.<name>wlen</name></name> &gt; <name><name>this</name>.<name>wlen</name></name></expr>)</condition><then> <block>{
+      <expr_stmt><expr><name>a</name> = <name>b</name></expr>;</expr_stmt> <expr_stmt><expr><name>b</name>=<name>this</name></expr>;</expr_stmt>
+    }</block></then> <else>else <block>{
+      <expr_stmt><expr><name>a</name>=<name>this</name></expr>;</expr_stmt>
+    }</block></else></if>
+
+    <decl_stmt><decl><type><name>int</name></type> <name>aPageSize</name> <init>= <expr><name><name>this</name>.<name>PAGE_SIZE</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><name>int</name></type> <name>bPageSize</name> <init>= <expr><name><name>b</name>.<name>PAGE_SIZE</name></name></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// check for any set bits out of the range of b</comment>
+    <for>for (<init><decl><type><name>int</name></type> <name>i</name><init>=<expr><name><name>a</name>.<name>wlen</name></name>-1</expr></init></decl>;</init> <condition><expr><name>i</name>&gt;=<name><name>b</name>.<name>wlen</name></name></expr>;</condition> <incr><expr><name>i</name>--</expr></incr>) <block>{
+      <if>if <condition>(<expr><name><name>a</name>.<name>bits</name><index>[<expr><name>i</name>/<name>aPageSize</name></expr>]</index><index>[<expr><name>i</name> % <name>aPageSize</name></expr>]</index></name>!=0</expr>)</condition><then> <return>return <expr>false</expr>;</return></then></if>
+    }</block></for>
+
+    <for>for (<init><decl><type><name>int</name></type> <name>i</name><init>=<expr><name><name>b</name>.<name>wlen</name></name>-1</expr></init></decl>;</init> <condition><expr><name>i</name>&gt;=0</expr>;</condition> <incr><expr><name>i</name>--</expr></incr>) <block>{
+      <if>if <condition>(<expr><name><name>a</name>.<name>bits</name><index>[<expr><name>i</name>/<name>aPageSize</name></expr>]</index><index>[<expr><name>i</name> % <name>aPageSize</name></expr>]</index></name> != <name><name>b</name>.<name>bits</name><index>[<expr><name>i</name>/<name>bPageSize</name></expr>]</index><index>[<expr><name>i</name> % <name>bPageSize</name></expr>]</index></name></expr>)</condition><then> <return>return <expr>false</expr>;</return></then></if>
+    }</block></for>
+
+    <return>return <expr>true</expr>;</return>
+  }</block></function>
+
+
+  <function><type><annotation>@<name>Override</name></annotation>
+  <specifier>public</specifier> <name>int</name></type> <name>hashCode</name><parameter_list>()</parameter_list> <block>{
+    <comment type="line">// Start with a zero hash and use a mix that results in zero if the input is zero.</comment>
+    <comment type="line">// This effectively truncates trailing zeros without an explicit check.</comment>
+    <decl_stmt><decl><type><name>long</name></type> <name>h</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+    <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name>wlen</name></expr></init></decl>;</init> <condition><expr>--<name>i</name>&gt;=0</expr>;</condition><incr/>) <block>{
+      <expr_stmt><expr><name>h</name> ^= <name><name>bits</name><index>[<expr><name>i</name> / <name>PAGE_SIZE</name></expr>]</index><index>[<expr><name>i</name> % <name>PAGE_SIZE</name></expr>]</index></name></expr>;</expr_stmt>
+      <expr_stmt><expr><name>h</name> = (<name>h</name> &lt;&lt; 1) | (<name>h</name> &gt;&gt;&gt; 63)</expr>;</expr_stmt> <comment type="line">// rotate left</comment>
+    }</block></for>
+    <comment type="line">// fold leftmost bits into right and add a constant to prevent</comment>
+    <comment type="line">// empty sets from returning 0, which is too common.</comment>
+    <return>return <expr><call>(<name>int</name>)<argument_list>(<argument><expr>(<name>h</name>&gt;&gt;32) ^ <name>h</name></expr></argument>)</argument_list></call> + 0x98761234</expr>;</return>
+  }</block></function>
+
+}</block></class>
+
+
+</unit>

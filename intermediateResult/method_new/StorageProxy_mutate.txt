@@ -1,0 +1,71 @@
+public static void mutate(Collection<? extends IMutation> mutations, ConsistencyLevel consistency_level)
+    throws UnavailableException, OverloadedException, WriteTimeoutException
+    {
+        Tracing.trace("Determining replicas for mutation");
+        logger.trace("Mutations/ConsistencyLevel are {}/{}", mutations, consistency_level);
+        final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
+
+        long startTime = System.nanoTime();
+        List<AbstractWriteResponseHandler> responseHandlers = new ArrayList<AbstractWriteResponseHandler>(mutations.size());
+
+        IMutation mostRecentMutation = null;
+        try
+        {
+            for (IMutation mutation : mutations)
+            {
+                mostRecentMutation = mutation;
+                if (mutation instanceof CounterMutation)
+                {
+                    responseHandlers.add(mutateCounter((CounterMutation)mutation, localDataCenter));
+                }
+                else
+                {
+                    WriteType wt = mutations.size() <= 1 ? WriteType.SIMPLE : WriteType.UNLOGGED_BATCH;
+                    responseHandlers.add(performWrite(mutation, consistency_level, localDataCenter, standardWritePerformer, null, wt));
+                }
+            }
+
+            // wait for writes.  throws TimeoutException if necessary
+            for (AbstractWriteResponseHandler responseHandler : responseHandlers)
+            {
+                responseHandler.get();
+            }
+
+        }
+        catch (WriteTimeoutException ex)
+        {
+            writeMetrics.timeouts.mark();
+            ClientRequestMetrics.writeTimeouts.inc();
+            if (logger.isDebugEnabled())
+            {
+                List<String> mstrings = new ArrayList<String>(mutations.size());
+                for (IMutation mutation : mutations)
+                    mstrings.add(mutation.toString(true));
+                logger.debug("Write timeout {} for one (or more) of: {}", ex.toString(), mstrings);
+            }
+            Tracing.trace("Write timeout");
+            throw ex;
+        }
+        catch (UnavailableException e)
+        {
+            writeMetrics.unavailables.mark();
+            ClientRequestMetrics.writeUnavailables.inc();
+            Tracing.trace("Unavailable");
+            throw e;
+        }
+        catch (OverloadedException e)
+        {
+            ClientRequestMetrics.writeUnavailables.inc();
+            Tracing.trace("Overloaded");
+            throw e;
+        }
+        catch (IOException e)
+        {
+            assert mostRecentMutation != null;
+            throw new RuntimeException("error writing key " + ByteBufferUtil.bytesToHex(mostRecentMutation.key()), e);
+        }
+        finally
+        {
+            writeMetrics.addNano(System.nanoTime() - startTime);
+        }
+    }

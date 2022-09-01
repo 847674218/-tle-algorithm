@@ -1,0 +1,32 @@
+public SSTableMetadata deserialize(DataInputStream dis, Descriptor desc) throws IOException
+        {
+            EstimatedHistogram rowSizes = EstimatedHistogram.serializer.deserialize(dis);
+            EstimatedHistogram columnCounts = EstimatedHistogram.serializer.deserialize(dis);
+            ReplayPosition replayPosition = desc.version.metadataIncludesReplayPosition
+                                          ? ReplayPosition.serializer.deserialize(dis)
+                                          : ReplayPosition.NONE;
+            if (!desc.version.metadataIncludesModernReplayPosition)
+            {
+                // replay position may be "from the future" thanks to older versions generating them with nanotime.
+                // make sure we don't omit replaying something that we should.  see CASSANDRA-4782
+                replayPosition = ReplayPosition.NONE;
+            }
+            long minTimestamp = desc.version.tracksMinTimestamp ? dis.readLong() : Long.MIN_VALUE;
+            if (!desc.version.tracksMinTimestamp)
+                minTimestamp = Long.MAX_VALUE;
+            long maxTimestamp = desc.version.containsTimestamp() ? dis.readLong() : Long.MIN_VALUE;
+            if (!desc.version.tracksMaxTimestamp) // see javadoc to Descriptor.containsTimestamp
+                maxTimestamp = Long.MAX_VALUE;
+            double compressionRatio = desc.version.hasCompressionRatio
+                                    ? dis.readDouble()
+                                    : NO_COMPRESSION_RATIO;
+            String partitioner = desc.version.hasPartitioner ? dis.readUTF() : null;
+            int nbAncestors = desc.version.hasAncestors ? dis.readInt() : 0;
+            Set<Integer> ancestors = new HashSet<Integer>(nbAncestors);
+            for (int i = 0; i < nbAncestors; i++)
+                ancestors.add(dis.readInt());
+            StreamingHistogram tombstoneHistogram = desc.version.tracksTombstones
+                                                   ? StreamingHistogram.serializer.deserialize(dis)
+                                                   : defaultTombstoneDropTimeHistogram();
+            return new SSTableMetadata(rowSizes, columnCounts, replayPosition, minTimestamp, maxTimestamp, compressionRatio, partitioner, ancestors, tombstoneHistogram);
+        }

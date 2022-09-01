@@ -1,0 +1,57 @@
+private IMutation mutationForKey(CFDefinition cfDef, ByteBuffer key, ColumnNameBuilder builder, UpdateParameters params, ColumnGroupMap group, ConsistencyLevel cl)
+    throws InvalidRequestException
+    {
+        validateKey(key);
+
+        QueryProcessor.validateKey(key);
+        RowMutation rm = new RowMutation(cfDef.cfm.ksName, key);
+        ColumnFamily cf = rm.addOrGet(cfDef.cfm.cfName);
+
+        // Inserting the CQL row marker (see #4361)
+        // We always need to insert a marker, because of the following situation:
+        //   CREATE TABLE t ( k int PRIMARY KEY, c text );
+        //   INSERT INTO t(k, c) VALUES (1, 1)
+        //   DELETE c FROM t WHERE k = 1;
+        //   SELECT * FROM t;
+        // The last query should return one row (but with c == null). Adding
+        // the marker with the insert make sure the semantic is correct (while making sure a
+        // 'DELETE FROM t WHERE k = 1' does remove the row entirely)
+        if (cfDef.isComposite && !cfDef.isCompact)
+        {
+            ByteBuffer name = builder.copy().add(ByteBufferUtil.EMPTY_BYTE_BUFFER).build();
+            cf.addColumn(params.makeColumn(name, ByteBufferUtil.EMPTY_BYTE_BUFFER));
+        }
+
+        if (cfDef.isCompact)
+        {
+            if (builder.componentCount() == 0)
+                throw new InvalidRequestException(String.format("Missing PRIMARY KEY part %s", cfDef.columns.values().iterator().next()));
+
+            Operation operation;
+            if (cfDef.value == null)
+            {
+                // No value was defined, we set to the empty value
+                operation = ColumnOperation.SetToEmpty();
+            }
+            else
+            {
+                List<Operation> operations = processedColumns.get(cfDef.value);
+                if (operations.isEmpty())
+                    throw new InvalidRequestException(String.format("Missing mandatory column %s", cfDef.value));
+                assert operations.size() == 1;
+                operation = operations.get(0);
+            }
+            operation.execute(cf, builder.copy(), cfDef.value == null ? null : cfDef.value.type, params, null);
+        }
+        else
+        {
+            for (Map.Entry<CFDefinition.Name, Operation> entry : processedColumns.entries())
+            {
+                CFDefinition.Name name = entry.getKey();
+                Operation op = entry.getValue();
+                op.execute(cf, builder.copy().add(name.name.key), name.type, params, group == null || !op.requiresRead(name.type) ? null : group.getCollection(name.name.key));
+            }
+        }
+
+        return type == Type.COUNTER ? new CounterMutation(rm, cl) : rm;
+    }

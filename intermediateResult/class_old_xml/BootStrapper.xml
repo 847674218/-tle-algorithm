@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\dht\BootStrapper.java"> <comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name></name>;</package>
+
+ <import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+ <import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+ <import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+ <import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+ <import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>locks</name>.<name>Condition</name></name>;</import>
+
+ <import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Charsets</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name></name>.*;</import>
+
+ <import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>ArrayUtils</name></name>;</import>
+ <import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+ <import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ConfigurationException</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>AbstractReplicationStrategy</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>TokenMetadata</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>IAsyncCallback</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>IVerbHandler</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>Message</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>OperationType</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+ <import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>SimpleCondition</name></name>;</import>
+
+
+<class><specifier>public</specifier> class <name>BootStrapper</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>BootStrapper</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* endpoint that needs to be bootstrapped */</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>address</name></decl>;</decl_stmt>
+    <comment type="block">/* token of the node being bootstrapped. */</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>Token</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>token</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>TokenMetadata</name></type> <name>tokenMetadata</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>BOOTSTRAP_TIMEOUT</name> <init>= <expr>30000</expr></init></decl>;</decl_stmt> <comment type="line">// default bootstrap timeout of 30s</comment>
+
+    <constructor><specifier>public</specifier> <name>BootStrapper</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>address</name></decl></param>, <param><decl><type><name>Token</name></type> <name>token</name></decl></param>, <param><decl><type><name>TokenMetadata</name></type> <name>tmd</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>address</name> != null</expr>;</assert>
+        <assert>assert <expr><name>token</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><name><name>this</name>.<name>address</name></name> = <name>address</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>token</name></name> = <name>token</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>tokenMetadata</name> = <name>tmd</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>bootstrap</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Beginning bootstrap process"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <decl_stmt><decl><type><name>RangeStreamer</name></type> <name>streamer</name> <init>= <expr>new <call><name>RangeStreamer</name><argument_list>(<argument><expr><name>tokenMetadata</name></expr></argument>, <argument><expr><name>address</name></expr></argument>, <argument><expr><name><name>OperationType</name>.<name>BOOTSTRAP</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>streamer</name>.<name>addSourceFilter</name></name><argument_list>(<argument><expr>new <call><name><name>RangeStreamer</name>.<name>FailureDetectorSourceFilter</name></name><argument_list>(<argument><expr><name><name>FailureDetector</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <for>for (<init><decl><type><name>String</name></type> <name>table</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getNonSystemTables</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>AbstractReplicationStrategy</name></type> <name>strategy</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>getReplicationStrategy</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>streamer</name>.<name>addRanges</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><call><name><name>strategy</name>.<name>getPendingAddressRanges</name></name><argument_list>(<argument><expr><name>tokenMetadata</name></expr></argument>, <argument><expr><name>token</name></expr></argument>, <argument><expr><name>address</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <expr_stmt><expr><call><name><name>streamer</name>.<name>fetch</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>finishBootstrapping</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * if initialtoken was specified, use that.
+     * otherwise, pick a token to assume half the load of the most-loaded node.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Token</name></type> <name>getBootstrapToken</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>TokenMetadata</name></type> <name>metadata</name></decl></param>, <param><decl><type><specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Double</name></argument>&gt;</argument_list></name></type> <name>load</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// if user specified a token, use that</comment>
+        <if>if <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>getInitialToken</name></name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"token manually specified as " + <call><name><name>DatabaseDescriptor</name>.<name>getInitialToken</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>Token</name></type> <name>token</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call>.<call><name>fromString</name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getInitialToken</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>metadata</name>.<name>getEndpoint</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Bootstraping to existing token " + <name>token</name> + " is not allowed (decommission/removetoken the old node first)."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <return>return <expr><name>token</name></expr>;</return>
+        }</block></then></if>
+
+        <comment type="line">// if there is a schema, then we're joining an existing cluster so get a "balanced" token</comment>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getEndpointStates</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <comment type="line">// skip ourselves to avoid confusing the tests, which always load a schema first thing</comment>
+                <continue>continue;</continue>
+            }</block></then></if>
+
+            <decl_stmt><decl><type><name>VersionedValue</name></type> <name>schemaValue</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getApplicationState</name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>SCHEMA</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>schemaValue</name> != null &amp;&amp; !<call><name><name>schemaValue</name>.<name>value</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>Schema</name>.<name>emptyVersion</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr><call><name>getBalancedToken</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>load</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+        }</block></for>
+
+        <comment type="line">// no schema; pick a random token (so multiple non-seeds starting up simultaneously in a new cluster</comment>
+        <comment type="line">// don't get the same token; see CASSANDRA-3219)</comment>
+        <return>return <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getRandomToken</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Token</name></type> <name>getBalancedToken</name><parameter_list>(<param><decl><type><name>TokenMetadata</name></type> <name>metadata</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Double</name></argument>&gt;</argument_list></name></type> <name>load</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>maxEndpoint</name> <init>= <expr><call><name>getBootstrapSource</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>load</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Token</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>t</name> <init>= <expr><call><name>getBootstrapTokenFrom</name><argument_list>(<argument><expr><name>maxEndpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"New token will be " + <name>t</name> + " to assume load from " + <name>maxEndpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>t</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>static</specifier> <name>InetAddress</name></type> <name>getBootstrapSource</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>TokenMetadata</name></type> <name>metadata</name></decl></param>, <param><decl><type><specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Double</name></argument>&gt;</argument_list></name></type> <name>load</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// sort first by number of nodes already bootstrapping into a source node's range, then by load.</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>load</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><call><name><name>load</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>metadata</name>.<name>isMember</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+            <expr_stmt><expr><call><name><name>endpoints</name>.<name>add</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <if>if <condition>(<expr><call><name><name>endpoints</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"No other nodes seen!  Unable to bootstrap."
+                                       + "If you intended to start a single-node cluster, you should make sure "
+                                       + "your broadcast_address (or listen_address) is listed as a seed.  "
+                                       + "Otherwise, you need to determine why the seed being contacted "
+                                       + "has no knowledge of the rest of the cluster.  Usually, this can be solved "
+                                       + "by giving all nodes the same seed list."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>endpoints</name></expr></argument>, <argument><expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ia1</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>ia2</name></decl></param>)</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>n1</name> <init>= <expr><call><name><name>metadata</name>.<name>pendingRangeChanges</name></name><argument_list>(<argument><expr><name>ia1</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>n2</name> <init>= <expr><call><name><name>metadata</name>.<name>pendingRangeChanges</name></name><argument_list>(<argument><expr><name>ia2</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>n1</name> != <name>n2</name></expr>)</condition><then>
+                    <return>return <expr>-(<name>n1</name> - <name>n2</name>)</expr>;</return></then></if> <comment type="line">// more targets = _less_ priority!</comment>
+
+                <decl_stmt><decl><type><name>double</name></type> <name>load1</name> <init>= <expr><call><name><name>load</name>.<name>get</name></name><argument_list>(<argument><expr><name>ia1</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>double</name></type> <name>load2</name> <init>= <expr><call><name><name>load</name>.<name>get</name></name><argument_list>(<argument><expr><name>ia2</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>load1</name> == <name>load2</name></expr>)</condition><then>
+                    <return>return <expr>0</expr>;</return></then></if>
+                <return>return <expr><name>load1</name> &lt; <name>load2</name> ? -1 : 1</expr>;</return>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>maxEndpoint</name> <init>= <expr><call><name><name>endpoints</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr>!<call><name><name>maxEndpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</assert>
+        <if>if <condition>(<expr><call><name><name>metadata</name>.<name>pendingRangeChanges</name></name><argument_list>(<argument><expr><name>maxEndpoint</name></expr></argument>)</argument_list></call> &gt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Every node is a bootstrap source! Please specify an initial token manually or wait for an existing bootstrap operation to finish."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <return>return <expr><name>maxEndpoint</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>static</specifier> <name><name>Token</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getBootstrapTokenFrom</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>maxEndpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Message</name></type> <name>message</name> <init>= <expr>new <call><name>Message</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                      <argument><expr><name><name>StorageService</name>.<name>Verb</name>.<name>BOOTSTRAP_TOKEN</name></name></expr></argument>,
+                                      <argument><expr><name><name>ArrayUtils</name>.<name>EMPTY_BYTE_ARRAY</name></name></expr></argument>,
+                                      <argument><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>getVersion</name></name><argument_list>(<argument><expr><name>maxEndpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>retries</name> <init>= <expr>5</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>timeout</name> <init>= <expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><call><name><name>MessagingService</name>.<name>getDefaultCallbackTimeout</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>BOOTSTRAP_TIMEOUT</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <while>while <condition>(<expr><name>retries</name> &gt; 0</expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>BootstrapTokenCallback</name></type> <name>btc</name> <init>= <expr>new <call><name>BootstrapTokenCallback</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendRR</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>maxEndpoint</name></expr></argument>, <argument><expr><name>btc</name></expr></argument>, <argument><expr><name>timeout</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>Token</name></type> <name>token</name> <init>= <expr><call><name><name>btc</name>.<name>getToken</name></name><argument_list>(<argument><expr><name>timeout</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>token</name> != null</expr>)</condition><then>
+                <return>return <expr><name>token</name></expr>;</return></then></if>
+
+            <expr_stmt><expr><name>retries</name>--</expr>;</expr_stmt>
+        }</block></while>
+        <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Bootstrap failed, could not obtain token from: " + <name>maxEndpoint</name></expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>BootstrapTokenVerbHandler</name> <super><implements>implements <name>IVerbHandler</name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>doVerb</name><parameter_list>(<param><decl><type><name>Message</name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>StorageService</name></type> <name>ss</name> <init>= <expr><name><name>StorageService</name>.<name>instance</name></name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>tokenString</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>(<argument><expr><call><name><name>ss</name>.<name>getBootstrapToken</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>Message</name></type> <name>response</name> <init>= <expr><call><name><name>message</name>.<name>getInternalReply</name></name><argument_list>(<argument><expr><call><name><name>tokenString</name>.<name>getBytes</name></name><argument_list>(<argument><expr><name><name>Charsets</name>.<name>UTF_8</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>message</name>.<name>getVersion</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendReply</name><argument_list>(<argument><expr><name>response</name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>message</name>.<name>getFrom</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>BootstrapTokenCallback</name> <super><implements>implements <name>IAsyncCallback</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name><name>Token</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>token</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Condition</name></type> <name>condition</name> <init>= <expr>new <call><name>SimpleCondition</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <function><type><specifier>public</specifier> <name><name>Token</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getToken</name><parameter_list>(<param><decl><type><name>long</name></type> <name>timeout</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>boolean</name></type> <name>success</name></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>success</name> = <call><name><name>condition</name>.<name>await</name></name><argument_list>(<argument><expr><name>timeout</name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+
+            <return>return <expr><name>success</name> ? <name>token</name> : null</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>response</name><parameter_list>(<param><decl><type><name>Message</name></type> <name>msg</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>token</name> = <call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call>.<call><name>fromString</name><argument_list>(<argument><expr>new <call><name>String</name><argument_list>(<argument><expr><call><name><name>msg</name>.<name>getMessageBody</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>Charsets</name>.<name>UTF_8</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>condition</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isLatencyForSnitch</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>false</expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

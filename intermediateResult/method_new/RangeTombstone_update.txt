@@ -1,0 +1,44 @@
+public void update(OnDiskAtom atom)
+        {
+            if (atom instanceof RangeTombstone)
+            {
+                RangeTombstone t = (RangeTombstone)atom;
+                // This could be a repeated marker already. If so, we already have a range in which it is
+                // fully included. While keeping both would be ok functionaly, we could end up with a lot of
+                // useless marker after a few compaction, so avoid this.
+                for (RangeTombstone tombstone : maxOrderingSet.tailSet(t))
+                {
+                    // We only care about tombstone have the same max than t
+                    if (comparator.compare(t.max, tombstone.max) > 0)
+                        break;
+
+                    // Since it is assume tombstones are passed to this method in growing min order, it's enough to
+                    // check for the data to know is the current tombstone is included in a previous one
+                    if (tombstone.data.equals(t.data))
+                        return;
+                }
+                ranges.addLast(t);
+                maxOrderingSet.add(t);
+            }
+            else
+            {
+                assert atom instanceof IColumn;
+                Iterator<RangeTombstone> iter = maxOrderingSet.iterator();
+                while (iter.hasNext())
+                {
+                    RangeTombstone tombstone = iter.next();
+                    if (comparator.compare(atom.name(), tombstone.max) > 0)
+                    {
+                        // That tombstone is now useless
+                        iter.remove();
+                        ranges.remove(tombstone);
+                    }
+                    else
+                    {
+                        // Since we're iterating by growing end bound, if the current range
+                        // includes the column, so does all the next ones
+                        return;
+                    }
+                }
+            }
+        }

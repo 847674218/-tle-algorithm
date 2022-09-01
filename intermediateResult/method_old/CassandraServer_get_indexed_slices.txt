@@ -1,0 +1,41 @@
+public List<KeySlice> get_indexed_slices(ColumnParent column_parent, IndexClause index_clause, SlicePredicate column_predicate, ConsistencyLevel consistency_level) throws InvalidRequestException, UnavailableException, TimedOutException, TException
+    {
+        logger.debug("scan");
+
+        ClientState cState = state();
+        String keyspace = cState.getKeyspace();
+        cState.hasColumnFamilyAccess(keyspace, column_parent.column_family, Permission.READ);
+        CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_parent.column_family, false);
+        ThriftValidation.validateColumnParent(metadata, column_parent);
+        ThriftValidation.validatePredicate(metadata, column_parent, column_predicate);
+        ThriftValidation.validateIndexClauses(metadata, index_clause);
+        ThriftValidation.validateConsistencyLevel(keyspace, consistency_level, RequestType.READ);
+
+        IPartitioner p = StorageService.getPartitioner();
+        AbstractBounds<RowPosition> bounds = new Bounds<RowPosition>(RowPosition.forKey(index_clause.start_key, p),
+                                                                     p.getMinimumToken().minKeyBound());
+        RangeSliceCommand command = new RangeSliceCommand(keyspace,
+                                                          column_parent.column_family,
+                                                          null,
+                                                          column_predicate,
+                                                          bounds,
+                                                          index_clause.expressions,
+                                                          index_clause.count);
+
+        List<Row> rows;
+        try
+        {
+            rows = StorageProxy.getRangeSlice(command, consistency_level);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+        catch (TimeoutException e)
+        {
+            logger.debug("... timed out");
+            throw new TimedOutException();
+        }
+
+        return thriftifyKeySlices(rows, column_parent, column_predicate);
+    }

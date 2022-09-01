@@ -1,0 +1,1099 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\locator\TokenMetadata.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentHashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>CopyOnWriteArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>locks</name>.<name>ReadWriteLock</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>locks</name>.<name>ReentrantReadWriteLock</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>BiMultiValMap</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>SortedBiMultiValMap</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>FailureDetector</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>TokenMetadata</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>TokenMetadata</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* Maintains token to endpoint map of every node in the cluster. */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>BiMultiValMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>tokenToEndpointMap</name></decl>;</decl_stmt>
+
+    <comment type="block">/* Maintains endpoint to host ID map of every node in the cluster */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>BiMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>UUID</name></argument>&gt;</argument_list></name></type> <name>endpointToHostIdMap</name></decl>;</decl_stmt>
+
+    <comment type="line">// Prior to CASSANDRA-603, we just had &lt;tt&gt;Map&lt;Range, InetAddress&gt; pendingRanges&lt;tt&gt;,</comment>
+    <comment type="line">// which was added to when a node began bootstrap and removed from when it finished.</comment>
+    <comment type="line">//</comment>
+    <comment type="line">// This is inadequate when multiple changes are allowed simultaneously.  For example,</comment>
+    <comment type="line">// suppose that there is a ring of nodes A, C and E, with replication factor 3.</comment>
+    <comment type="line">// Node D bootstraps between C and E, so its pending ranges will be E-A, A-C and C-D.</comment>
+    <comment type="line">// Now suppose node B bootstraps between A and C at the same time. Its pending ranges</comment>
+    <comment type="line">// would be C-E, E-A and A-B. Now both nodes need to be assigned pending range E-A,</comment>
+    <comment type="line">// which we would be unable to represent with the old Map.  The same thing happens</comment>
+    <comment type="line">// even more obviously for any nodes that boot simultaneously between same two nodes.</comment>
+    <comment type="line">//</comment>
+    <comment type="line">// So, we made two changes:</comment>
+    <comment type="line">//</comment>
+    <comment type="line">// First, we changed pendingRanges to a &lt;tt&gt;Multimap&lt;Range, InetAddress&gt;&lt;/tt&gt; (now</comment>
+    <comment type="line">// &lt;tt&gt;Map&lt;String, Multimap&lt;Range, InetAddress&gt;&gt;&lt;/tt&gt;, because replication strategy</comment>
+    <comment type="line">// and options are per-KeySpace).</comment>
+    <comment type="line">//</comment>
+    <comment type="line">// Second, we added the bootstrapTokens and leavingEndpoints collections, so we can</comment>
+    <comment type="line">// rebuild pendingRanges from the complete information of what is going on, when</comment>
+    <comment type="line">// additional changes are made mid-operation.</comment>
+    <comment type="line">//</comment>
+    <comment type="line">// Finally, note that recording the tokens of joining nodes in bootstrapTokens also</comment>
+    <comment type="line">// means we can detect and reject the addition of multiple nodes at the same token</comment>
+    <comment type="line">// before one becomes part of the ring.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>BiMultiValMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>bootstrapTokens</name> <init>= <expr>new <call><name><name>BiMultiValMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <comment type="line">// (don't need to record Token here since it's still part of tokenToEndpointMap until it's done leaving)</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>leavingEndpoints</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <comment type="line">// this is a cache of the calculation from {tokenToEndpointMap, bootstrapTokens, leavingEndpoints}</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>pendingRanges</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// nodes which are migrating to the new tokens in the ring</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>movingEndpoints</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// tokens which are migrating to new endpoints</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>relocatingTokens</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* Use this lock for manipulating the token map */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ReadWriteLock</name></type> <name>lock</name> <init>= <expr>new <call><name>ReentrantReadWriteLock</name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name><name>ArrayList</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>sortedTokens</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Topology</name></type> <name>topology</name></decl>;</decl_stmt>
+    <comment type="block">/* list of subscribers that are notified when the tokenToEndpointMap changed */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>CopyOnWriteArrayList</name><argument_list>&lt;<argument><name>AbstractReplicationStrategy</name></argument>&gt;</argument_list></name></type> <name>subscribers</name> <init>= <expr>new <call><name><name>CopyOnWriteArrayList</name><argument_list>&lt;<argument><name>AbstractReplicationStrategy</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>inetaddressCmp</name> <init>= <expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+    <block>{
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>o1</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>o2</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>o1</name>.<name>getAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>compareTo</name><argument_list>(<argument><expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>o2</name>.<name>getAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>TokenMetadata</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name><name>SortedBiMultiValMap</name>.</name>&lt;<name>Token</name></expr></argument>, <argument><expr><name>InetAddress</name>&gt;<call><name>create</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>inetaddressCmp</name></expr></argument>)</argument_list></call></expr></argument>,
+             <argument><expr><name><name>HashBiMap</name>.</name>&lt;<name>InetAddress</name></expr></argument>, <argument><expr><name>UUID</name>&gt;<call><name>create</name><argument_list>()</argument_list></call></expr></argument>,
+             <argument><expr>new <call><name>Topology</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>private</specifier> <name>TokenMetadata</name><parameter_list>(<param><decl><type><name><name>BiMultiValMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>tokenToEndpointMap</name></decl></param>, <param><decl><type><name><name>BiMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>UUID</name></argument>&gt;</argument_list></name></type> <name>endpointsMap</name></decl></param>, <param><decl><type><name>Topology</name></type> <name>topology</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>tokenToEndpointMap</name></name> = <name>tokenToEndpointMap</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>topology</name></name> = <name>topology</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>endpointToHostIdMap</name> = <name>endpointsMap</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>sortedTokens</name> = <call><name>sortTokens</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <name><name>ArrayList</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>sortTokens</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>tokenToEndpointMap</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** @return the number of nodes bootstrapping into source's primary range */</comment>
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>pendingRangeChanges</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>source</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>sourceRanges</name> <init>= <expr><call><name>getPrimaryRangesFor</name><argument_list>(<argument><expr><call><name>getTokens</name><argument_list>(<argument><expr><name>source</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <for>for (<init><decl><type><name>Token</name></type> <name>token</name> <range>: <expr><call><name><name>bootstrapTokens</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><name>sourceRanges</name></expr></range></decl></init>)
+                    <if>if <condition>(<expr><call><name><name>range</name>.<name>contains</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><name>n</name>++</expr>;</expr_stmt></then></if></for></for>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+        <return>return <expr><name>n</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Update token map with a single token/endpoint pair in normal state.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateNormalToken</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>updateNormalTokens</name><argument_list>(<argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateNormalTokens</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>tokens</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>endpointTokens</name> <init>= <expr><call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Token</name></type> <name>token</name> <range>: <expr><name>tokens</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>endpointTokens</name>.<name>put</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <expr_stmt><expr><call><name>updateNormalTokens</name><argument_list>(<argument><expr><name>endpointTokens</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Update token map with a set of token/endpoint pairs in normal state.
+     *
+     * Prefer this whenever there are multiple pairs to update, as each update (whether a single or multiple)
+     * is expensive (CASSANDRA-3831).
+     *
+     * @param endpointTokens
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateNormalTokens</name><parameter_list>(<param><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>endpointTokens</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>endpointTokens</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>boolean</name></type> <name>shouldSortTokens</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><call><name><name>endpointTokens</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>tokens</name> <init>= <expr><call><name><name>endpointTokens</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <assert>assert <expr><name>tokens</name> != null &amp;&amp; !<call><name><name>tokens</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+
+                <expr_stmt><expr><call><name><name>bootstrapTokens</name>.<name>removeValue</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>tokenToEndpointMap</name>.<name>removeValue</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>topology</name>.<name>addEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>leavingEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>removeFromMoving</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// also removing this endpoint from moving</comment>
+
+                <for>for (<init><decl><type><name>Token</name></type> <name>token</name> <range>: <expr><name>tokens</name></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>InetAddress</name></type> <name>prev</name> <init>= <expr><call><name><name>tokenToEndpointMap</name>.<name>put</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr>!<call><name><name>endpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><name>prev</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <if>if <condition>(<expr><name>prev</name> != null</expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Token " + <name>token</name> + " changing ownership from " + <name>prev</name> + " to " + <name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                        <expr_stmt><expr><name>shouldSortTokens</name> = true</expr>;</expr_stmt>
+                    }</block></then></if>
+                }</block></for>
+            }</block></for>
+
+            <if>if <condition>(<expr><name>shouldSortTokens</name></expr>)</condition><then>
+                <expr_stmt><expr><name>sortedTokens</name> = <call><name>sortTokens</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Store an end-point to host ID mapping.  Each ID must be unique, and
+     * cannot be changed after the fact.
+     *
+     * @param hostId
+     * @param endpoint
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateHostId</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>hostId</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>hostId</name> != null</expr>;</assert>
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>storedEp</name> <init>= <expr><call><name><name>endpointToHostIdMap</name>.<name>inverse</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>hostId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>storedEp</name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>storedEp</name>.<name>equals</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &amp;&amp; (<call><name><name>FailureDetector</name>.<name>instance</name>.<name>isAlive</name></name><argument_list>(<argument><expr><name>storedEp</name></expr></argument>)</argument_list></call>)</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Host ID collision between active endpoint %s and %s (id=%s)"</expr></argument>,
+                                                         <argument><expr><name>storedEp</name></expr></argument>,
+                                                         <argument><expr><name>endpoint</name></expr></argument>,
+                                                         <argument><expr><name>hostId</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>UUID</name></type> <name>storedId</name> <init>= <expr><call><name><name>endpointToHostIdMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>(<name>storedId</name> != null) &amp;&amp; (!<call><name><name>storedId</name>.<name>equals</name></name><argument_list>(<argument><expr><name>hostId</name></expr></argument>)</argument_list></call>)</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Changing {}'s host ID from {} to {}"</expr></argument>, <argument><expr>new <name><name>Object</name><index>[]</index></name> <block>{<expr><name>endpoint</name></expr>, <expr><name>storedId</name></expr>, <expr><name>hostId</name></expr>}</block></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name><name>endpointToHostIdMap</name>.<name>forcePut</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>hostId</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** Return the unique host ID for an end-point. */</comment>
+    <function><type><specifier>public</specifier> <name>UUID</name></type> <name>getHostId</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>endpointToHostIdMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** Return the end-point for a unique host ID */</comment>
+    <function><type><specifier>public</specifier> <name>InetAddress</name></type> <name>getEndpointForHostId</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>hostId</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>endpointToHostIdMap</name>.<name>inverse</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>hostId</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** @return a copy of the endpoint-to-id map for read-only operations */</comment>
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>UUID</name></argument>&gt;</argument_list></name></type> <name>getEndpointToHostIdMapForReading</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>UUID</name></argument>&gt;</argument_list></name></type> <name>readMap</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>UUID</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>readMap</name>.<name>putAll</name></name><argument_list>(<argument><expr><name>endpointToHostIdMap</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>readMap</name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Deprecated</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>addBootstrapToken</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>addBootstrapTokens</name><argument_list>(<argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addBootstrapTokens</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>tokens</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>tokens</name> != null &amp;&amp; !<call><name><name>tokens</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>oldEndpoint</name></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name>Token</name></type> <name>token</name> <range>: <expr><name>tokens</name></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><name>oldEndpoint</name> = <call><name><name>bootstrapTokens</name>.<name>get</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>oldEndpoint</name> != null &amp;&amp; !<call><name><name>oldEndpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Bootstrap Token collision between " + <name>oldEndpoint</name> + " and " + <name>endpoint</name> + " (token " + <name>token</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                <expr_stmt><expr><name>oldEndpoint</name> = <call><name><name>tokenToEndpointMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>oldEndpoint</name> != null &amp;&amp; !<call><name><name>oldEndpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Bootstrap Token collision between " + <name>oldEndpoint</name> + " and " + <name>endpoint</name> + " (token " + <name>token</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            }</block></for>
+
+            <expr_stmt><expr><call><name><name>bootstrapTokens</name>.<name>removeValue</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <for>for (<init><decl><type><name>Token</name></type> <name>token</name> <range>: <expr><name>tokens</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>bootstrapTokens</name>.<name>put</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>removeBootstrapTokens</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>tokens</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>tokens</name> != null &amp;&amp; !<call><name><name>tokens</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <for>for (<init><decl><type><name>Token</name></type> <name>token</name> <range>: <expr><name>tokens</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>bootstrapTokens</name>.<name>remove</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addLeavingEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>leavingEndpoints</name>.<name>add</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Add a new moving endpoint
+     * @param token token which is node moving to
+     * @param endpoint address of the moving node
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addMovingEndpoint</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>movingEndpoints</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>Pair</name>.<name>create</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Add new relocating ranges (tokens moving from their respective endpoints, to another).
+     * @param tokens tokens being moved
+     * @param endpoint destination of moves
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addRelocatingTokens</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>tokens</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+        <assert>assert <expr><name>tokens</name> != null &amp;&amp; <call><name><name>tokens</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <for>for (<init><decl><type><name>Token</name></type> <name>token</name> <range>: <expr><name>tokens</name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>InetAddress</name></type> <name>prev</name> <init>= <expr><call><name><name>relocatingTokens</name>.<name>put</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>prev</name> != null &amp;&amp; !<call><name><name>prev</name>.<name>equals</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Relocation of {} to {} overwrites previous to {}"</expr></argument>, <argument><expr>new <name><name>Object</name><index>[]</index></name><block>{<expr><name>token</name></expr>, <expr><name>endpoint</name></expr>, <expr><name>prev</name></expr>}</block></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></for>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>removeEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>bootstrapTokens</name>.<name>removeValue</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>tokenToEndpointMap</name>.<name>removeValue</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>topology</name>.<name>removeEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>leavingEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>endpointToHostIdMap</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>sortedTokens</name> = <call><name>sortTokens</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>invalidateCaches</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Remove pair of token/address from moving endpoints
+     * @param endpoint address of the moving node
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>removeFromMoving</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>pair</name> <range>: <expr><name>movingEndpoints</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>pair</name>.<name>right</name>.<name>equals</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>movingEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name>pair</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                }</block></then></if>
+            }</block></for>
+
+            <expr_stmt><expr><call><name>invalidateCaches</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Remove pair of token/address from relocating ranges.
+     * @param endpoint
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>removeFromRelocating</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+        <assert>assert <expr><name>token</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>previous</name> <init>= <expr><call><name><name>relocatingTokens</name>.<name>remove</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>previous</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Cannot remove {}, not found among the relocating (previously removed?)"</expr></argument>, <argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else <if>if <condition>(<expr>!<call><name><name>previous</name>.<name>equals</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(
+                        <argument><expr>"Removal of relocating token {} with mismatched endpoint ({} != {})"</expr></argument>,
+                        <argument><expr>new <name><name>Object</name><index>[]</index></name><block>{<expr><name>token</name></expr>, <expr><name>endpoint</name></expr>, <expr><name>previous</name></expr>}</block></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if></else></if>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>writeLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>getTokens</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+        <assert>assert <expr><call><name>isMember</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</assert> <comment type="line">// don't want to return nulls</comment>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <return>return <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>tokenToEndpointMap</name>.<name>inverse</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><annotation>@<name>Deprecated</name></annotation>
+    <specifier>public</specifier> <name>Token</name></type> <name>getToken</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getTokens</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isMember</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>tokenToEndpointMap</name>.<name>inverse</name></name><argument_list>()</argument_list></call>.<call><name>containsKey</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isLeaving</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>leavingEndpoints</name>.<name>contains</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isMoving</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>endpoint</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>pair</name> <range>: <expr><name>movingEndpoints</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>pair</name>.<name>right</name>.<name>equals</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return <expr>true</expr>;</return></then></if>
+            }</block></for>
+
+            <return>return <expr>false</expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isRelocating</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>token</name> != null</expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>relocatingTokens</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
+     * bootstrap tokens and leaving endpoints are not included in the copy.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>TokenMetadata</name></type> <name>cloneOnlyTokenMap</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <return>return <expr>new <call><name>TokenMetadata</name><argument_list>(<argument><expr><name><name>SortedBiMultiValMap</name>.</name>&lt;<name>Token</name></expr></argument>, <argument><expr><name>InetAddress</name>&gt;<call><name>create</name><argument_list>(<argument><expr><name>tokenToEndpointMap</name></expr></argument>, <argument><expr>null</expr></argument>, <argument><expr><name>inetaddressCmp</name></expr></argument>)</argument_list></call></expr></argument>,
+                                     <argument><expr><call><name><name>HashBiMap</name>.<name>create</name></name><argument_list>(<argument><expr><name>endpointToHostIdMap</name></expr></argument>)</argument_list></call></expr></argument>,
+                                     <argument><expr>new <call><name>Topology</name><argument_list>(<argument><expr><name>topology</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
+     * current leave operations have finished.
+     *
+     * @return new token metadata
+     */</comment>
+    <function><type><specifier>public</specifier> <name>TokenMetadata</name></type> <name>cloneAfterAllLeft</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>TokenMetadata</name></type> <name>allLeftMetadata</name> <init>= <expr><call><name>cloneOnlyTokenMap</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>leavingEndpoints</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>allLeftMetadata</name>.<name>removeEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+            <return>return <expr><name>allLeftMetadata</name></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
+     * current leave, move, and relocate operations have finished.
+     *
+     * @return new token metadata
+     */</comment>
+    <function><type><specifier>public</specifier> <name>TokenMetadata</name></type> <name>cloneAfterAllSettled</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>TokenMetadata</name></type> <name>metadata</name> <init>= <expr><call><name>cloneOnlyTokenMap</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>leavingEndpoints</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>metadata</name>.<name>removeEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+
+            <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>pair</name> <range>: <expr><name>movingEndpoints</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>metadata</name>.<name>updateNormalToken</name></name><argument_list>(<argument><expr><name><name>pair</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>pair</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></name></type> <name>relocating</name><range>: <expr><call><name><name>relocatingTokens</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>metadata</name>.<name>updateNormalToken</name></name><argument_list>(<argument><expr><call><name><name>relocating</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>relocating</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+            <return>return <expr><name>metadata</name></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>InetAddress</name></type> <name>getEndpoint</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>tokenToEndpointMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getPrimaryRangesFor</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>tokens</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>tokens</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Token</name></type> <name>right</name> <range>: <expr><name>tokens</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>ranges</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name>getPredecessor</name><argument_list>(<argument><expr><name>right</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>right</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>ranges</name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Deprecated</name></annotation>
+    <specifier>public</specifier> <name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>getPrimaryRangeFor</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>right</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getPrimaryRangesFor</name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>right</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>ArrayList</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>sortedTokens</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>sortedTokens</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getPendingRangesMM</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr><call><name><name>pendingRanges</name>.<name>get</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>map</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>map</name> = <call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>priorMap</name> <init>= <expr><call><name><name>pendingRanges</name>.<name>putIfAbsent</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>map</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>priorMap</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><name>map</name> = <name>priorMap</name></expr>;</expr_stmt></then></if>
+        }</block></then></if>
+        <return>return <expr><name>map</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** a mutable map may be returned but caller should not modify it */</comment>
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getPendingRanges</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getPendingRangesMM</name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>asMap</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getPendingRanges</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name>getPendingRangesMM</name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>entries</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>ranges</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+        <return>return <expr><name>ranges</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setPendingRanges</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>rangeMap</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>pendingRanges</name>.<name>put</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>rangeMap</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Token</name></type> <name>getPredecessor</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>List</name></type> <name>tokens</name> <init>= <expr><call><name>sortedTokens</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>index</name> <init>= <expr><call><name><name>Collections</name>.<name>binarySearch</name></name><argument_list>(<argument><expr><name>tokens</name></expr></argument>, <argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>index</name> &gt;= 0 : <name>token</name> + " not found in " + <call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><call><name><name>tokenToEndpointMap</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr>;</assert>
+        <return>return <expr><call>(<name>Token</name>) <argument_list>(<argument><expr><name>index</name> == 0 ? <call><name><name>tokens</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>tokens</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr></argument>)</argument_list></call> : <call><name><name>tokens</name>.<name>get</name></name><argument_list>(<argument><expr><name>index</name> - 1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Token</name></type> <name>getSuccessor</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>List</name></type> <name>tokens</name> <init>= <expr><call><name>sortedTokens</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>index</name> <init>= <expr><call><name><name>Collections</name>.<name>binarySearch</name></name><argument_list>(<argument><expr><name>tokens</name></expr></argument>, <argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>index</name> &gt;= 0 : <name>token</name> + " not found in " + <call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><call><name><name>tokenToEndpointMap</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr>;</assert>
+        <return>return <expr><call>(<name>Token</name>) <argument_list>(<argument><expr>(<name>index</name> == (<call><name><name>tokens</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1)) ? <call><name><name>tokens</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call> : <call><name><name>tokens</name>.<name>get</name></name><argument_list>(<argument><expr><name>index</name> + 1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** @return a copy of the bootstrapping tokens map */</comment>
+    <function><type><specifier>public</specifier> <name><name>BiMultiValMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getBootstrapTokens</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <return>return <expr>new <call><name><name>BiMultiValMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>bootstrapTokens</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getAllEndpoints</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>endpointToHostIdMap</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** caller should not modify leavingEndpoints */</comment>
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getLeavingEndpoints</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>leavingEndpoints</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Endpoints which are migrating to the new tokens
+     * @return set of addresses of moving endpoints
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getMovingEndpoints</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>movingEndpoints</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Ranges which are migrating to new endpoints.
+     * @return set of token-address pairs of relocating ranges
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getRelocatingRanges</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>relocatingTokens</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>firstTokenIndex</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>ArrayList</name></type> <name>ring</name></decl></param>, <param><decl><type><name>Token</name></type> <name>start</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>insertMin</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><call><name><name>ring</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>;</assert>
+        <comment type="line">// insert the minimum token (at index == -1) if we were asked to include it and it isn't a member of the ring</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr><call><name><name>Collections</name>.<name>binarySearch</name></name><argument_list>(<argument><expr><name>ring</name></expr></argument>, <argument><expr><name>start</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>i</name> &lt; 0</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>i</name> = (<name>i</name> + 1) * (-1)</expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>i</name> &gt;= <call><name><name>ring</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><name>i</name> = <name>insertMin</name> ? -1 : 0</expr>;</expr_stmt></then></if>
+        }</block></then></if>
+        <return>return <expr><name>i</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Token</name></type> <name>firstToken</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name><name>ArrayList</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>ring</name></decl></param>, <param><decl><type><name>Token</name></type> <name>start</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ring</name>.<name>get</name></name><argument_list>(<argument><expr><call><name>firstTokenIndex</name><argument_list>(<argument><expr><name>ring</name></expr></argument>, <argument><expr><name>start</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * iterator over the Tokens in the given ring, starting with the token for the node owning start
+     * (which does not have to be a Token in the ring)
+     * @param includeMin True if the minimum token should be returned in the ring even if it has no owner.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>ringIterator</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name><name>ArrayList</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>ring</name></decl></param>, <param><decl><type><name>Token</name></type> <name>start</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>includeMin</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>ring</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><name>includeMin</name> ? <call><name><name>Iterators</name>.<name>singletonIterator</name></name><argument_list>(<argument><expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getMinimumToken</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+                              : <name><name>Iterators</name>.</name>&lt;<name>Token</name>&gt;<call><name>emptyIterator</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+        <decl_stmt><decl><type><specifier>final</specifier> <name>boolean</name></type> <name>insertMin</name> <init>= <expr><name>includeMin</name> &amp;&amp; !<call><name><name>ring</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>.<call><name>isMinimum</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>int</name></type> <name>startIndex</name> <init>= <expr><call><name>firstTokenIndex</name><argument_list>(<argument><expr><name>ring</name></expr></argument>, <argument><expr><name>start</name></expr></argument>, <argument><expr><name>insertMin</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <class><super><name><name>AbstractIterator</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>j</name> <init>= <expr><name>startIndex</name></expr></init></decl>;</decl_stmt>
+            <function><type><specifier>protected</specifier> <name>Token</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><name>j</name> &lt; -1</expr>)</condition><then>
+                    <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+                <try>try
+                <block>{
+                    <comment type="line">// return minimum for index == -1</comment>
+                    <if>if <condition>(<expr><name>j</name> == -1</expr>)</condition><then>
+                        <return>return <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getMinimumToken</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+                    <comment type="line">// return ring token for other indexes</comment>
+                    <return>return <expr><call><name><name>ring</name>.<name>get</name></name><argument_list>(<argument><expr><name>j</name></expr></argument>)</argument_list></call></expr>;</return>
+                }</block>
+                <finally>finally
+                <block>{
+                    <expr_stmt><expr><name>j</name>++</expr>;</expr_stmt>
+                    <if>if <condition>(<expr><name>j</name> == <call><name><name>ring</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><name>j</name> = <name>insertMin</name> ? -1 : 0</expr>;</expr_stmt></then></if>
+                    <if>if <condition>(<expr><name>j</name> == <name>startIndex</name></expr>)</condition><then>
+                        <comment type="line">// end iteration</comment>
+                        <expr_stmt><expr><name>j</name> = -2</expr>;</expr_stmt></then></if>
+                }</block></finally></try>
+            }</block></function>
+        }</block></class></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** used by tests */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>clearUnsafe</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>bootstrapTokens</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>tokenToEndpointMap</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>topology</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>leavingEndpoints</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>pendingRanges</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>endpointToHostIdMap</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>invalidateCaches</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>eps</name> <init>= <expr><call><name><name>tokenToEndpointMap</name>.<name>inverse</name></name><argument_list>()</argument_list></call>.<call><name>keySet</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr>!<call><name><name>eps</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"Normal Tokens:"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"line.separator"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>InetAddress</name></type> <name>ep</name> <range>: <expr><name>eps</name></expr></range></decl></init>)
+                <block>{
+                    <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>":"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>tokenToEndpointMap</name>.<name>inverse</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"line.separator"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></then></if>
+
+            <if>if <condition>(<expr>!<call><name><name>bootstrapTokens</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"Bootstrapping Tokens:"</expr></argument> )</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"line.separator"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>bootstrapTokens</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>":"</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"line.separator"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></then></if>
+
+            <if>if <condition>(<expr>!<call><name><name>leavingEndpoints</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"Leaving Endpoints:"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"line.separator"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>InetAddress</name></type> <name>ep</name> <range>: <expr><name>leavingEndpoints</name></expr></range></decl></init>)
+                <block>{
+                    <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"line.separator"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></then></if>
+
+            <if>if <condition>(<expr>!<call><name><name>pendingRanges</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"Pending Ranges:"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"line.separator"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name>printPendingRanges</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>printPendingRanges</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>pendingRanges</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></name></type> <name>rmap</name> <range>: <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>entries</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>rmap</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>":"</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>rmap</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"line.separator"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></for>
+
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>printRelocatingRanges</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>relocatingTokens</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%s:%s%n"</expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>invalidateCaches</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>AbstractReplicationStrategy</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>invalidateCachedTokenEndpointValues</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>register</name><parameter_list>(<param><decl><type><name>AbstractReplicationStrategy</name></type> <name>subscriber</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>subscribers</name>.<name>add</name></name><argument_list>(<argument><expr><name>subscriber</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>unregister</name><parameter_list>(<param><decl><type><name>AbstractReplicationStrategy</name></type> <name>subscriber</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>subscribers</name>.<name>remove</name></name><argument_list>(<argument><expr><name>subscriber</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>pendingEndpointsFor</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>, <param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name> <init>= <expr><call><name>getPendingRanges</name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>ranges</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><call><name><name>Collections</name>.<name>emptyList</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>ranges</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>contains</name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>endpoints</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+
+        <return>return <expr><name>endpoints</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @deprecated retained for benefit of old tests
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getWriteEndpoints</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>, <param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>naturalEndpoints</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>Iterables</name>.<name>addAll</name></name><argument_list>(<argument><expr><name>endpoints</name></expr></argument>, <argument><expr><call><name><name>Iterables</name>.<name>concat</name></name><argument_list>(<argument><expr><name>naturalEndpoints</name></expr></argument>, <argument><expr><call><name>pendingEndpointsFor</name><argument_list>(<argument><expr><name>token</name></expr></argument>, <argument><expr><name>table</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>endpoints</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */</comment>
+    <function><type><specifier>public</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>getEndpointToTokenMapForReading</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>cloned</name> <init>= <expr><call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>tokenToEndpointMap</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>cloned</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <return>return <expr><name>cloned</name></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
+     *         in the cluster.
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getNormalAndBootstrappingTokenToEndpointMap</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>lock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>tokenToEndpointMap</name>.<name>size</name></name><argument_list>()</argument_list></call> + <call><name><name>bootstrapTokens</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>map</name>.<name>putAll</name></name><argument_list>(<argument><expr><name>tokenToEndpointMap</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>map</name>.<name>putAll</name></name><argument_list>(<argument><expr><name>bootstrapTokens</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>map</name></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>lock</name>.<name>readLock</name></name><argument_list>()</argument_list></call>.<call><name>unlock</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the Topology map of nodes to DCs + Racks
+     *
+     * This is only allowed when a copy has been made of TokenMetadata, to avoid concurrent modifications
+     * when Topology methods are subsequently used by the caller.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>Topology</name></type> <name>getTopology</name><parameter_list>()</parameter_list>
+    <block>{
+        <assert>assert <expr><name>this</name> != <call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call></expr>;</assert>
+        <return>return <expr><name>topology</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Tracks the assignment of racks and endpoints in each datacenter for all the "normal" endpoints
+     * in this TokenMetadata. This allows faster calculation of endpoints in NetworkTopologyStrategy.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>Topology</name>
+    <block>{
+        <comment type="block" format="javadoc">/** multi-map of DC to endpoints in that DC */</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>dcEndpoints</name></decl>;</decl_stmt>
+        <comment type="block" format="javadoc">/** map of DC to multi-map of rack to endpoints in that rack */</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>dcRacks</name></decl>;</decl_stmt>
+        <comment type="block" format="javadoc">/** reverse-lookup map for endpoint to current known dc/rack assignment */</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Pair</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>currentLocations</name></decl>;</decl_stmt>
+
+        <constructor><specifier>protected</specifier> <name>Topology</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>dcEndpoints</name> = <call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>dcRacks</name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>currentLocations</name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Pair</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>protected</specifier> <name>void</name></type> <name>clear</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>dcEndpoints</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>dcRacks</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>currentLocations</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * construct deep-copy of other
+         */</comment>
+        <constructor><specifier>protected</specifier> <name>Topology</name><parameter_list>(<param><decl><type><name>Topology</name></type> <name>other</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>dcEndpoints</name> = <call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>(<argument><expr><name><name>other</name>.<name>dcEndpoints</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>dcRacks</name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name>String</name></type> <name>dc</name> <range>: <expr><call><name><name>other</name>.<name>dcRacks</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>dcRacks</name>.<name>put</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>, <argument><expr><call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>(<argument><expr><call><name><name>other</name>.<name>dcRacks</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><name>currentLocations</name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Pair</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>other</name>.<name>currentLocations</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/**
+         * Stores current DC/rack assignment for ep
+         */</comment>
+        <function><type><specifier>protected</specifier> <name>void</name></type> <name>addEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>IEndpointSnitch</name></type> <name>snitch</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getEndpointSnitch</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>dc</name> <init>= <expr><call><name><name>snitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>rack</name> <init>= <expr><call><name><name>snitch</name>.<name>getRack</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>current</name> <init>= <expr><call><name><name>currentLocations</name>.<name>get</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>current</name> != null</expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>current</name>.<name>left</name>.<name>equals</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>current</name>.<name>right</name>.<name>equals</name></name><argument_list>(<argument><expr><name>rack</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return;</return></then></if>
+                <expr_stmt><expr><call><name><name>dcRacks</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>current</name>.<name>left</name></name></expr></argument>)</argument_list></call>.<call><name>remove</name><argument_list>(<argument><expr><name><name>current</name>.<name>right</name></name></expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>dcEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name><name>current</name>.<name>left</name></name></expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name><name>dcEndpoints</name>.<name>put</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr>!<call><name><name>dcRacks</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>dcRacks</name>.<name>put</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>, <argument><expr><name><name>HashMultimap</name>.</name>&lt;<name>String</name></expr></argument>, <argument><expr><name>InetAddress</name>&gt;<call><name>create</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>dcRacks</name>.<name>get</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>)</argument_list></call>.<call><name>put</name><argument_list>(<argument><expr><name>rack</name></expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>currentLocations</name>.<name>put</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><call><name><name>Pair</name>.<name>create</name></name><argument_list>(<argument><expr><name>dc</name></expr></argument>, <argument><expr><name>rack</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Removes current DC/rack assignment for ep
+         */</comment>
+        <function><type><specifier>protected</specifier> <name>void</name></type> <name>removeEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>currentLocations</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return;</return></then></if>
+            <decl_stmt><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>current</name> <init>= <expr><call><name><name>currentLocations</name>.<name>remove</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>dcEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name><name>current</name>.<name>left</name></name></expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>dcRacks</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>current</name>.<name>left</name></name></expr></argument>)</argument_list></call>.<call><name>remove</name><argument_list>(<argument><expr><name><name>current</name>.<name>right</name></name></expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * @return multi-map of DC to endpoints in that DC
+         */</comment>
+        <function><type><specifier>public</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getDatacenterEndpoints</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>dcEndpoints</name></expr>;</return>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * @return map of DC to multi-map of rack to endpoints in that rack
+         */</comment>
+        <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Multimap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getDatacenterRacks</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>dcRacks</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

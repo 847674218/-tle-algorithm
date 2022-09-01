@@ -1,0 +1,46 @@
+public void fetch()
+    {
+        latch = new CountDownLatch(toFetch.entries().size());
+
+        for (Map.Entry<String, Map.Entry<InetAddress, Collection<Range<Token>>>> entry : toFetch.entries())
+        {
+            final String table = entry.getKey();
+            final InetAddress source = entry.getValue().getKey();
+            final Collection<Range<Token>> ranges = entry.getValue().getValue();
+            /* Send messages to respective folks to stream data over to me */
+            IStreamCallback callback = new IStreamCallback()
+            {
+                public void onSuccess()
+                {
+                    completed.addAll(ranges);
+                    latch.countDown();
+                    if (logger.isDebugEnabled())
+                        logger.debug(String.format("Removed %s/%s as a %s source; remaining is %s",
+                                     source, table, opType, latch.getCount()));
+                }
+
+                public void onFailure()
+                {
+                    latch.countDown();
+                    logger.warn("Streaming from " + source + " failed");
+                }
+            };
+            if (logger.isDebugEnabled())
+                logger.debug("" + opType + "ing from " + source + " ranges " + StringUtils.join(ranges, ", "));
+            StreamIn.requestRanges(source, table, ranges, callback, opType);
+        }
+
+        try
+        {
+            latch.await();
+            for (Map.Entry<String, Map.Entry<InetAddress, Collection<Range<Token>>>> entry : toFetch.entries())
+            {
+                if (!completed.containsAll(entry.getValue().getValue()))
+                    throw new RuntimeException(String.format("Unable to fetch range %s for keyspace %s from any hosts", entry.getValue().getValue(), entry.getKey()));
+            }
+        }
+        catch (InterruptedException e)
+        {
+            throw new AssertionError(e);
+        }
+    }

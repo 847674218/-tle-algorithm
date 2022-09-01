@@ -1,0 +1,56 @@
+protected Map<ByteBuffer, ColumnGroupMap> readRows(List<ByteBuffer> keys, ColumnNameBuilder builder, Set<ByteBuffer> toRead, CompositeType composite, boolean local, ConsistencyLevel cl)
+    throws RequestExecutionException, RequestValidationException
+    {
+        try
+        {
+            cl.validateForRead(keyspace());
+        }
+        catch (InvalidRequestException e)
+        {
+            throw new InvalidRequestException(String.format("Write operation require a read but consistency %s is not supported on reads", cl));
+        }
+
+        ColumnSlice[] slices = new ColumnSlice[toRead.size()];
+        int i = 0;
+        for (ByteBuffer name : toRead)
+        {
+            ByteBuffer start = builder.copy().add(name).build();
+            ByteBuffer finish = builder.copy().add(name).buildAsEndOfRange();
+            slices[i++] = new ColumnSlice(start, finish);
+        }
+
+        List<ReadCommand> commands = new ArrayList<ReadCommand>(keys.size());
+        for (ByteBuffer key : keys)
+            commands.add(new SliceFromReadCommand(keyspace(),
+                                                  key,
+                                                  new QueryPath(columnFamily()),
+                                                  new SliceQueryFilter(slices, false, Integer.MAX_VALUE)));
+
+        try
+        {
+            List<Row> rows = local
+                           ? SelectStatement.readLocally(keyspace(), commands)
+                           : StorageProxy.read(commands, cl);
+
+            Map<ByteBuffer, ColumnGroupMap> map = new HashMap<ByteBuffer, ColumnGroupMap>();
+            for (Row row : rows)
+            {
+                if (row.cf == null || row.cf.isEmpty())
+                    continue;
+
+                ColumnGroupMap.Builder groupBuilder = new ColumnGroupMap.Builder(composite, true);
+                for (IColumn column : row.cf)
+                    groupBuilder.add(column);
+
+                List<ColumnGroupMap> groups = groupBuilder.groups();
+                assert groups.isEmpty() || groups.size() == 1;
+                if (!groups.isEmpty())
+                    map.put(row.key.key, groups.get(0));
+            }
+            return map;
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+    }

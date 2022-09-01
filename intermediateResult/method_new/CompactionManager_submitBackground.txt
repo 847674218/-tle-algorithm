@@ -1,0 +1,23 @@
+public List<Future<?>> submitBackground(final ColumnFamilyStore cfs)
+    {
+        int count = compactingCF.count(cfs);
+        if (count > 0 && executor.getActiveCount() >= executor.getMaximumPoolSize())
+        {
+            logger.debug("Background compaction is still running for {}.{} ({} remaining). Skipping",
+                         new Object[] {cfs.table.name, cfs.columnFamily, count});
+            return Collections.emptyList();
+        }
+
+        logger.debug("Scheduling a background task check for {}.{} with {}",
+                     new Object[] {cfs.table.name,
+                                   cfs.columnFamily,
+                                   cfs.getCompactionStrategy().getClass().getSimpleName()});
+        List<Future<?>> futures = new ArrayList<Future<?>>();
+        // if we have room for more compactions, then fill up executor
+        while (executor.getActiveCount() + futures.size() < executor.getMaximumPoolSize())
+        {
+            futures.add(executor.submit(new BackgroundCompactionTask(cfs)));
+            compactingCF.add(cfs);
+        }
+        return futures;
+    }

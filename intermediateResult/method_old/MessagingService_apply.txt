@@ -1,0 +1,34 @@
+public Object apply(Pair<String, CallbackInfo> pair)
+            {
+                CallbackInfo expiredCallbackInfo = pair.right;
+                maybeAddLatency(expiredCallbackInfo.callback, expiredCallbackInfo.target, (double) DatabaseDescriptor.getRpcTimeout());
+                totalTimeouts++;
+                String ip = expiredCallbackInfo.target.getHostAddress();
+                AtomicLong c = timeoutsPerHost.get(ip);
+                if (c == null)
+                {
+                    c = new AtomicLong();
+                    timeoutsPerHost.put(ip, c);
+                }
+                c.incrementAndGet();
+                // we only create AtomicLong instances here, so that the write
+                // access to the hashmap happens single-threadedly.
+                if (recentTimeoutsPerHost.get(ip) == null)
+                    recentTimeoutsPerHost.put(ip, new AtomicLong());
+
+                if (expiredCallbackInfo.shouldHint())
+                {
+                    assert expiredCallbackInfo.message != null;
+                    try
+                    {
+                        RowMutation rm = RowMutation.fromBytes(expiredCallbackInfo.message.getMessageBody(), expiredCallbackInfo.message.getVersion());
+                        return StorageProxy.scheduleLocalHint(rm, expiredCallbackInfo.target, null, null);
+                    }
+                    catch (IOException e)
+                    {
+                        logger_.error("Unable to deserialize mutation when writting hint for: " + expiredCallbackInfo.target);
+                    }
+                }
+
+                return null;
+            }

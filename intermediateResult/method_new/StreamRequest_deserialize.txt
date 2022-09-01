@@ -1,0 +1,27 @@
+public StreamRequest deserialize(DataInput dis, int version) throws IOException
+        {
+            UUID sessionId = UUIDSerializer.serializer.deserialize(dis, MessagingService.current_version);
+            InetAddress target = CompactEndpointSerializationHelper.deserialize(dis);
+            boolean singleFile = dis.readBoolean();
+            if (singleFile)
+            {
+                PendingFile file = PendingFile.serializer.deserialize(dis, version);
+                return new StreamRequest(target, file, sessionId);
+            }
+            else
+            {
+                String table = dis.readUTF();
+                int size = dis.readInt();
+                List<Range<Token>> ranges = (size == 0) ? null : new ArrayList<Range<Token>>(size);
+                for (int i = 0; i < size; ++i)
+                    ranges.add((Range<Token>) AbstractBounds.serializer.deserialize(dis, version).toTokenBounds());
+                OperationType type = OperationType.valueOf(dis.readUTF());
+
+                List<ColumnFamilyStore> stores = new ArrayList<ColumnFamilyStore>();
+                int cfsSize = dis.readInt();
+                for (int i = 0; i < cfsSize; ++i)
+                    stores.add(Table.open(table).getColumnFamilyStore(ColumnFamily.serializer.deserializeCfId(dis, version)));
+
+                return new StreamRequest(target, ranges, table, stores, sessionId, type);
+            }
+        }

@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\streaming\IncomingStreamReader.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetSocketAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>Socket</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Throwables</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamily</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DecoratedKey</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionController</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>PrecompactedRow</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IColumnSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>metrics</name>.<name>StreamingMetrics</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>OutboundTcpConnection</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>compress</name>.<name>CompressedInputStream</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>BytesReadTracker</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+<import>import <name><name>com</name>.<name>ning</name>.<name>compress</name>.<name>lzf</name>.<name>LZFInputStream</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>IncomingStreamReader</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>IncomingStreamReader</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>PendingFile</name></type> <name>localFile</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>PendingFile</name></type> <name>remoteFile</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>StreamInSession</name></type> <name>session</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>InputStream</name></type> <name>underliningStream</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>StreamingMetrics</name></type> <name>metrics</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>IncomingStreamReader</name><parameter_list>(<param><decl><type><name>StreamHeader</name></type> <name>header</name></decl></param>, <param><decl><type><name>Socket</name></type> <name>socket</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>socket</name>.<name>setSoTimeout</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getStreamingSocketTimeout</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>host</name> <init>= <expr>((<name>InetSocketAddress</name>)<call><name><name>socket</name>.<name>getRemoteSocketAddress</name></name><argument_list>()</argument_list></call>).<call><name>getAddress</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>header</name>.<name>pendingFiles</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> &amp;&amp; <name><name>header</name>.<name>file</name></name> != null</expr>)</condition><then>
+        <block>{
+            <comment type="line">// StreamInSession should be created already when receiving 2nd and after files</comment>
+            <if>if <condition>(<expr>!<call><name><name>StreamInSession</name>.<name>hasSession</name></name><argument_list>(<argument><expr><name><name>header</name>.<name>sessionId</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>StreamReply</name></type> <name>reply</name> <init>= <expr>new <call><name>StreamReply</name><argument_list>(<argument><expr>""</expr></argument>, <argument><expr><name><name>header</name>.<name>sessionId</name></name></expr></argument>, <argument><expr><name><name>StreamReply</name>.<name>Status</name>.<name>SESSION_FAILURE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>OutboundTcpConnection</name>.<name>write</name></name><argument_list>(<argument><expr><call><name><name>reply</name>.<name>createMessage</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                            <argument><expr><call><name><name>header</name>.<name>sessionId</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                            <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                            <argument><expr>new <call><name>DataOutputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getOutputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+                                            <argument><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getVersion</name><argument_list>(<argument><expr><name>host</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Session " + <name><name>header</name>.<name>sessionId</name></name> + " already closed."</expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+        }</block></then></if>
+        <expr_stmt><expr><name>session</name> = <call><name><name>StreamInSession</name>.<name>get</name></name><argument_list>(<argument><expr><name>host</name></expr></argument>, <argument><expr><name><name>header</name>.<name>sessionId</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>session</name>.<name>setSocket</name></name><argument_list>(<argument><expr><name>socket</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>session</name>.<name>addFiles</name></name><argument_list>(<argument><expr><name><name>header</name>.<name>pendingFiles</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// set the current file we are streaming so progress shows up in jmx</comment>
+        <expr_stmt><expr><call><name><name>session</name>.<name>setCurrentFile</name></name><argument_list>(<argument><expr><name><name>header</name>.<name>file</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>session</name>.<name>setTable</name></name><argument_list>(<argument><expr><name><name>header</name>.<name>table</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// pendingFile gets the new context for the local node.</comment>
+        <expr_stmt><expr><name>remoteFile</name> = <name><name>header</name>.<name>file</name></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>localFile</name> = <name>remoteFile</name> != null ? <call><name><name>StreamIn</name>.<name>getContextMapping</name></name><argument_list>(<argument><expr><name>remoteFile</name></expr></argument>)</argument_list></call> : null</expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>remoteFile</name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name><name>remoteFile</name>.<name>compressionInfo</name></name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>underliningStream</name> = new <call><name>LZFInputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getInputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><name>underliningStream</name> = new <call><name>CompressedInputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getInputStream</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>remoteFile</name>.<name>compressionInfo</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name>underliningStream</name> = null</expr>;</expr_stmt>
+        }</block></else></if>
+        <expr_stmt><expr><name>metrics</name> = <call><name><name>StreamingMetrics</name>.<name>get</name></name><argument_list>(<argument><expr><name>host</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * @throws IOException if reading the remote sstable fails. Will throw an RTE if local write fails.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>read</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>remoteFile</name> != null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Receiving stream"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Creating file for {} with {} estimated keys"</expr></argument>,
+                             <argument><expr><call><name><name>localFile</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>,
+                             <argument><expr><name><name>remoteFile</name>.<name>estimatedKeys</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <assert>assert <expr><name><name>remoteFile</name>.<name>estimatedKeys</name></name> &gt; 0</expr>;</assert>
+            <decl_stmt><decl><type><name>DataInput</name></type> <name>dis</name> <init>= <expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr><name>underliningStream</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <decl_stmt><decl><type><name>SSTableReader</name></type> <name>reader</name> <init>= <expr><call><name>streamIn</name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>localFile</name></expr></argument>, <argument><expr><name>remoteFile</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>session</name>.<name>finished</name></name><argument_list>(<argument><expr><name>remoteFile</name></expr></argument>, <argument><expr><name>reader</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>ex</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>retry</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <throw>throw <expr><name>ex</name></expr>;</throw>
+            }</block></catch></try>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>session</name>.<name>closeIfFinished</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @throws IOException if reading the remote sstable fails. Will throw an RTE if local write fails.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>SSTableReader</name></type> <name>streamIn</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>input</name></decl></param>, <param><decl><type><name>PendingFile</name></type> <name>localFile</name></decl></param>, <param><decl><type><name>PendingFile</name></type> <name>remoteFile</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>localFile</name>.<name>desc</name>.<name>ksname</name></name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name><name>localFile</name>.<name>desc</name>.<name>cfname</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>key</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SSTableWriter</name></type> <name>writer</name> <init>= <expr>new <call><name>SSTableWriter</name><argument_list>(<argument><expr><call><name><name>localFile</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>remoteFile</name>.<name>estimatedKeys</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>CompactionController</name></type> <name>controller</name> <init>= <expr>new <call><name>CompactionController</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MIN_VALUE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>BytesReadTracker</name></type> <name>in</name> <init>= <expr>new <call><name>BytesReadTracker</name><argument_list>(<argument><expr><name>input</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>totalBytesRead</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Long</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>section</name> <range>: <expr><name><name>localFile</name>.<name>sections</name></name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>length</name> <init>= <expr><name><name>section</name>.<name>right</name></name> - <name><name>section</name>.<name>left</name></name></expr></init></decl>;</decl_stmt>
+                <comment type="line">// skip to beginning of section inside chunk</comment>
+                <if>if <condition>(<expr><name><name>remoteFile</name>.<name>compressionInfo</name></name> != null</expr>)</condition><then>
+                    <expr_stmt><expr>((<name>CompressedInputStream</name>) <name>underliningStream</name>).<call><name>position</name><argument_list>(<argument><expr><name><name>section</name>.<name>left</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <decl_stmt><decl><type><name>long</name></type> <name>bytesRead</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <while>while <condition>(<expr><name>bytesRead</name> &lt; <name>length</name></expr>)</condition>
+                <block>{
+                    <expr_stmt><expr><call><name><name>in</name>.<name>reset</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>key</name> = <call><name><name>SSTableReader</name>.<name>decodeKey</name></name><argument_list>(<argument><expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>localFile</name>.<name>desc</name></name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>readWithShortLength</name></name><argument_list>(<argument><expr><name>in</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <decl_stmt><decl><type><name>long</name></type> <name>dataSize</name> <init>= <expr><call><name><name>SSTableReader</name>.<name>readRowSize</name></name><argument_list>(<argument><expr><name>in</name></expr></argument>, <argument><expr><name><name>localFile</name>.<name>desc</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <if>if <condition>(<expr><call><name><name>cfs</name>.<name>containsCachedRow</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call> &amp;&amp; <name><name>remoteFile</name>.<name>type</name></name> == <name><name>OperationType</name>.<name>AES</name></name> &amp;&amp; <name>dataSize</name> &lt;= <call><name><name>DatabaseDescriptor</name>.<name>getInMemoryCompactionLimit</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <comment type="line">// need to update row cache</comment>
+                        <comment type="line">// Note: Because we won't just echo the columns, there is no need to use the PRESERVE_SIZE flag, contrarily to what appendFromStream does below</comment>
+                        <decl_stmt><decl><type><name>SSTableIdentityIterator</name></type> <name>iter</name> <init>= <expr>new <call><name>SSTableIdentityIterator</name><argument_list>(<argument><expr><name><name>cfs</name>.<name>metadata</name></name></expr></argument>, <argument><expr><name>in</name></expr></argument>, <argument><expr><call><name><name>localFile</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>dataSize</name></expr></argument>, <argument><expr><name><name>IColumnSerializer</name>.<name>Flag</name>.<name>FROM_REMOTE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <decl_stmt><decl><type><name>PrecompactedRow</name></type> <name>row</name> <init>= <expr>new <call><name>PrecompactedRow</name><argument_list>(<argument><expr><name>controller</name></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <comment type="line">// We don't expire anything so the row shouldn't be empty</comment>
+                        <assert>assert <expr>!<call><name><name>row</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+                        <expr_stmt><expr><call><name><name>writer</name>.<name>append</name></name><argument_list>(<argument><expr><name>row</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                        <comment type="line">// update cache</comment>
+                        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>row</name>.<name>getFullColumnFamily</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <expr_stmt><expr><call><name><name>cfs</name>.<name>maybeUpdateRowCache</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then>
+                    <else>else
+                    <block>{
+                        <expr_stmt><expr><call><name><name>writer</name>.<name>appendFromStream</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name><name>cfs</name>.<name>metadata</name></name></expr></argument>, <argument><expr><name>dataSize</name></expr></argument>, <argument><expr><name>in</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>cfs</name>.<name>invalidateCachedRow</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></else></if>
+
+                    <expr_stmt><expr><name>bytesRead</name> += <call><name><name>in</name>.<name>getBytesRead</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <comment type="line">// when compressed, report total bytes of compressed chunks read since remoteFile.size is the sum of chunks transferred</comment>
+                    <if>if <condition>(<expr><name><name>remoteFile</name>.<name>compressionInfo</name></name> != null</expr>)</condition><then>
+                        <expr_stmt><expr><name><name>remoteFile</name>.<name>progress</name></name> = ((<name>CompressedInputStream</name>) <name>underliningStream</name>).<call><name>getTotalCompressedBytesRead</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then>
+                    <else>else
+                        <expr_stmt><expr><name><name>remoteFile</name>.<name>progress</name></name> += <call><name><name>in</name>.<name>getBytesRead</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></else></if>
+                    <expr_stmt><expr><name>totalBytesRead</name> += <call><name><name>in</name>.<name>getBytesRead</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></while>
+            }</block></for>
+            <expr_stmt><expr><call><name><name>StreamingMetrics</name>.<name>totalIncomingBytes</name>.<name>inc</name></name><argument_list>(<argument><expr><name>totalBytesRead</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>metrics</name>.<name>incomingBytes</name>.<name>inc</name></name><argument_list>(<argument><expr><name>totalBytesRead</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><call><name><name>writer</name>.<name>closeAndOpenReader</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>writer</name>.<name>abort</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>e</name> instanceof <name>IOException</name></expr>)</condition><then>
+                <throw>throw <expr>(<name>IOException</name>) <name>e</name></expr>;</throw></then>
+            <else>else
+                <throw>throw <expr><call><name><name>Throwables</name>.<name>propagate</name></name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw></else></if>
+        }</block></catch>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>controller</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>retry</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="block">/* Ask the source node to re-stream this file. */</comment>
+        <expr_stmt><expr><call><name><name>session</name>.<name>retry</name></name><argument_list>(<argument><expr><name>remoteFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="block">/* Delete the orphaned file. */</comment>
+        <if>if <condition>(<expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>localFile</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>isFile</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>deleteWithConfirm</name></name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>localFile</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+}</block></class>
+</unit>

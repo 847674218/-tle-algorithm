@@ -1,0 +1,28 @@
+public void deleteHintsForEndpoint(final InetAddress endpoint)
+    {
+        if (!StorageService.instance.getTokenMetadata().isMember(endpoint))
+            return;
+        Token<?> token = StorageService.instance.getTokenMetadata().getToken(endpoint);
+        ByteBuffer tokenBytes = StorageService.getPartitioner().getTokenFactory().toByteArray(token);
+        final RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, tokenBytes);
+        rm.delete(new QueryPath(HINTS_CF), System.currentTimeMillis());
+
+        // execute asynchronously to avoid blocking caller (which may be processing gossip)
+        Runnable runnable = new Runnable()
+        {
+            public void run()
+            {
+                try
+                {
+                    logger_.info("Deleting any stored hints for " + endpoint);
+                    rm.apply();
+                    compact();
+                }
+                catch (Exception e)
+                {
+                    logger_.warn("Could not delete hints for " + endpoint + ": " + e);
+                }
+            }
+        };
+        StorageService.optionalTasks.execute(runnable);
+    }

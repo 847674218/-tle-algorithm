@@ -1,0 +1,66 @@
+public Future<?> submitUserDefined(final ColumnFamilyStore cfs, final Collection<Descriptor> dataFiles, final int gcBefore)
+    {
+        Runnable runnable = new WrappedRunnable()
+        {
+            protected void runMayThrow() throws IOException
+            {
+                compactionLock.readLock().lock();
+                try
+                {
+                    // look up the sstables now that we're on the compaction executor, so we don't try to re-compact
+                    // something that was already being compacted earlier.
+                    Collection<SSTableReader> sstables = new ArrayList<SSTableReader>(dataFiles.size());
+                    for (Descriptor desc : dataFiles)
+                    {
+                        // inefficient but not in a performance sensitive path
+                        SSTableReader sstable = lookupSSTable(cfs, desc);
+                        if (sstable == null)
+                        {
+                            logger.info("Will not compact {}: it is not an active sstable", desc);
+                        }
+                        else
+                        {
+                            sstables.add(sstable);
+                        }
+                    }
+
+                    Collection<SSTableReader> toCompact;
+                    try
+                    {
+                        if (sstables.isEmpty())
+                        {
+                            logger.info("No file to compact for user defined compaction");
+                        }
+                        // attempt to schedule the set
+                        else if ((toCompact = cfs.getDataTracker().markCompacting(sstables, 1, Integer.MAX_VALUE)) != null)
+                        {
+                            // success: perform the compaction
+                            try
+                            {
+                                AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
+                                AbstractCompactionTask task = strategy.getUserDefinedTask(toCompact, gcBefore);
+                                task.execute(executor);
+                            }
+                            finally
+                            {
+                                cfs.getDataTracker().unmarkCompacting(toCompact);
+                            }
+                        }
+                        else
+                        {
+                            logger.info("SSTables for user defined compaction are already being compacted.");
+                        }
+                    }
+                    finally
+                    {
+                        SSTableReader.releaseReferences(sstables);
+                    }
+                }
+                finally
+                {
+                    compactionLock.readLock().unlock();
+                }
+            }
+        };
+        return executor.submit(runnable);
+    }

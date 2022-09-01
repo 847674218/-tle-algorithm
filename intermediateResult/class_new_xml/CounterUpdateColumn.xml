@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\CounterUpdateColumn.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>context</name>.<name>CounterContext</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Allocator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>HeapAllocator</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * A counter update while it hasn't been applied yet by the leader replica.
+ *
+ * Contains a single counter update. When applied by the leader replica, this
+ * is transformed to a relevant CounterColumn. This Column is a temporary data
+ * structure that should never be stored inside a memtable or an sstable.
+ */</comment>
+<class><specifier>public</specifier> class <name>CounterUpdateColumn</name> <super><extends>extends <name>Column</name></extends></super>
+<block>{
+    <constructor><specifier>public</specifier> <name>CounterUpdateColumn</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>, <param><decl><type><name>long</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>CounterUpdateColumn</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>value</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>value</name></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>delta</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>value</name><argument_list>()</argument_list></call>.<call><name>getLong</name><argument_list>(<argument><expr><call><name>value</name><argument_list>()</argument_list></call>.<call><name>position</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>IColumn</name></type> <name>diff</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>column</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// Diff is used during reads, but we should never read those columns</comment>
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"This operation is unsupported on CounterUpdateColumn."</expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>IColumn</name></type> <name>reconcile</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>column</name></decl></param>, <param><decl><type><name>Allocator</name></type> <name>allocator</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// The only time this could happen is if a batchAdd ships two</comment>
+        <comment type="line">// increment for the same column. Hence we simply sums the delta.</comment>
+
+        <assert>assert <expr>(<name>column</name> instanceof <name>CounterUpdateColumn</name>) || (<name>column</name> instanceof <name>DeletedColumn</name>) : "Wrong class type."</expr>;</assert>
+
+        <comment type="line">// tombstones take precedence</comment>
+        <if>if <condition>(<expr><call><name><name>column</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><call><name>timestamp</name><argument_list>()</argument_list></call> &gt; <call><name><name>column</name>.<name>timestamp</name></name><argument_list>()</argument_list></call> ? <name>this</name> : <name>column</name></expr>;</return></then></if>
+
+        <comment type="line">// neither is tombstoned</comment>
+        <decl_stmt><decl><type><name>CounterUpdateColumn</name></type> <name>c</name> <init>= <expr>(<name>CounterUpdateColumn</name>)<name>column</name></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name>CounterUpdateColumn</name><argument_list>(<argument><expr><call><name>name</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>delta</name><argument_list>()</argument_list></call> + <call><name><name>c</name>.<name>delta</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><call><name>timestamp</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>c</name>.<name>timestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>int</name></type> <name>serializationFlags</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>ColumnSerializer</name>.<name>COUNTER_UPDATE_MASK</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>CounterColumn</name></type> <name>localCopy</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>CounterColumn</name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>internOrCopy</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>HeapAllocator</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                 <argument><expr><call><name><name>CounterContext</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>create</name><argument_list>(<argument><expr><call><name>delta</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>HeapAllocator</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                 <argument><expr><call><name>timestamp</name><argument_list>()</argument_list></call></expr></argument>,
+                                 <argument><expr><name><name>Long</name>.<name>MIN_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>IColumn</name></type> <name>localCopy</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>Allocator</name></type> <name>allocator</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>CounterColumn</name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>internOrCopy</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>allocator</name></expr></argument>)</argument_list></call></expr></argument>,
+                                 <argument><expr><call><name><name>CounterContext</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>create</name><argument_list>(<argument><expr><call><name>delta</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>allocator</name></expr></argument>)</argument_list></call></expr></argument>,
+                                 <argument><expr><call><name>timestamp</name><argument_list>()</argument_list></call></expr></argument>,
+                                 <argument><expr><name><name>Long</name>.<name>MIN_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

@@ -1,0 +1,46 @@
+public Row resolve() throws DigestMismatchException, IOException
+    {
+        if (logger.isDebugEnabled())
+            logger.debug("resolving " + replies.size() + " responses");
+        long startTime = System.currentTimeMillis();
+
+        ColumnFamily resolved;
+        if (replies.size() > 1)
+        {
+            List<ColumnFamily> versions = new ArrayList<ColumnFamily>(replies.size());
+            List<InetAddress> endpoints = new ArrayList<InetAddress>(replies.size());
+
+            for (Map.Entry<Message, ReadResponse> entry : replies.entrySet())
+            {
+                Message message = entry.getKey();
+                ReadResponse response = entry.getValue();
+                ColumnFamily cf = response.row().cf;
+                assert !response.isDigestQuery() : "Received digest response to repair read from " + entry.getKey().getFrom();
+                versions.add(cf);
+                endpoints.add(message.getFrom());
+
+                // compute maxLiveColumns to prevent short reads -- see https://issues.apache.org/jira/browse/CASSANDRA-2643
+                int liveColumns = cf == null ? 0 : cf.getLiveColumnCount();
+                if (liveColumns > maxLiveColumns)
+                    maxLiveColumns = liveColumns;
+            }
+
+            resolved = resolveSuperset(versions);
+            if (logger.isDebugEnabled())
+                logger.debug("versions merged");
+
+            // send updates to any replica that was missing part of the full row
+            // (resolved can be null even if versions doesn't have all nulls because of the call to removeDeleted in resolveSuperSet)
+            if (resolved != null)
+                repairResults = scheduleRepairs(resolved, table, key, versions, endpoints);
+        }
+        else
+        {
+            resolved = replies.values().iterator().next().row().cf;
+        }
+
+        if (logger.isDebugEnabled())
+            logger.debug("resolve: " + (System.currentTimeMillis() - startTime) + " ms.");
+
+        return new Row(key, resolved);
+    }

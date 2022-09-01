@@ -1,0 +1,130 @@
+public ByteBuffer merge(ByteBuffer left, ByteBuffer right, Allocator allocator)
+    {
+        ContextState leftState = new ContextState(left, headerLength(left));
+        ContextState rightState = new ContextState(right, headerLength(right));
+
+        // Compute size of result
+        int mergedHeaderLength = HEADER_SIZE_LENGTH;
+        int mergedBodyLength = 0;
+
+        while (leftState.hasRemaining() && rightState.hasRemaining())
+        {
+            int cmp = leftState.compareIdTo(rightState);
+            if (cmp == 0)
+            {
+                mergedBodyLength += STEP_LENGTH;
+                if (leftState.isDelta() || rightState.isDelta())
+                    mergedHeaderLength += HEADER_ELT_LENGTH;
+                leftState.moveToNext();
+                rightState.moveToNext();
+            }
+            else if (cmp > 0)
+            {
+                mergedBodyLength += STEP_LENGTH;
+                if (rightState.isDelta())
+                    mergedHeaderLength += HEADER_ELT_LENGTH;
+                rightState.moveToNext();
+            }
+            else // cmp < 0
+            {
+                mergedBodyLength += STEP_LENGTH;
+                if (leftState.isDelta())
+                    mergedHeaderLength += HEADER_ELT_LENGTH;
+                leftState.moveToNext();
+            }
+        }
+        mergedHeaderLength += leftState.remainingHeaderLength() + rightState.remainingHeaderLength();
+        mergedBodyLength += leftState.remainingBodyLength() + rightState.remainingBodyLength();
+
+        // Do the actual merge
+        ByteBuffer merged = allocator.allocate(mergedHeaderLength + mergedBodyLength);
+        merged.putShort(merged.position(), (short) ((mergedHeaderLength - HEADER_SIZE_LENGTH) / HEADER_ELT_LENGTH));
+        ContextState mergedState = new ContextState(merged, mergedHeaderLength);
+        leftState.reset();
+        rightState.reset();
+        while (leftState.hasRemaining() && rightState.hasRemaining())
+        {
+            int cmp = leftState.compareIdTo(rightState);
+            if (cmp == 0)
+            {
+                if (leftState.isDelta() || rightState.isDelta())
+                {
+                    // Local id and at least one is a delta
+                    if (leftState.isDelta() && rightState.isDelta())
+                    {
+                        // both delta, sum
+                        long clock = leftState.getClock() + rightState.getClock();
+                        long count = leftState.getCount() + rightState.getCount();
+                        mergedState.writeElement(leftState.getCounterId(), clock, count, true);
+                    }
+                    else
+                    {
+                        // Only one have delta, keep that one
+                        (leftState.isDelta() ? leftState : rightState).copyTo(mergedState);
+                    }
+                }
+                else
+                {
+                    long leftClock = leftState.getClock();
+                    long rightClock = rightState.getClock();
+
+                    if (leftClock == rightClock)
+                    {
+                        // We should never see non-delta shards w/ same id+clock but different counts. However, if we do
+                        // we should "heal" the problem by being deterministic in our selection of shard - and
+                        // log the occurrence so that the operator will know something is wrong.
+                        long leftCount = leftState.getCount();
+                        long rightCount = rightState.getCount();
+
+                        if (leftCount != rightCount && CompactionManager.isCompactionManager.get())
+                        {
+                            logger.warn("invalid counter shard detected; ({}, {}, {}) and ({}, {}, {}) differ only in "
+                                        + "count; will pick highest to self-heal on compaction",
+                                        leftState.getCounterId(), leftClock, leftCount, rightState.getCounterId(), rightClock, rightCount);
+                        }
+
+                        if (leftCount > rightCount)
+                        {
+                            leftState.copyTo(mergedState);
+                        }
+                        else
+                        {
+                            rightState.copyTo(mergedState);
+                        }
+                    }
+                    else
+                    {
+                        if ((leftClock >= 0 && rightClock > 0 && leftClock >= rightClock)
+                                || (leftClock < 0 && (rightClock > 0 || leftClock < rightClock)))
+                            leftState.copyTo(mergedState);
+                        else
+                            rightState.copyTo(mergedState);
+                    }
+                }
+                rightState.moveToNext();
+                leftState.moveToNext();
+            }
+            else if (cmp > 0)
+            {
+                rightState.copyTo(mergedState);
+                rightState.moveToNext();
+            }
+            else // cmp < 0
+            {
+                leftState.copyTo(mergedState);
+                leftState.moveToNext();
+            }
+        }
+        while (leftState.hasRemaining())
+        {
+            leftState.copyTo(mergedState);
+            leftState.moveToNext();
+        }
+        while (rightState.hasRemaining())
+        {
+            rightState.copyTo(mergedState);
+            rightState.moveToNext();
+        }
+
+        return merged;
+    }

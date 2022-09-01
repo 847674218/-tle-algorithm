@@ -1,0 +1,36 @@
+public Map<Token, Float> describeOwnership(List<Token> sortedTokens)
+    {
+        // allTokens will contain the count and be returned, sorted_ranges is shorthand for token<->token math.
+        Map<Token, Float> allTokens = new HashMap<Token, Float>();
+        List<Range<Token>> sortedRanges = new ArrayList<Range<Token>>(sortedTokens.size());
+
+        // this initializes the counts to 0 and calcs the ranges in order.
+        Token lastToken = sortedTokens.get(sortedTokens.size() - 1);
+        for (Token node : sortedTokens)
+        {
+            allTokens.put(node, new Float(0.0));
+            sortedRanges.add(new Range<Token>(lastToken, node));
+            lastToken = node;
+        }
+
+        for (String ks : Schema.instance.getTables())
+        {
+            for (CFMetaData cfmd : Schema.instance.getKSMetaData(ks).cfMetaData().values())
+            {
+                for (Range<Token> r : sortedRanges)
+                {
+                    // Looping over every KS:CF:Range, get the splits size and add it to the count
+                    allTokens.put(r.right, allTokens.get(r.right) + StorageService.instance.getSplits(ks, cfmd.cfName, r, DatabaseDescriptor.getIndexInterval()).size());
+                }
+            }
+        }
+
+        // Sum every count up and divide count/total for the fractional ownership.
+        Float total = new Float(0.0);
+        for (Float f : allTokens.values())
+            total += f;
+        for (Map.Entry<Token, Float> row : allTokens.entrySet())
+            allTokens.put(row.getKey(), row.getValue() / total);
+
+        return allTokens;
+    }

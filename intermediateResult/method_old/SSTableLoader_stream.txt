@@ -1,0 +1,33 @@
+public LoaderFuture stream(Set<InetAddress> toIgnore) throws IOException
+    {
+        client.init(keyspace);
+
+        Collection<SSTableReader> sstables = openSSTables();
+        if (sstables.isEmpty())
+        {
+            outputHandler.output("No sstables to stream");
+            return new LoaderFuture(0);
+        }
+
+        Map<InetAddress, Collection<Range<Token>>> endpointToRanges = client.getEndpointToRangesMap();
+        outputHandler.output(String.format("Streaming revelant part of %sto %s", names(sstables), endpointToRanges.keySet()));
+
+        // There will be one streaming session by endpoint
+        LoaderFuture future = new LoaderFuture(endpointToRanges.size());
+        for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : endpointToRanges.entrySet())
+        {
+            InetAddress remote = entry.getKey();
+            if (toIgnore.contains(remote))
+            {
+                future.latch.countDown();
+                continue;
+            }
+            Collection<Range<Token>> ranges = entry.getValue();
+            StreamOutSession session = StreamOutSession.create(keyspace, remote, new CountDownCallback(future, remote));
+            // transferSSTables assumes references have been acquired
+            SSTableReader.acquireReferences(sstables);
+            StreamOut.transferSSTables(session, sstables, ranges, OperationType.BULK_LOAD);
+            future.setPendings(remote, session.getFiles());
+        }
+        return future;
+    }

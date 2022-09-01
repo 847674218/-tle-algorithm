@@ -1,0 +1,35 @@
+private static Multimap<InetAddress, Range<Token>> getRangeFetchMap(Multimap<Range<Token>, InetAddress> rangesWithSources,
+                                                                        Collection<ISourceFilter> sourceFilters)
+    {
+        Multimap<InetAddress, Range<Token>> rangeFetchMapMap = HashMultimap.create();
+        for (Range<Token> range : rangesWithSources.keySet())
+        {
+            boolean foundSource = false;
+
+            outer:
+            for (InetAddress address : rangesWithSources.get(range))
+            {
+                if (address.equals(FBUtilities.getBroadcastAddress()))
+                {
+                    // If localhost is a source, we have found one, but we don't add it to the map to avoid streaming locally
+                    foundSource = true;
+                    continue;
+                }
+
+                for (ISourceFilter filter : sourceFilters)
+                {
+                    if (!filter.shouldInclude(address))
+                        continue outer;
+                }
+
+                rangeFetchMapMap.put(address, range);
+                foundSource = true;
+                break; // ensure we only stream from one other node for each range
+            }
+
+            if (!foundSource)
+                throw new IllegalStateException("unable to find sufficient sources for streaming range " + range);
+        }
+
+        return rangeFetchMapMap;
+    }

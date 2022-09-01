@@ -1,0 +1,75 @@
+private void printDc(PrintStream outs, String format, String dc, LinkedHashMultimap<String, String> endpointsToTokens,
+            boolean keyspaceSelected, Map<InetAddress, Float> filteredOwnerships)
+    {
+        Collection<String> liveNodes = probe.getLiveNodes();
+        Collection<String> deadNodes = probe.getUnreachableNodes();
+        Collection<String> joiningNodes = probe.getJoiningNodes();
+        Collection<String> leavingNodes = probe.getLeavingNodes();
+        Collection<String> movingNodes = probe.getMovingNodes();
+        Map<String, String> loadMap = probe.getLoadMap();
+
+        outs.println("Datacenter: " + dc);
+        outs.println("==========");
+
+        // get the total amount of replicas for this dc and the last token in this dc's ring
+        List<String> tokens = new ArrayList<String>();
+        float totalReplicas = 0f;
+        String lastToken = "";
+
+        for (Map.Entry<InetAddress, Float> entry : filteredOwnerships.entrySet())
+        {
+            tokens.addAll(endpointsToTokens.get(entry.getKey().getHostAddress()));
+            lastToken = tokens.get(tokens.size() - 1);
+            totalReplicas += entry.getValue();
+        }
+
+
+        if (keyspaceSelected)
+            outs.print("Replicas: " + (int) totalReplicas + "\n\n");
+
+        outs.printf(format, "Address", "Rack", "Status", "State", "Load", "Owns", "Token");
+
+        if (filteredOwnerships.size() > 1)
+            outs.printf(format, "", "", "", "", "", "", lastToken);
+        else
+            outs.println();
+
+        for (Map.Entry<InetAddress, Float> entry : filteredOwnerships.entrySet())
+        {
+            String endpoint = entry.getKey().getHostAddress();
+            for (String token : endpointsToTokens.get(endpoint))
+            {
+                String rack;
+                try
+                {
+                    rack = probe.getEndpointSnitchInfoProxy().getRack(endpoint);
+                }
+                catch (UnknownHostException e)
+                {
+                    rack = "Unknown";
+                }
+
+                String status = liveNodes.contains(endpoint)
+                        ? "Up"
+                        : deadNodes.contains(endpoint)
+                                ? "Down"
+                                : "?";
+
+                String state = "Normal";
+
+                if (joiningNodes.contains(endpoint))
+                    state = "Joining";
+                else if (leavingNodes.contains(endpoint))
+                    state = "Leaving";
+                else if (movingNodes.contains(endpoint))
+                    state = "Moving";
+
+                String load = loadMap.containsKey(endpoint)
+                        ? loadMap.get(endpoint)
+                        : "?";
+                String owns = new DecimalFormat("##0.00%").format(entry.getValue());
+                outs.printf(format, endpoint, rack, status, state, load, owns, token);
+            }
+        }
+        outs.println();
+    }

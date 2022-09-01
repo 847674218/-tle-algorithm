@@ -1,0 +1,79 @@
+private ColumnFamily collectAllData()
+    {
+        logger.debug("collectAllData");
+        // AtomicSortedColumns doesn't work for super columns (see #3821)
+        ISortedColumns.Factory factory = mutableColumns
+                                       ? cfs.metadata.cfType == ColumnFamilyType.Super ? ThreadSafeSortedColumns.factory() : AtomicSortedColumns.factory()
+                                       : ArrayBackedSortedColumns.factory();
+        ColumnFamilyStore.ViewFragment view = cfs.markReferenced(filter.key);
+        List<IColumnIterator> iterators = new ArrayList<IColumnIterator>(Iterables.size(view.memtables) + view.sstables.size());
+        ColumnFamily returnCF = ColumnFamily.create(cfs.metadata, factory, filter.filter.isReversed());
+
+        try
+        {
+            for (Memtable memtable : view.memtables)
+            {
+                IColumnIterator iter = filter.getMemtableColumnIterator(memtable);
+                if (iter != null)
+                {
+                    returnCF.delete(iter.getColumnFamily());
+                    iterators.add(iter);
+                }
+            }
+            
+            long mostRecentRowTombstone = Long.MIN_VALUE;
+            for (SSTableReader sstable : view.sstables)
+            {
+                // if we've already seen a row tombstone with a timestamp greater 
+                // than the most recent update to this sstable, we can skip it
+                if (sstable.getMaxTimestamp() < mostRecentRowTombstone)
+                    continue;
+
+                IColumnIterator iter = filter.getSSTableColumnIterator(sstable);
+                iterators.add(iter);
+                if (iter.getColumnFamily() != null)
+                {
+                    ColumnFamily cf = iter.getColumnFamily();
+                    if (cf.isMarkedForDelete())
+                        mostRecentRowTombstone = cf.getMarkedForDeleteAt();
+
+                    returnCF.delete(cf);
+                    sstablesIterated++;
+                }
+            }
+            
+            // If we saw a row tombstone, do a second pass through the iterators we
+            // obtained from the sstables and drop any whose maxTimestamp < that of the
+            // row tombstone
+            if (mostRecentRowTombstone > Long.MIN_VALUE)
+            {
+                Iterator<IColumnIterator> it = iterators.iterator();
+                while (it.hasNext())
+                {
+                    IColumnIterator iter = it.next();
+                    if ((iter instanceof ISSTableColumnIterator)
+                        && ((ISSTableColumnIterator) iter).getSStable().getMaxTimestamp() < mostRecentRowTombstone)
+                    {
+                        FileUtils.closeQuietly(iter);
+                        it.remove();
+                    }
+                }
+            }
+
+            // we need to distinguish between "there is no data at all for this row" (BF will let us rebuild that efficiently)
+            // and "there used to be data, but it's gone now" (we should cache the empty CF so we don't need to rebuild that slower)
+            if (iterators.isEmpty())
+                return null;
+
+            filter.collateColumns(returnCF, iterators, gcBefore);
+
+            // Caller is responsible for final removeDeletedCF.  This is important for cacheRow to work correctly:
+            return returnCF;
+        }
+        finally
+        {
+            for (IColumnIterator iter : iterators)
+                FileUtils.closeQuietly(iter);
+            SSTableReader.releaseReferences(view.sstables);
+        }
+    }

@@ -1,0 +1,20 @@
+private void resolve(DecoratedKey key, ColumnFamily cf, SecondaryIndexManager.Updater indexer)
+    {
+        ColumnFamily previous = columnFamilies.get(key);
+
+        if (previous == null)
+        {
+            // AtomicSortedColumns doesn't work for super columns (see #3821)
+            ColumnFamily empty = cf.cloneMeShallow(cf.isSuper() ? ThreadSafeSortedColumns.factory() : AtomicSortedColumns.factory(), false);
+            // We'll add the columns later. This avoids wasting works if we get beaten in the putIfAbsent
+            previous = columnFamilies.putIfAbsent(new DecoratedKey(key.token, allocator.clone(key.key)), empty);
+            if (previous == null)
+                previous = empty;
+        }
+
+        long sizeDelta = previous.addAllWithSizeDelta(cf, allocator, localCopyFunction, indexer);
+        currentSize.addAndGet(sizeDelta);
+        currentOperations.addAndGet((cf.getColumnCount() == 0)
+                                    ? cf.isMarkedForDelete() ? 1 : 0
+                                    : cf.getColumnCount());
+    }

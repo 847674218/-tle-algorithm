@@ -1,0 +1,160 @@
+public void recover(File file) throws IOException
+    {
+        logger.info("Replaying " + file.getPath());
+        CommitLogDescriptor desc = CommitLogDescriptor.fromFileName(file.getName());
+        final long segment = desc.id;
+        int version = desc.getMessagingVersion();
+        RandomAccessReader reader = RandomAccessReader.open(new File(file.getAbsolutePath()), true);
+        try
+        {
+            assert reader.length() <= Integer.MAX_VALUE;
+            int replayPosition;
+            if (globalPosition.segment < segment)
+            {
+                replayPosition = 0;
+            }
+            else if (globalPosition.segment == segment)
+            {
+                replayPosition = globalPosition.position;
+            }
+            else
+            {
+                logger.debug("skipping replay of fully-flushed {}", file);
+                return;
+            }
+
+            if (logger.isDebugEnabled())
+                logger.debug("Replaying " + file + " starting at " + replayPosition);
+            reader.seek(replayPosition);
+
+            /* read the logs populate RowMutation and apply */
+            while (!reader.isEOF())
+            {
+                if (logger.isDebugEnabled())
+                    logger.debug("Reading mutation at " + reader.getFilePointer());
+
+                long claimedCRC32;
+                int serializedSize;
+                try
+                {
+                    // any of the reads may hit EOF
+                    serializedSize = reader.readInt();
+                    if (serializedSize == CommitLog.END_OF_SEGMENT_MARKER)
+                    {
+                        logger.debug("Encountered end of segment marker at " + reader.getFilePointer());
+                        break;
+                    }
+
+                    // RowMutation must be at LEAST 10 bytes:
+                    // 3 each for a non-empty Table and Key (including the
+                    // 2-byte length from writeUTF/writeWithShortLength) and 4 bytes for column count.
+                    // This prevents CRC by being fooled by special-case garbage in the file; see CASSANDRA-2128
+                    if (serializedSize < 10)
+                        break;
+                    long claimedSizeChecksum = reader.readLong();
+                    checksum.reset();
+                    checksum.update(serializedSize);
+                    if (checksum.getValue() != claimedSizeChecksum)
+                        break; // entry wasn't synced correctly/fully. that's
+                               // ok.
+
+                    if (serializedSize > buffer.length)
+                        buffer = new byte[(int) (1.2 * serializedSize)];
+                    reader.readFully(buffer, 0, serializedSize);
+                    claimedCRC32 = reader.readLong();
+                }
+                catch (EOFException eof)
+                {
+                    break; // last CL entry didn't get completely written. that's ok.
+                }
+
+                checksum.update(buffer, 0, serializedSize);
+                if (claimedCRC32 != checksum.getValue())
+                {
+                    // this entry must not have been fsynced. probably the rest is bad too,
+                    // but just in case there is no harm in trying them (since we still read on an entry boundary)
+                    continue;
+                }
+
+                /* deserialize the commit log entry */
+                FastByteArrayInputStream bufIn = new FastByteArrayInputStream(buffer, 0, serializedSize);
+                RowMutation rm;
+                try
+                {
+                    // assuming version here. We've gone to lengths to make sure what gets written to the CL is in
+                    // the current version. so do make sure the CL is drained prior to upgrading a node.
+                    rm = RowMutation.serializer.deserialize(new DataInputStream(bufIn), version, IColumnSerializer.Flag.LOCAL);
+                }
+                catch (UnknownColumnFamilyException ex)
+                {
+                    if (ex.cfId == null)
+                        continue;
+                    AtomicInteger i = invalidMutations.get(ex.cfId);
+                    if (i == null)
+                    {
+                        i = new AtomicInteger(1);
+                        invalidMutations.put(ex.cfId, i);
+                    }
+                    else
+                        i.incrementAndGet();
+                    continue;
+                }
+
+                if (logger.isDebugEnabled())
+                    logger.debug(String.format("replaying mutation for %s.%s: %s", rm.getTable(), ByteBufferUtil.bytesToHex(rm.key()), "{" + StringUtils.join(rm.getColumnFamilies().iterator(), ", ")
+                            + "}"));
+
+                final long entryLocation = reader.getFilePointer();
+                final RowMutation frm = rm;
+                Runnable runnable = new WrappedRunnable()
+                {
+                    public void runMayThrow() throws IOException
+                    {
+                        if (Schema.instance.getKSMetaData(frm.getTable()) == null)
+                            return;
+                        if (pointInTimeExceeded(frm))
+                            return;
+
+                        final Table table = Table.open(frm.getTable());
+                        RowMutation newRm = new RowMutation(frm.getTable(), frm.key());
+
+                        // Rebuild the row mutation, omitting column families that 
+                        // a) have already been flushed,
+                        // b) are part of a cf that was dropped. Keep in mind that the cf.name() is suspect. do every thing based on the cfid instead.
+                        for (ColumnFamily columnFamily : frm.getColumnFamilies())
+                        {
+                            if (Schema.instance.getCF(columnFamily.id()) == null)
+                                // null means the cf has been dropped
+                                continue;
+
+                            ReplayPosition rp = cfPositions.get(columnFamily.id());
+
+                            // replay if current segment is newer than last flushed one or, 
+                            // if it is the last known segment, if we are after the replay position
+                            if (segment > rp.segment || (segment == rp.segment && entryLocation > rp.position))
+                            {
+                                newRm.add(columnFamily);
+                                replayedCount.incrementAndGet();
+                            }
+                        }
+                        if (!newRm.isEmpty())
+                        {
+                            Table.open(newRm.getTable()).apply(newRm, false);
+                            tablesRecovered.add(table);
+                        }
+                    }
+                };
+                futures.add(StageManager.getStage(Stage.MUTATION).submit(runnable));
+                if (futures.size() > MAX_OUTSTANDING_REPLAY_COUNT)
+                {
+                    FBUtilities.waitOnFutures(futures);
+                    futures.clear();
+                }
+            }
+        }
+        finally
+        {
+            FileUtils.closeQuietly(reader);
+            logger.info("Finished reading " + file);
+        }
+    }

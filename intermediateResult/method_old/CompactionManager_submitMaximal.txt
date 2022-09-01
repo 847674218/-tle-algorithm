@@ -1,0 +1,44 @@
+public Future<?> submitMaximal(final ColumnFamilyStore cfStore, final int gcBefore)
+    {
+        Runnable runnable = new WrappedRunnable()
+        {
+            protected void runMayThrow() throws IOException
+            {
+                // acquire the write lock long enough to schedule all sstables
+                compactionLock.writeLock().lock();
+                try
+                {
+                    AbstractCompactionTask task = cfStore.getCompactionStrategy().getMaximalTask(gcBefore);
+                    if (task == null)
+                        return;
+                    if (!task.markSSTablesForCompaction(0, Integer.MAX_VALUE))
+                        return;
+                    try
+                    {
+                        // downgrade the lock acquisition
+                        compactionLock.readLock().lock();
+                        compactionLock.writeLock().unlock();
+                        try
+                        {
+                            task.execute(executor);
+                        }
+                        finally
+                        {
+                            compactionLock.readLock().unlock();
+                        }
+                    }
+                    finally
+                    {
+                        task.unmarkSSTables();
+                    }
+                }
+                finally
+                {
+                    // we probably already downgraded
+                    if (compactionLock.writeLock().isHeldByCurrentThread())
+                        compactionLock.writeLock().unlock();
+                }
+            }
+        };
+        return executor.submit(runnable);
+    }

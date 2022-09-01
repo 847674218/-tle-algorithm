@@ -1,0 +1,301 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\compaction\CompactionTask.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>javax</name>.<name>print</name>.<name>attribute</name>.<name>IntegerSyntax</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Predicates</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Throwables</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterators</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>primitives</name>.<name>Longs</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DecoratedKey</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowIndexEntry</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManager</name>.<name>CompactionExecutorStatsCollector</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>CloseableIterator</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>CompactionTask</name> <super><extends>extends <name>AbstractCompactionTask</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CompactionTask</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>int</name></type> <name>gcBefore</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>static</specifier> <name>long</name></type> <name>totalBytesCompacted</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>toCompact</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>CompactionExecutorStatsCollector</name></type> <name>collector</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CompactionTask</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>gcBefore</name></name> = <name>gcBefore</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>toCompact</name> = new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <specifier>synchronized</specifier> <name>long</name></type> <name>addToTotalBytesCompacted</name><parameter_list>(<param><decl><type><name>long</name></type> <name>bytesCompacted</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name>totalBytesCompacted</name> += <name>bytesCompacted</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * For internal use and testing only.  The rest of the system should go through the submit* methods,
+     * which are properly serialized.
+     * Caller is in charge of marking/unmarking the sstables as compacting.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>execute</name><parameter_list>(<param><decl><type><name>CompactionExecutorStatsCollector</name></type> <name>collector</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>collector</name></name> = <name>collector</name></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>run</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>toCompact</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getExpectedWriteSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cfs</name>.<name>getExpectedCompactedFileSize</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>, <argument><expr><name>compactionType</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>reduceScopeForLimitedSpace</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name>partialCompactionsAcceptable</name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>toCompact</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 1</expr>)</condition><then>
+        <block>{
+            <comment type="line">// Try again w/o the largest one.</comment>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"insufficient space to compact all requested files " + <call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// Note that we have removed files that are still marked as compacting.</comment>
+            <comment type="line">// This suboptimal but ok since the caller will unmark all the sstables at the end.</comment>
+            <return>return <expr><call><name><name>toCompact</name>.<name>remove</name></name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>getMaxSizeFile</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then>
+        <else>else
+        <block>{
+            <return>return <expr>false</expr>;</return>
+        }</block></else></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * For internal use and testing only.  The rest of the system should go through the submit* methods,
+     * which are properly serialized.
+     * Caller is in charge of marking/unmarking the sstables as compacting.
+     */</comment>
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>runWith</name><parameter_list>(<param><decl><type><name>File</name></type> <name>dataDirectory</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// The collection of sstables passed may be empty (but not null); even if</comment>
+        <comment type="line">// it is not empty, it may compact down to nothing if all rows are deleted.</comment>
+        <assert>assert <expr><name>sstables</name> != null &amp;&amp; <name>dataDirectory</name> != null</expr>;</assert>
+
+        <if>if <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>isSnapshotBeforeCompaction</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>cfs</name>.<name>snapshotWithoutFlush</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> + "-compact-" + <name><name>cfs</name>.<name>columnFamily</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <comment type="line">// sanity check: all sstables must belong to the same cfs</comment>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>toCompact</name></expr></range></decl></init>)
+            <assert>assert <expr><call><name><name>sstable</name>.<name>descriptor</name>.<name>cfname</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>cfs</name>.<name>columnFamily</name></name></expr></argument>)</argument_list></call></expr>;</assert></for>
+
+        <decl_stmt><decl><type><name>CompactionController</name></type> <name>controller</name> <init>= <expr>new <call><name>CompactionController</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>toCompact</name></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// new sstables from flush can be added during a compaction, but only the compaction can remove them,</comment>
+        <comment type="line">// so in our single-threaded compaction world this is a valid way of determining if we're compacting</comment>
+        <comment type="line">// all the sstables (that existed when we started)</comment>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Compacting {}"</expr></argument>, <argument><expr><name>toCompact</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>startTime</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>totalkeysWritten</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>AbstractCompactionStrategy</name></type> <name>strategy</name> <init>= <expr><call><name><name>cfs</name>.<name>getCompactionStrategy</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>estimatedTotalKeys</name> <init>= <expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getIndexInterval</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>SSTableReader</name>.<name>getApproximateKeyCount</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>estimatedSSTables</name> <init>= <expr><call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>1</expr></argument>, <argument><expr><call><name><name>SSTable</name>.<name>getTotalBytes</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>)</argument_list></call> / <call><name><name>strategy</name>.<name>getMaxSSTableSize</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>keysPerSSTable</name> <init>= <expr>(<name>long</name>) <call><name><name>Math</name>.<name>ceil</name></name><argument_list>(<argument><expr>(<name>double</name>) <name>estimatedTotalKeys</name> / <name>estimatedSSTables</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Expected bloom filter size : " + <name>keysPerSSTable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <decl_stmt><decl><type><name>AbstractCompactionIterable</name></type> <name>ci</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>isMultithreadedCompaction</name></name><argument_list>()</argument_list></call>
+                                      ? new <call><name>ParallelCompactionIterable</name><argument_list>(<argument><expr><name>compactionType</name></expr></argument>, <argument><expr><call><name><name>strategy</name>.<name>getScanners</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>controller</name></expr></argument>)</argument_list></call>
+                                      : new <call><name>CompactionIterable</name><argument_list>(<argument><expr><name>compactionType</name></expr></argument>, <argument><expr><call><name><name>strategy</name>.<name>getScanners</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>controller</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>CloseableIterator</name><argument_list>&lt;<argument><name>AbstractCompactedRow</name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name><name>ci</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></type> <name>cachedKeys</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// we can't preheat until the tracker has been set. This doesn't happen until we tell the cfs to</comment>
+        <comment type="line">// replace the old entries.  Track entries to preheat here until then.</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Descriptor</name></argument>, <argument><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>cachedKeyMap</name> <init>=  <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Descriptor</name></argument>, <argument><name><name>Map</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableWriter</name></argument>&gt;</argument_list></name></type> <name>writers</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableWriter</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>collector</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>collector</name>.<name>beginCompaction</name></name><argument_list>(<argument><expr><name>ci</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <try>try
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <comment type="line">// don't mark compacted in the finally block, since if there _is_ nondeleted data,</comment>
+                <comment type="line">// we need to sync it (via closeAndOpen) first, so there is no period during which</comment>
+                <comment type="line">// a crash could cause data loss.</comment>
+                <expr_stmt><expr><call><name><name>cfs</name>.<name>markCompacted</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>, <argument><expr><name>compactionType</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+
+            <decl_stmt><decl><type><name>SSTableWriter</name></type> <name>writer</name> <init>= <expr><call><name><name>cfs</name>.<name>createCompactionWriter</name></name><argument_list>(<argument><expr><name>keysPerSSTable</name></expr></argument>, <argument><expr><call><name><name>cfs</name>.<name>directories</name>.<name>getLocationForDisk</name></name><argument_list>(<argument><expr><name>dataDirectory</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>toCompact</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>writers</name>.<name>add</name></name><argument_list>(<argument><expr><name>writer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <while>while <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>ci</name>.<name>isStopRequested</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>CompactionInterruptedException</name><argument_list>(<argument><expr><call><name><name>ci</name>.<name>getCompactionInfo</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                <decl_stmt><decl><type><name>AbstractCompactedRow</name></type> <name>row</name> <init>= <expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>row</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>controller</name>.<name>invalidateCachedRow</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>row</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <continue>continue;</continue>
+                }</block></then></if>
+
+                <comment type="line">// If the row is cached, we call removeDeleted on at read time it to have coherent query returns,</comment>
+                <comment type="line">// but if the row is not pushed out of the cache, obsolete tombstones will persist indefinitely.</comment>
+                <expr_stmt><expr><call><name><name>controller</name>.<name>removeDeletedInCache</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <decl_stmt><decl><type><name>RowIndexEntry</name></type> <name>indexEntry</name> <init>= <expr><call><name><name>writer</name>.<name>append</name></name><argument_list>(<argument><expr><name>row</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>totalkeysWritten</name>++</expr>;</expr_stmt>
+
+                <if>if <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>getPreheatKeyCache</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>toCompact</name></expr></range></decl></init>)
+                    <block>{
+                        <if>if <condition>(<expr><call><name><name>sstable</name>.<name>getCachedPosition</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name></name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>cachedKeys</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name></name></expr></argument>, <argument><expr><name>indexEntry</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <break>break;</break>
+                        }</block></then></if>
+                    }</block></for>
+                }</block></then></if>
+
+                <if>if <condition>(<expr><call><name>newSSTableSegmentThresholdReached</name><argument_list>(<argument><expr><name>writer</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// tmp = false because later we want to query it with descriptor from SSTableReader</comment>
+                    <expr_stmt><expr><call><name><name>cachedKeyMap</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>writer</name>.<name>descriptor</name>.<name>asTemporary</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>cachedKeys</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>writer</name> = <call><name><name>cfs</name>.<name>createCompactionWriter</name></name><argument_list>(<argument><expr><name>keysPerSSTable</name></expr></argument>, <argument><expr><call><name><name>cfs</name>.<name>directories</name>.<name>getLocationForDisk</name></name><argument_list>(<argument><expr><name>dataDirectory</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>toCompact</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>writers</name>.<name>add</name></name><argument_list>(<argument><expr><name>writer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>cachedKeys</name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></while>
+
+            <if>if <condition>(<expr><call><name><name>writer</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>cachedKeyMap</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>writer</name>.<name>descriptor</name>.<name>asTemporary</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>cachedKeys</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name><name>writer</name>.<name>abort</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>writers</name>.<name>remove</name></name><argument_list>(<argument><expr><name>writer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+
+            <decl_stmt><decl><type><name>long</name></type> <name>maxAge</name> <init>= <expr><call><name>getMaxDataAge</name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>SSTableWriter</name></type> <name>completedWriter</name> <range>: <expr><name>writers</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>sstables</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>completedWriter</name>.<name>closeAndOpenReader</name></name><argument_list>(<argument><expr><name>maxAge</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>t</name></decl></param>)</parameter_list>
+        <block>{
+            <for>for (<init><decl><type><name>SSTableWriter</name></type> <name>writer</name> <range>: <expr><name>writers</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>writer</name>.<name>abort</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+            <comment type="line">// also remove already completed SSTables</comment>
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>sstable</name>.<name>markCompacted</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sstable</name>.<name>releaseReference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <throw>throw <expr><call><name><name>Throwables</name>.<name>propagate</name></name><argument_list>(<argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>controller</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>iter</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+
+            <if>if <condition>(<expr><name>collector</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>collector</name>.<name>finishCompaction</name></name><argument_list>(<argument><expr><name>ci</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></finally></try>
+
+        <expr_stmt><expr><call><name><name>cfs</name>.<name>replaceCompactedSSTables</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>compactionType</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// TODO: this doesn't belong here, it should be part of the reader to load when the tracker is wired up</comment>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+        <block>{
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>DecoratedKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>cachedKeyMap</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>)</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+               <expr_stmt><expr><call><name><name>sstable</name>.<name>cacheKey</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block></for>
+
+        <comment type="line">// log a bunch of statistics about the result</comment>
+        <decl_stmt><decl><type><name>long</name></type> <name>dTime</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>startTime</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>startsize</name> <init>= <expr><call><name><name>SSTable</name>.<name>getTotalBytes</name></name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>endsize</name> <init>= <expr><call><name><name>SSTable</name>.<name>getTotalBytes</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>double</name></type> <name>ratio</name> <init>= <expr>(<name>double</name>)<name>endsize</name> / (<name>double</name>)<name>startsize</name></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>builder</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>reader</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>builder</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>reader</name>.<name>descriptor</name>.<name>baseFilename</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>","</expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <decl_stmt><decl><type><name>double</name></type> <name>mbps</name> <init>= <expr><name>dTime</name> &gt; 0 ? (<name>double</name>)<name>endsize</name>/(1024*1024)/((<name>double</name>)<name>dTime</name>/1000) : 0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>totalSourceRows</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>mergeSummary</name> <init>= <expr>""</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name><index>[]</index></type> <name>counts</name> <init>= <expr><call><name><name>ci</name>.<name>getMergedRowCounts</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>counts</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>rows</name> <init>= <expr><name>i</name> + 1</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>count</name> <init>= <expr><name><name>counts</name><index>[<expr><name>i</name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>totalSourceRows</name> += <name>rows</name> * <name>count</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>mergeSummary</name> += <call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%d:%d, "</expr></argument>, <argument><expr><name>rows</name></expr></argument>, <argument><expr><name>count</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Compacted %d sstables to [%s].  %,d bytes to %,d (~%d%% of original) in %,dms = %fMB/s.  %,d total rows, %,d unique.  Row merge counts were {%s}"</expr></argument>,
+                                  <argument><expr><call><name><name>toCompact</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>builder</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>startsize</name></expr></argument>, <argument><expr><name>endsize</name></expr></argument>, <argument><expr><call>(<name>int</name>) <argument_list>(<argument><expr><name>ratio</name> * 100</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>dTime</name></expr></argument>, <argument><expr><name>mbps</name></expr></argument>, <argument><expr><name>totalSourceRows</name></expr></argument>, <argument><expr><name>totalkeysWritten</name></expr></argument>, <argument><expr><name>mergeSummary</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"CF Total Bytes Compacted: %,d"</expr></argument>, <argument><expr><call><name><name>CompactionTask</name>.<name>addToTotalBytesCompacted</name></name><argument_list>(<argument><expr><name>endsize</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>partialCompactionsAcceptable</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>!<name>isUserDefined</name></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// extensibility point for other strategies that may want to limit the upper bounds of the sstable segment size</comment>
+    <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>newSSTableSegmentThresholdReached</name><parameter_list>(<param><decl><type><name>SSTableWriter</name></type> <name>writer</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>getMaxDataAge</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>max</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name><name>sstable</name>.<name>maxDataAge</name></name> &gt; <name>max</name></expr>)</condition><then>
+                <expr_stmt><expr><name>max</name> = <name><name>sstable</name>.<name>maxDataAge</name></name></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <return>return <expr><name>max</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

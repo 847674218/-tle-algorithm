@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\CounterMutationVerbHandler.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeoutException</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FastByteArrayInputStream</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageProxy</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>UnavailableException</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>CounterMutationVerbHandler</name> <super><implements>implements <name>IVerbHandler</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CounterMutationVerbHandler</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>doVerb</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>Message</name></type> <name>message</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>String</name></type> <name>id</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>bytes</name> <init>= <expr><call><name><name>message</name>.<name>getMessageBody</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>FastByteArrayInputStream</name></type> <name>buffer</name> <init>= <expr>new <call><name>FastByteArrayInputStream</name><argument_list>(<argument><expr><name>bytes</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>DataInputStream</name></type> <name>is</name> <init>= <expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr><name>buffer</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>final</specifier> <name>CounterMutation</name></type> <name>cm</name> <init>= <expr><call><name><name>CounterMutation</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr><name>is</name></expr></argument>, <argument><expr><call><name><name>message</name>.<name>getVersion</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+              <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Applying forwarded " + <name>cm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <decl_stmt><decl><type><name>String</name></type> <name>localDataCenter</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getEndpointSnitch</name></name><argument_list>()</argument_list></call>.<call><name>getDatacenter</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// We should not wait for the result of the write in this thread,</comment>
+            <comment type="line">// otherwise we could have a distributed deadlock between replicas</comment>
+            <comment type="line">// running this VerbHandler (see #4578).</comment>
+            <comment type="line">// Instead, we use a callback to send the response. Note that the callback</comment>
+            <comment type="line">// will not be called if the request timeout, but this is ok</comment>
+            <comment type="line">// because the coordinator of the counter mutation will timeout on</comment>
+            <comment type="line">// it's own in that case.</comment>
+            <expr_stmt><expr><call><name><name>StorageProxy</name>.<name>applyCounterMutationOnLeader</name></name><argument_list>(<argument><expr><name>cm</name></expr></argument>, <argument><expr><name>localDataCenter</name></expr></argument>, <argument><expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list><block>{
+                <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+                <block>{
+                    <try>try
+                    <block>{
+                        <decl_stmt><decl><type><name>WriteResponse</name></type> <name>response</name> <init>= <expr>new <call><name>WriteResponse</name><argument_list>(<argument><expr><call><name><name>cm</name>.<name>getTable</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>cm</name>.<name>key</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <decl_stmt><decl><type><name>Message</name></type> <name>responseMessage</name> <init>= <expr><call><name><name>WriteResponse</name>.<name>makeWriteResponseMessage</name></name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>response</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendReply</name><argument_list>(<argument><expr><name>responseMessage</name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>message</name>.<name>getFrom</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block>
+                    <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Error writing response to counter mutation"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></catch></try>
+                }</block></function>
+            }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>UnavailableException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// We check for UnavailableException in the coordinator not. It is</comment>
+            <comment type="line">// hence reasonable to let the coordinator timeout in the very</comment>
+            <comment type="line">// unlikely case we arrive here</comment>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>TimeoutException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// The coordinator will timeout on it's own so ignore</comment>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Error in counter mutation"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+}</block></class>
+</unit>

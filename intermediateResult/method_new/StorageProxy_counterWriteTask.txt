@@ -1,0 +1,35 @@
+private static Runnable counterWriteTask(final IMutation mutation,
+                                             final Iterable<InetAddress> targets,
+                                             final AbstractWriteResponseHandler responseHandler,
+                                             final String localDataCenter,
+                                             final ConsistencyLevel consistency_level)
+    {
+        return new LocalMutationRunnable()
+        {
+            public void runMayThrow() throws IOException
+            {
+                assert mutation instanceof CounterMutation;
+                final CounterMutation cm = (CounterMutation) mutation;
+
+                // apply mutation
+                cm.apply();
+                responseHandler.response(null);
+
+                // then send to replicas, if any
+                final Set<InetAddress> remotes = Sets.difference(ImmutableSet.copyOf(targets), ImmutableSet.of(FBUtilities.getBroadcastAddress()));
+                if (cm.shouldReplicateOnWrite() && !remotes.isEmpty())
+                {
+                    // We do the replication on another stage because it involves a read (see CM.makeReplicationMutation)
+                    // and we want to avoid blocking too much the MUTATION stage
+                    StageManager.getStage(Stage.REPLICATE_ON_WRITE).execute(new DroppableRunnable(MessagingService.Verb.READ)
+                    {
+                        public void runMayThrow() throws IOException, OverloadedException
+                        {
+                            // send mutation to other replica
+                            sendToHintedEndpoints(cm.makeReplicationMutation(), remotes, responseHandler, localDataCenter, consistency_level);
+                        }
+                    });
+                }
+            }
+        };
+    }

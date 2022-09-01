@@ -1,0 +1,599 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\index\SecondaryIndexManager.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>index</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentNavigableMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentSkipListMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutionException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Future</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ColumnDefinition</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>IFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>AbstractBounds</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>LocalToken</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>ReducingKeyIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>Column</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>IndexExpression</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Manages all the indexes associated with a given CFS
+ * Different types of indexes can be created across the same CF
+ */</comment>
+<class><specifier>public</specifier> class <name>SecondaryIndexManager</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SecondaryIndexManager</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Organizes the indexes by column name
+     */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentNavigableMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name></type> <name>indexesByColumn</name></decl>;</decl_stmt>
+
+
+    <comment type="block" format="javadoc">/**
+     * Keeps a single instance of a SecondaryIndex for many columns when the index type
+     * has isRowLevelIndex() == true
+     *
+     * This allows updates to happen to an entire row at once
+     */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SecondaryIndex</name></extends></argument>&gt;</argument_list></name></argument>,<argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name></type> <name>rowLevelIndexMap</name></decl>;</decl_stmt>
+
+
+    <comment type="block" format="javadoc">/**
+     * The underlying column family containing the source data for these indexes
+     */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>baseCfs</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>SecondaryIndexManager</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>baseCfs</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>indexesByColumn</name> = new <call><name><name>ConcurrentSkipListMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>baseCfs</name>.<name>getComparator</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>rowLevelIndexMap</name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SecondaryIndex</name></extends></argument>&gt;</argument_list></name></argument>, <argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name><name>this</name>.<name>baseCfs</name></name> = <name>baseCfs</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Drops and adds new indexes associated with the underlying CF
+     * @throws IOException
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>reload</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// figure out what needs to be added and dropped.</comment>
+        <comment type="line">// future: if/when we have modifiable settings for secondary indexes,</comment>
+        <comment type="line">// they'll need to be handled here.</comment>
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>indexedColumnNames</name> <init>= <expr><call><name>getIndexedColumns</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>indexedColumn</name> <range>: <expr><name>indexedColumnNames</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnDefinition</name></type> <name>def</name> <init>= <expr><call><name><name>baseCfs</name>.<name>metadata</name>.<name>getColumn_metadata</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>indexedColumn</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>def</name> == null || <call><name><name>def</name>.<name>getIndexType</name></name><argument_list>()</argument_list></call> == null</expr>)</condition><then>
+                <expr_stmt><expr><call><name>removeIndexedColumn</name><argument_list>(<argument><expr><name>indexedColumn</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+
+        <for>for (<init><decl><type><name>ColumnDefinition</name></type> <name>cdef</name> <range>: <expr><call><name><name>baseCfs</name>.<name>metadata</name>.<name>getColumn_metadata</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <if>if <condition>(<expr><call><name><name>cdef</name>.<name>getIndexType</name></name><argument_list>()</argument_list></call> != null &amp;&amp; !<call><name><name>indexedColumnNames</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name>addIndexedColumn</name><argument_list>(<argument><expr><name>cdef</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if></for>
+
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name></type> <name>reloadedIndexes</name> <init>= <expr><call><name><name>Collections</name>.<name>newSetFromMap</name></name><argument_list>(<argument><expr>new <call><name><name>IdentityHashMap</name><argument_list>&lt;<argument><name>SecondaryIndex</name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SecondaryIndex</name></type> <name>index</name> <range>: <expr><call><name><name>indexesByColumn</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>reloadedIndexes</name>.<name>add</name></name><argument_list>(<argument><expr><name>index</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>index</name>.<name>reload</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+    }</block></function>
+
+
+    <comment type="block" format="javadoc">/**
+     * Does a full, blocking rebuild of the indexes specified by columns from the sstables.
+     * Does nothing if columns is empty.
+     *
+     * Caller must acquire and release references to the sstables used here.
+     *
+     * @param sstables the data to build from
+     * @param columns the list of columns to index, ordered by comparator
+     * @throws IOException
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>maybeBuildSecondaryIndexes</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>columns</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>columns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Submitting index build of %s for data in %s"</expr></argument>,
+                                  <argument><expr><call><name><name>baseCfs</name>.<name>metadata</name>.<name>comparator</name>.<name>getString</name></name><argument_list>(<argument><expr><name>columns</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>SecondaryIndexBuilder</name></type> <name>builder</name> <init>= <expr>new <call><name>SecondaryIndexBuilder</name><argument_list>(<argument><expr><name>baseCfs</name></expr></argument>, <argument><expr><name>columns</name></expr></argument>, <argument><expr>new <call><name>ReducingKeyIterator</name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>future</name> <init>= <expr><call><name><name>CompactionManager</name>.<name>instance</name>.<name>submitIndexBuild</name></name><argument_list>(<argument><expr><name>builder</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>future</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>flushIndexesBlocking</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>ExecutionException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Index build of " + <call><name><name>baseCfs</name>.<name>metadata</name>.<name>comparator</name>.<name>getString</name></name><argument_list>(<argument><expr><name>columns</name></expr></argument>)</argument_list></call> + " complete"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the list of indexed columns
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>getIndexedColumns</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>indexesByColumn</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if the indexes can handle the clause.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>hasIndexFor</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>clause</name> == null || <call><name><name>clause</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <comment type="line">// It doesn't seem a clause can have multiple searchers, but since</comment>
+        <comment type="line">// getIndexSearchersForQuery returns a list ...</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SecondaryIndexSearcher</name></argument>&gt;</argument_list></name></type> <name>searchers</name> <init>= <expr><call><name>getIndexSearchersForQuery</name><argument_list>(<argument><expr><name>clause</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>searchers</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <for>for (<init><decl><type><name>SecondaryIndexSearcher</name></type> <name>searcher</name> <range>: <expr><name>searchers</name></expr></range></decl></init>)
+            <if>if <condition>(<expr>!<call><name><name>searcher</name>.<name>isIndexing</name></name><argument_list>(<argument><expr><name>clause</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if></for>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Removes a existing index
+     * @param column the indexed column to remove
+     * @throws IOException
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>removeIndexedColumn</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>column</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name> <init>= <expr><call><name><name>indexesByColumn</name>.<name>remove</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>index</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <comment type="line">// Remove this column from from row level index map</comment>
+        <if>if <condition>(<expr><name>index</name> instanceof <name>PerRowSecondaryIndex</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>index</name>.<name>removeColumnDef</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">//If now columns left on this CF remove from row level lookup</comment>
+            <if>if <condition>(<expr><call><name><name>index</name>.<name>getColumnDefs</name></name><argument_list>()</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>rowLevelIndexMap</name>.<name>remove</name></name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getClass</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>index</name>.<name>removeIndex</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>SystemTable</name>.<name>setIndexRemoved</name></name><argument_list>(<argument><expr><name><name>baseCfs</name>.<name>metadata</name>.<name>ksName</name></name></expr></argument>, <argument><expr><call><name><name>index</name>.<name>getNameForSystemTable</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Adds and builds a index for a column
+     * @param cdef the column definition holding the index data
+     * @return a future which the caller can optionally block on signaling the index is built
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>addIndexedColumn</name><parameter_list>(<param><decl><type><name>ColumnDefinition</name></type> <name>cdef</name></decl></param>)</parameter_list>
+    <block>{
+
+        <if>if <condition>(<expr><call><name><name>indexesByColumn</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+
+        <assert>assert <expr><call><name><name>cdef</name>.<name>getIndexType</name></name><argument_list>()</argument_list></call> != null</expr>;</assert>
+
+        <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>index</name> = <call><name><name>SecondaryIndex</name>.<name>createInstance</name></name><argument_list>(<argument><expr><name>baseCfs</name></expr></argument>, <argument><expr><name>cdef</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block> <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <comment type="line">// Keep a single instance of the index per-cf for row level indexes</comment>
+        <comment type="line">// since we want all columns to be under the index</comment>
+        <if>if <condition>(<expr><name>index</name> instanceof <name>PerRowSecondaryIndex</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>currentIndex</name> <init>= <expr><call><name><name>rowLevelIndexMap</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getClass</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>currentIndex</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>rowLevelIndexMap</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getClass</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>index</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>index</name>.<name>init</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><name>index</name> = <name>currentIndex</name></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>index</name>.<name>addColumnDef</name></name><argument_list>(<argument><expr><name>cdef</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Creating new index : {}"</expr></argument>,<argument><expr><name>cdef</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name><name>index</name>.<name>init</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <comment type="line">// link in indexedColumns. this means that writes will add new data to</comment>
+        <comment type="line">// the index immediately,</comment>
+        <comment type="line">// so we don't have to lock everything while we do the build. it's up to</comment>
+        <comment type="line">// the operator to wait</comment>
+        <comment type="line">// until the index is actually built before using in queries.</comment>
+        <expr_stmt><expr><call><name><name>indexesByColumn</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>, <argument><expr><name>index</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// if we're just linking in the index to indexedColumns on an</comment>
+        <comment type="line">// already-built index post-restart, we're done</comment>
+        <if>if <condition>(<expr><call><name><name>index</name>.<name>isIndexBuilt</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+
+        <return>return <expr><call><name><name>index</name>.<name>buildIndexAsync</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     *
+     * @param column the name of indexes column
+     * @return the index
+     */</comment>
+    <function><type><specifier>public</specifier> <name>SecondaryIndex</name></type> <name>getIndexForColumn</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>column</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>indexesByColumn</name>.<name>get</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Remove the index
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>invalidate</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>SecondaryIndex</name></type> <name>index</name> <range>: <expr><call><name><name>indexesByColumn</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>index</name>.<name>invalidate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Flush all indexes to disk
+     * @throws ExecutionException
+     * @throws InterruptedException
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>flushIndexesBlocking</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <for>for (<init><decl><type><name>SecondaryIndex</name></type> <name>index</name> <range>: <expr><call><name><name>indexesByColumn</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>index</name>.<name>forceBlockingFlush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns the decoratedKey for a column value
+     * @param name column name
+     * @param value column value
+     * @return decorated key
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>DecoratedKey</name><argument_list>&lt;<argument><name>LocalToken</name></argument>&gt;</argument_list></name></type> <name>getIndexKeyFor</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>LocalToken</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>new <call><name>LocalToken</name><argument_list>(<argument><expr><call><name><name>baseCfs</name>.<name>metadata</name>.<name>getColumnDefinition</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call>.<call><name>getValidator</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+
+    <comment type="block" format="javadoc">/**
+     * @return all built indexes (ready to use)
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getBuiltIndexes</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>indexList</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>indexesByColumn</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><call><name><name>index</name>.<name>isIndexBuilt</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>indexList</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getIndexName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+
+        <return>return <expr><name>indexList</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>getColumnByIdxName</name><parameter_list>(<param><decl><type><name>String</name></type> <name>idxName</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>indexesByColumn</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getIndexName</name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>idxName</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+        }</block></for>
+        <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Unknown Index Name: " + <name>idxName</name></expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return all CFS from indexes which use a backing CFS internally (KEYS)
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>getIndexesBackedByCfs</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>cfsList</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>SecondaryIndex</name></type> <name>index</name><range>: <expr><call><name><name>indexesByColumn</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>index</name>.<name>getIndexCfs</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>cfs</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>cfsList</name>.<name>add</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+
+        <return>return <expr><name>cfsList</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return all indexes which do *not* use a backing CFS internally
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name></type> <name>getIndexesNotBackedByCfs</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// we use identity map because per row indexes use same instance across many columns</comment>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name></type> <name>indexes</name> <init>= <expr><call><name><name>Collections</name>.<name>newSetFromMap</name></name><argument_list>(<argument><expr>new <call><name><name>IdentityHashMap</name><argument_list>&lt;<argument><name>SecondaryIndex</name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SecondaryIndex</name></type> <name>index</name><range>: <expr><call><name><name>indexesByColumn</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <if>if <condition>(<expr><call><name><name>index</name>.<name>getIndexCfs</name></name><argument_list>()</argument_list></call> == null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>indexes</name>.<name>add</name></name><argument_list>(<argument><expr><name>index</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if></for>
+        <return>return <expr><name>indexes</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return all of the secondary indexes without distinction to the (non-)backed by secondary ColumnFamilyStore.
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name></type> <name>getIndexes</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// we use identity map because per row indexes use same instance across many columns</comment>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SecondaryIndex</name></argument>&gt;</argument_list></name></type> <name>indexes</name> <init>= <expr><call><name><name>Collections</name>.<name>newSetFromMap</name></name><argument_list>(<argument><expr>new <call><name><name>IdentityHashMap</name><argument_list>&lt;<argument><name>SecondaryIndex</name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>indexes</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>indexesByColumn</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>indexes</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return total current ram size of all indexes
+     */</comment>
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getTotalLiveSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>total</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SecondaryIndex</name></type> <name>index</name> <range>: <expr><call><name>getIndexes</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><name>total</name> += <call><name><name>index</name>.<name>getLiveSize</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>total</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Removes obsolete index entries and creates new ones for the given row key
+     * and mutated columns.
+     *
+     * For columns whos underlying index type has the isRowLevelIndex() flag set to true this function will
+     * call the
+     *
+     * @param rowKey the row key
+     * @param cf the current rows data
+     * @param mutatedIndexedColumns the set of columns that were changed or added
+     * @param oldIndexedColumns the columns what were deleted
+     * @throws IOException
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>applyIndexUpdates</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>rowKey</name></decl></param>,
+                                  <param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>,
+                                  <param><decl><type><name><name>SortedSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>mutatedIndexedColumns</name></decl></param>,
+                                  <param><decl><type><name>ColumnFamily</name></type> <name>oldIndexedColumns</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+
+        <comment type="line">// Identify the columns with PerRowSecondaryIndexes</comment>
+        <comment type="line">// we need to make sure this is only called once</comment>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SecondaryIndex</name></extends></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>appliedRowLevelIndexes</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// remove the old index entries</comment>
+        <if>if <condition>(<expr><name>oldIndexedColumns</name> != null</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>columnName</name> <range>: <expr><call><name><name>oldIndexedColumns</name>.<name>getColumnNames</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>oldIndexedColumns</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>columnName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><name>column</name> == null</expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <comment type="line">//this was previously deleted so should not be in index</comment>
+                <if>if <condition>(<expr><call><name><name>column</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name> <init>= <expr><call><name>getIndexForColumn</name><argument_list>(<argument><expr><name>columnName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>index</name> == null</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Looks like index got dropped mid-update.  Skipping"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <continue>continue;</continue>
+                }</block></then></if>
+
+                <comment type="line">// Update entire row if we encounter a row level index</comment>
+                <if>if <condition>(<expr><name>index</name> instanceof <name>PerRowSecondaryIndex</name></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><name>appliedRowLevelIndexes</name> == null</expr>)</condition><then>
+                        <expr_stmt><expr><name>appliedRowLevelIndexes</name> = new <call><name><name>HashSet</name><argument_list>&lt;<argument><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SecondaryIndex</name></extends></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+                    <if>if <condition>(<expr><call><name><name>appliedRowLevelIndexes</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getClass</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr>((<name>PerRowSecondaryIndex</name>)<name>index</name>).<call><name>applyIndexUpdates</name><argument_list>(<argument><expr><name>rowKey</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>mutatedIndexedColumns</name></expr></argument>, <argument><expr><name>oldIndexedColumns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                }</block></then>
+                <else>else
+                <block>{
+                    <decl_stmt><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>LocalToken</name></argument>&gt;</argument_list></name></type> <name>valueKey</name> <init>= <expr><call><name>getIndexKeyFor</name><argument_list>(<argument><expr><name>columnName</name></expr></argument>, <argument><expr><call><name><name>column</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <expr_stmt><expr>((<name>PerColumnSecondaryIndex</name>)<name>index</name>).<call><name>deleteColumn</name><argument_list>(<argument><expr><name>valueKey</name></expr></argument>, <argument><expr><name>rowKey</name></expr></argument>, <argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></for>
+        }</block></then></if>
+
+        <comment type="line">//insert new columns</comment>
+        <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>columnName</name> <range>: <expr><name>mutatedIndexedColumns</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>cf</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>columnName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>column</name> == null || <call><name><name>column</name>.<name>isMarkedForDelete</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if> <comment type="line">// null column == row deletion</comment>
+
+            <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name> <init>= <expr><call><name>getIndexForColumn</name><argument_list>(<argument><expr><name>columnName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>index</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"index on {} removed; skipping remove-old for {}"</expr></argument>, <argument><expr><name>columnName</name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name>rowKey</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <continue>continue;</continue>
+            }</block></then></if>
+
+            <comment type="line">// Update entire row if we encounter a row level index</comment>
+            <if>if <condition>(<expr><name>index</name> instanceof <name>PerRowSecondaryIndex</name></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name>appliedRowLevelIndexes</name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><name>appliedRowLevelIndexes</name> = new <call><name><name>HashSet</name><argument_list>&lt;<argument><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SecondaryIndex</name></extends></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><call><name><name>appliedRowLevelIndexes</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getClass</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr>((<name>PerRowSecondaryIndex</name>)<name>index</name>).<call><name>applyIndexUpdates</name><argument_list>(<argument><expr><name>rowKey</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>mutatedIndexedColumns</name></expr></argument>, <argument><expr><name>oldIndexedColumns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>LocalToken</name></argument>&gt;</argument_list></name></type> <name>valueKey</name> <init>= <expr><call><name>getIndexKeyFor</name><argument_list>(<argument><expr><name>columnName</name></expr></argument>, <argument><expr><call><name><name>column</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <expr_stmt><expr>((<name>PerColumnSecondaryIndex</name>)<name>index</name>).<call><name>insertColumn</name><argument_list>(<argument><expr><name>valueKey</name></expr></argument>, <argument><expr><name>rowKey</name></expr></argument>, <argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Delete all columns from all indexes for this row
+     * @param key the row key
+     * @param indexedColumnsInRow all column names in row
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>deleteFromIndexes</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>indexedColumnsInRow</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+
+        <comment type="line">// Identify the columns with isRowLevelIndex == true</comment>
+        <comment type="line">// we need to make sure this is only called once</comment>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SecondaryIndex</name></extends></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>cleanedRowLevelIndexes</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>IColumn</name></type> <name>column</name> <range>: <expr><name>indexedColumnsInRow</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name> <init>= <expr><call><name><name>indexesByColumn</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>index</name> == null</expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <comment type="line">//Update entire row if we encounter a row level index</comment>
+            <if>if <condition>(<expr><name>index</name> instanceof <name>PerRowSecondaryIndex</name></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name>cleanedRowLevelIndexes</name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><name>cleanedRowLevelIndexes</name> = new <call><name><name>HashSet</name><argument_list>&lt;<argument><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SecondaryIndex</name></extends></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><call><name><name>cleanedRowLevelIndexes</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getClass</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr>((<name>PerRowSecondaryIndex</name>)<name>index</name>).<call><name>deleteFromIndex</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>indexedColumnsInRow</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>LocalToken</name></argument>&gt;</argument_list></name></type> <name>valueKey</name> <init>= <expr><call><name>getIndexKeyFor</name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>column</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr>((<name>PerColumnSecondaryIndex</name>) <name>index</name>).<call><name>deleteColumn</name><argument_list>(<argument><expr><name>valueKey</name></expr></argument>, <argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>, <argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></for>
+    }</block></function>
+
+
+    <comment type="block" format="javadoc">/**
+     * Get a list of IndexSearchers from the union of expression index types
+     * @param clause the query clause
+     * @return the searchers needed to query the index
+     */</comment>
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>SecondaryIndexSearcher</name></argument>&gt;</argument_list></name></type> <name>getIndexSearchersForQuery</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>groupByIndexType</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+
+        <comment type="line">//Group columns by type</comment>
+        <for>for (<init><decl><type><name>IndexExpression</name></type> <name>ix</name> <range>: <expr><name>clause</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name> <init>= <expr><call><name>getIndexForColumn</name><argument_list>(<argument><expr><name><name>ix</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>index</name> == null</expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>columns</name> <init>= <expr><call><name><name>groupByIndexType</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getCanonicalName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>columns</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>columns</name> = new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>groupByIndexType</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>index</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getCanonicalName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>columns</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name><name>columns</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>ix</name>.<name>column_name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SecondaryIndexSearcher</name></argument>&gt;</argument_list></name></type> <name>indexSearchers</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SecondaryIndexSearcher</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>groupByIndexType</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">//create searcher per type</comment>
+        <for>for (<init><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>column</name> <range>: <expr><call><name><name>groupByIndexType</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>indexSearchers</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>getIndexForColumn</name><argument_list>(<argument><expr><call><name><name>column</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>createSecondaryIndexSearcher</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <return>return <expr><name>indexSearchers</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Performs a search across a number of column indexes
+     * TODO: add support for querying across index types
+     *
+     * @param clause the index query clause
+     * @param range the row range to restrict to
+     * @param dataFilter the column range to restrict to
+     * @return found indexed rows
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>search</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>clause</name></decl></param>, <param><decl><type><name><name>AbstractBounds</name><argument_list>&lt;<argument><name>RowPosition</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxResults</name></decl></param>, <param><decl><type><name>IFilter</name></type> <name>dataFilter</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>maxIsColumns</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SecondaryIndexSearcher</name></argument>&gt;</argument_list></name></type> <name>indexSearchers</name> <init>= <expr><call><name>getIndexSearchersForQuery</name><argument_list>(<argument><expr><name>clause</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>indexSearchers</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr><call><name><name>Collections</name>.<name>emptyList</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+        <comment type="line">//We currently don't support searching across multiple index types</comment>
+        <if>if <condition>(<expr><call><name><name>indexSearchers</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 1</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Unable to search across multiple secondary index types"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+
+        <return>return <expr><call><name><name>indexSearchers</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>.<call><name>search</name><argument_list>(<argument><expr><name>clause</name></expr></argument>, <argument><expr><name>range</name></expr></argument>, <argument><expr><name>maxResults</name></expr></argument>, <argument><expr><name>dataFilter</name></expr></argument>, <argument><expr><name>maxIsColumns</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setIndexBuilt</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>indexes</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>colName</name> <range>: <expr><name>indexes</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>indexesByColumn</name>.<name>get</name></name><argument_list>(<argument><expr><name>colName</name></expr></argument>)</argument_list></call>.<call><name>setIndexBuilt</name><argument_list>(<argument><expr><name>colName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setIndexRemoved</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>indexes</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>colName</name> <range>: <expr><name>indexes</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>indexesByColumn</name>.<name>get</name></name><argument_list>(<argument><expr><name>colName</name></expr></argument>)</argument_list></call>.<call><name>setIndexRemoved</name><argument_list>(<argument><expr><name>colName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+    
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>validate</name><parameter_list>(<param><decl><type><name>Column</name></type> <name>column</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>SecondaryIndex</name></type> <name>index</name> <init>= <expr><call><name>getIndexForColumn</name><argument_list>(<argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>index</name> != null ? <call><name><name>index</name>.<name>validate</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call> : true</expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

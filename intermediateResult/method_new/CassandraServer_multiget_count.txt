@@ -1,0 +1,43 @@
+public Map<ByteBuffer, Integer> multiget_count(List<ByteBuffer> keys, ColumnParent column_parent, SlicePredicate predicate, ConsistencyLevel consistency_level)
+    throws InvalidRequestException, UnavailableException, TimedOutException
+    {
+        if (startSessionIfRequested())
+        {
+            List<String> keysList = Lists.newArrayList();
+            for (ByteBuffer key : keys)
+            {
+                keysList.add(ByteBufferUtil.bytesToHex(key));
+            }
+            Map<String, String> traceParameters = ImmutableMap.of("keys", keysList.toString(),
+                                                                  "column_parent", column_parent.toString(),
+                                                                  "predicate", predicate.toString(),
+                                                                  "consistency_level", consistency_level.name());
+            Tracing.instance().begin("multiget_count", traceParameters);
+        }
+        else
+        {
+            logger.debug("multiget_count");
+        }
+
+        try
+        {
+            ThriftClientState cState = state();
+            String keyspace = cState.getKeyspace();
+            cState.hasColumnFamilyAccess(keyspace, column_parent.column_family, Permission.SELECT);
+
+            Map<ByteBuffer, Integer> counts = new HashMap<ByteBuffer, Integer>();
+            Map<ByteBuffer, List<ColumnOrSuperColumn>> columnFamiliesMap = multigetSliceInternal(keyspace, keys, column_parent, predicate, consistency_level);
+
+            for (Map.Entry<ByteBuffer, List<ColumnOrSuperColumn>> cf : columnFamiliesMap.entrySet())
+                counts.put(cf.getKey(), cf.getValue().size());
+            return counts;
+        }
+        catch (RequestValidationException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
+    }

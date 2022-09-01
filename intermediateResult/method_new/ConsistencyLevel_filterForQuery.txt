@@ -1,0 +1,36 @@
+public List<InetAddress> filterForQuery(Table table, List<InetAddress> liveEndpoints, ReadRepairDecision readRepair)
+    {
+        /*
+         * Endpoints are expected to be restricted to live replicas, sorted by snitch preference.
+         * For LOCAL_QORUM, move local-DC replicas in front first as we need them there whether
+         * we do read repair (since the first replica gets the data read) or not (since we'll take
+         * the blockFor first ones).
+         */
+        if (this == LOCAL_QUORUM)
+            Collections.sort(liveEndpoints, DatabaseDescriptor.getLocalComparator());
+
+        switch (readRepair)
+        {
+            case NONE:
+                return liveEndpoints.subList(0, Math.min(liveEndpoints.size(), blockFor(table)));
+            case GLOBAL:
+                return liveEndpoints;
+            case DC_LOCAL:
+                List<InetAddress> local = new ArrayList<InetAddress>();
+                List<InetAddress> other = new ArrayList<InetAddress>();
+                for (InetAddress add : liveEndpoints)
+                {
+                    if (isLocal(add))
+                        local.add(add);
+                    else
+                        other.add(add);
+                }
+                // check if blockfor more than we have localep's
+                int blockFor = blockFor(table);
+                if (local.size() < blockFor)
+                    local.addAll(other.subList(0, Math.min(blockFor - local.size(), other.size())));
+                return local;
+            default:
+                throw new AssertionError();
+        }
+    }

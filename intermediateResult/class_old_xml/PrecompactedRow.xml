@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\compaction\PrecompactedRow.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOError</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>security</name>.<name>MessageDigest</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamily</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnIndexer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>CounterColumn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DecoratedKey</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableIdentityIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>DataOutputBuffer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>HeapAllocator</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * PrecompactedRow merges its rows in its constructor in memory.
+ */</comment>
+<class><specifier>public</specifier> class <name>PrecompactedRow</name> <super><extends>extends <name>AbstractCompactedRow</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>PrecompactedRow</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ColumnFamily</name></type> <name>compactedCf</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/** it is caller's responsibility to call removeDeleted + removeOldShards from the cf before calling this constructor */</comment>
+    <constructor><specifier>public</specifier> <name>PrecompactedRow</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>compactedCf</name> = <name>cf</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>ColumnFamily</name></type> <name>removeDeletedAndOldShards</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>, <param><decl><type><name>CompactionController</name></type> <name>controller</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>key</name> != null</expr>;</assert>
+        <assert>assert <expr><name>controller</name> != null</expr>;</assert>
+        <assert>assert <expr><name>cf</name> != null</expr>;</assert>
+
+        <comment type="line">// avoid calling shouldPurge unless we actually need to: it can be very expensive if LCS</comment>
+        <comment type="line">// gets behind and has hundreds of overlapping L0 sstables.  Essentially, this method is an</comment>
+        <comment type="line">// ugly refactor of removeDeletedAndOldShards(controller.shouldPurge(key), controller, cf),</comment>
+        <comment type="line">// taking this into account.</comment>
+        <decl_stmt><decl><type><name>Boolean</name></type> <name>shouldPurge</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>cf</name>.<name>hasIrrelevantData</name></name><argument_list>(<argument><expr><name><name>controller</name>.<name>gcBefore</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><name>shouldPurge</name> = <call><name><name>controller</name>.<name>shouldPurge</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <comment type="line">// We should only gc tombstone if shouldPurge == true. But otherwise,</comment>
+        <comment type="line">// it is still ok to collect column that shadowed by their (deleted)</comment>
+        <comment type="line">// container, which removeDeleted(cf, Integer.MAX_VALUE) will do</comment>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>compacted</name> <init>= <expr><call><name><name>ColumnFamilyStore</name>.<name>removeDeleted</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>shouldPurge</name> != null &amp;&amp; <name>shouldPurge</name> ? <name><name>controller</name>.<name>gcBefore</name></name> : <name><name>Integer</name>.<name>MIN_VALUE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>compacted</name> != null &amp;&amp; <call><name><name>compacted</name>.<name>metadata</name></name><argument_list>()</argument_list></call>.<call><name>getDefaultValidator</name><argument_list>()</argument_list></call>.<call><name>isCommutative</name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name>shouldPurge</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>shouldPurge</name> = <call><name><name>controller</name>.<name>shouldPurge</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <if>if <condition>(<expr><name>shouldPurge</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>CounterColumn</name>.<name>mergeAndRemoveOldShards</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>compacted</name></expr></argument>, <argument><expr><name><name>controller</name>.<name>gcBefore</name></name></expr></argument>, <argument><expr><name><name>controller</name>.<name>mergeShardBefore</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></then></if>
+
+        <return>return <expr><name>compacted</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>ColumnFamily</name></type> <name>removeDeletedAndOldShards</name><parameter_list>(<param><decl><type><name>DecoratedKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>shouldPurge</name></decl></param>, <param><decl><type><name>CompactionController</name></type> <name>controller</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// See comment in preceding method</comment>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>compacted</name> <init>= <expr><call><name><name>ColumnFamilyStore</name>.<name>removeDeleted</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>shouldPurge</name> ? <name><name>controller</name>.<name>gcBefore</name></name> : <name><name>Integer</name>.<name>MIN_VALUE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>shouldPurge</name> &amp;&amp; <name>compacted</name> != null &amp;&amp; <call><name><name>compacted</name>.<name>metadata</name></name><argument_list>()</argument_list></call>.<call><name>getDefaultValidator</name><argument_list>()</argument_list></call>.<call><name>isCommutative</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>CounterColumn</name>.<name>mergeAndRemoveOldShards</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>compacted</name></expr></argument>, <argument><expr><name><name>controller</name>.<name>gcBefore</name></name></expr></argument>, <argument><expr><name><name>controller</name>.<name>mergeShardBefore</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <return>return <expr><name>compacted</name></expr>;</return>
+    }</block></function>
+
+    <constructor><specifier>public</specifier> <name>PrecompactedRow</name><parameter_list>(<param><decl><type><name>CompactionController</name></type> <name>controller</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableIdentityIterator</name></argument>&gt;</argument_list></name></type> <name>rows</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><call><name><name>rows</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>.<call><name>getKey</name><argument_list>()</argument_list></call></expr></argument>,
+             <argument><expr><call><name>removeDeletedAndOldShards</name><argument_list>(<argument><expr><call><name><name>rows</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>.<call><name>getKey</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>controller</name></expr></argument>, <argument><expr><call><name>merge</name><argument_list>(<argument><expr><name>rows</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>ColumnFamily</name></type> <name>merge</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableIdentityIterator</name></argument>&gt;</argument_list></name></type> <name>rows</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr>!<call><name><name>rows</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableIdentityIterator</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>thisCF</name></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>thisCF</name> = <call><name><name>row</name>.<name>getColumnFamilyWithColumns</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+
+            <if>if <condition>(<expr><name>cf</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>cf</name> = <name>thisCF</name></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <comment type="line">// addAll is ok even if cf is an ArrayBackedSortedColumns</comment>
+                <expr_stmt><expr><call><name><name>cf</name>.<name>addAll</name></name><argument_list>(<argument><expr><name>thisCF</name></expr></argument>, <argument><expr><name><name>HeapAllocator</name>.<name>instance</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></for>
+        <return>return <expr><name>cf</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>write</name><parameter_list>(<param><decl><type><name>DataOutput</name></type> <name>out</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><name>compactedCf</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><name>DataOutputBuffer</name></type> <name>buffer</name> <init>= <expr>new <call><name>DataOutputBuffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>DataOutputBuffer</name></type> <name>headerBuffer</name> <init>= <expr>new <call><name>DataOutputBuffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>ColumnIndexer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>compactedCf</name></expr></argument>, <argument><expr><name>headerBuffer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>ColumnFamily</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serializeForSSTable</name><argument_list>(<argument><expr><name>compactedCf</name></expr></argument>, <argument><expr><name>buffer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>dataSize</name> <init>= <expr><call><name><name>headerBuffer</name>.<name>getLength</name></name><argument_list>()</argument_list></call> + <call><name><name>buffer</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name>dataSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr><call><name><name>headerBuffer</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>headerBuffer</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr><call><name><name>buffer</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>buffer</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>dataSize</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>update</name><parameter_list>(<param><decl><type><name>MessageDigest</name></type> <name>digest</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>compactedCf</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><name>DataOutputBuffer</name></type> <name>buffer</name> <init>= <expr>new <call><name>DataOutputBuffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>ColumnFamily</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serializeCFInfo</name><argument_list>(<argument><expr><name>compactedCf</name></expr></argument>, <argument><expr><name>buffer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buffer</name>.<name>writeInt</name></name><argument_list>(<argument><expr><call><name><name>compactedCf</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>digest</name>.<name>update</name></name><argument_list>(<argument><expr><call><name><name>buffer</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>buffer</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <expr_stmt><expr><call><name><name>compactedCf</name>.<name>updateDigest</name></name><argument_list>(<argument><expr><name>digest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isEmpty</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>compactedCf</name> == null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>columnCount</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>compactedCf</name> == null ? 0 : <call><name><name>compactedCf</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>maxTimestamp</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>compactedCf</name>.<name>maxTimestamp</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the full column family represented by this compacted row.
+     *
+     * We do not provide this method for other AbstractCompactedRow, because this fits the whole row into
+     * memory and don't make sense for those other implementations.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getFullColumnFamily</name><parameter_list>()</parameter_list>  <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><name>compactedCf</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <block>{ }</block></function>
+}</block></class>
+</unit>

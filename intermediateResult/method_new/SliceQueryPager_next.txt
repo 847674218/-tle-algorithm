@@ -1,0 +1,34 @@
+public ColumnFamily next()
+    {
+        if (exhausted)
+            return null;
+
+        QueryPath path = new QueryPath(cfs.getColumnFamilyName());
+        SliceQueryFilter sliceFilter = new SliceQueryFilter(slices, false, DEFAULT_PAGE_SIZE);
+        QueryFilter filter = new QueryFilter(key, path, sliceFilter);
+        ColumnFamily cf = cfs.getColumnFamily(filter);
+        if (cf == null || sliceFilter.getLiveCount(cf) < DEFAULT_PAGE_SIZE)
+        {
+            exhausted = true;
+        }
+        else
+        {
+            Iterator<IColumn> iter = cf.getReverseSortedColumns().iterator();
+            IColumn lastColumn = iter.next();
+            while (lastColumn.isMarkedForDelete())
+                lastColumn = iter.next();
+
+            int i = 0;
+            for (; i < slices.length; ++i)
+            {
+                ColumnSlice current = slices[i];
+                if (cfs.getComparator().compare(lastColumn.name(), current.finish) <= 0)
+                    break;
+            }
+            if (i >= slices.length)
+                exhausted = true;
+            else
+                slices = Arrays.copyOfRange(slices, i, slices.length);
+        }
+        return cf == null ? ColumnFamily.create(cfs.metadata) : cf;
+    }

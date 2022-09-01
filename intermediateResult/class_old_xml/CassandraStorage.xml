@@ -1,0 +1,1200 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\hadoop\pig\CassandraStorage.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with this
+ * work for additional information regarding copyright ownership. The ASF
+ * licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>hadoop</name>.<name>pig</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>math</name>.<name>BigInteger</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>auth</name>.<name>IAuthenticator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Column</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>IColumn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractCompositeType</name>.<name>CompositeComponent</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>hadoop</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Hex</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>UUIDGen</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>conf</name>.<name>Configuration</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>fs</name>.<name>Path</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>pig</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>pig</name>.<name>backend</name>.<name>executionengine</name>.<name>ExecException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>pig</name>.<name>backend</name>.<name>hadoop</name>.<name>executionengine</name>.<name>mapReduceLayer</name>.<name>PigSplit</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>pig</name>.<name>data</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>pig</name>.<name>impl</name>.<name>util</name>.<name>UDFContext</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>pig</name>.<name>ResourceSchema</name>.<name>ResourceFieldSchema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>TDeserializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>TException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>TSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * A LoadStoreFunc for retrieving data from and storing data to Cassandra
+ *
+ * A row from a standard CF will be returned as nested tuples: (key, ((name1, val1), (name2, val2))).
+ */</comment>
+<class><specifier>public</specifier> class <name>CassandraStorage</name> <super><extends>extends <name>LoadFunc</name></extends> <implements>implements <name>StoreFuncInterface</name>, <name>LoadMetadata</name></implements></super>
+<block>{
+    <enum><specifier>private</specifier> enum <name>MarshallerType</name> <block>{ <decl><name>COMPARATOR</name></decl>, <decl><name>DEFAULT_VALIDATOR</name></decl>, <decl><name>KEY_VALIDATOR</name></decl>, <decl><name>SUBCOMPARATOR</name></decl> }</block></enum><empty_stmt>;</empty_stmt>
+
+    <comment type="line">// system environment variables that can be set to configure connection info:</comment>
+    <comment type="line">// alternatively, Hadoop JobConf variables can be set using keys from ConfigHelper</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_INPUT_RPC_PORT</name> <init>= <expr>"PIG_INPUT_RPC_PORT"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_INPUT_INITIAL_ADDRESS</name> <init>= <expr>"PIG_INPUT_INITIAL_ADDRESS"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_INPUT_PARTITIONER</name> <init>= <expr>"PIG_INPUT_PARTITIONER"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_OUTPUT_RPC_PORT</name> <init>= <expr>"PIG_OUTPUT_RPC_PORT"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_OUTPUT_INITIAL_ADDRESS</name> <init>= <expr>"PIG_OUTPUT_INITIAL_ADDRESS"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_OUTPUT_PARTITIONER</name> <init>= <expr>"PIG_OUTPUT_PARTITIONER"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_RPC_PORT</name> <init>= <expr>"PIG_RPC_PORT"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_INITIAL_ADDRESS</name> <init>= <expr>"PIG_INITIAL_ADDRESS"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_PARTITIONER</name> <init>= <expr>"PIG_PARTITIONER"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_INPUT_FORMAT</name> <init>= <expr>"PIG_INPUT_FORMAT"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_OUTPUT_FORMAT</name> <init>= <expr>"PIG_OUTPUT_FORMAT"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_ALLOW_DELETES</name> <init>= <expr>"PIG_ALLOW_DELETES"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_WIDEROW_INPUT</name> <init>= <expr>"PIG_WIDEROW_INPUT"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PIG_USE_SECONDARY</name> <init>= <expr>"PIG_USE_SECONDARY"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>DEFAULT_INPUT_FORMAT</name> <init>= <expr>"org.apache.cassandra.hadoop.ColumnFamilyInputFormat"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>DEFAULT_OUTPUT_FORMAT</name> <init>= <expr>"org.apache.cassandra.hadoop.ColumnFamilyOutputFormat"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>String</name></type> <name>PARTITION_FILTER_SIGNATURE</name> <init>= <expr>"cassandra.partition.filter"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>ByteBuffer</name></type> <name>BOUND</name> <init>= <expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CassandraStorage</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>slice_start</name> <init>= <expr><name>BOUND</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>slice_end</name> <init>= <expr><name>BOUND</name></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>slice_reverse</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>allow_deletes</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>username</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>password</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>keyspace</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>column_family</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>loadSignature</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>storeSignature</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>Configuration</name></type> <name>conf</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>RecordReader</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>reader</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>RecordWriter</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>writer</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>inputFormatClass</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>outputFormatClass</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>limit</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>widerows</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>usePartitionFilter</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+    <comment type="line">// wide row hacks</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>lastKey</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>lastRow</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>hasNext</name> <init>= <expr>true</expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CassandraStorage</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr>1024</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * @param limit number of columns to fetch in a slice
+     */</comment>
+    <constructor><specifier>public</specifier> <name>CassandraStorage</name><parameter_list>(<param><decl><type><name>int</name></type> <name>limit</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>limit</name></name> = <name>limit</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getLimit</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>limit</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Tuple</name></type> <name>getNextWide</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>CfDef</name></type> <name>cfDef</name> <init>= <expr><call><name>getCfDef</name><argument_list>(<argument><expr><name>loadSignature</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>key</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Tuple</name></type> <name>tuple</name> <init>= <expr>null</expr></init></decl>;</decl_stmt> 
+        <decl_stmt><decl><type><name>DefaultDataBag</name></type> <name>bag</name> <init>= <expr>new <call><name>DefaultDataBag</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <while>while<condition>(<expr>true</expr>)</condition>
+            <block>{
+                <expr_stmt><expr><name>hasNext</name> = <call><name><name>reader</name>.<name>nextKeyValue</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr>!<name>hasNext</name></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><name>tuple</name> == null</expr>)</condition><then>
+                        <expr_stmt><expr><name>tuple</name> = <call><name><name>TupleFactory</name>.<name>getInstance</name></name><argument_list>()</argument_list></call>.<call><name>newTuple</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+                    <if>if <condition>(<expr><name>lastRow</name> != null</expr>)</condition><then>
+                    <block>{
+                        <if>if <condition>(<expr><call><name><name>tuple</name>.<name>size</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then> <comment type="line">// lastRow is a new one</comment>
+                        <block>{
+                            <expr_stmt><expr><name>key</name> = (<name>ByteBuffer</name>)<call><name><name>reader</name>.<name>getCurrentKey</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                            <expr_stmt><expr><name>tuple</name> = <call><name>keyToTuple</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getKey_validation_class</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></then></if>
+                        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>lastRow</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                        <block>{
+                            <expr_stmt><expr><call><name><name>bag</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>columnToTuple</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getComparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></for>
+                        <expr_stmt><expr><name>lastKey</name> = null</expr>;</expr_stmt>
+                        <expr_stmt><expr><name>lastRow</name> = null</expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>tuple</name>.<name>append</name></name><argument_list>(<argument><expr><name>bag</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <return>return <expr><name>tuple</name></expr>;</return>
+                    }</block></then>
+                    <else>else
+                    <block>{
+                        <if>if <condition>(<expr><call><name><name>tuple</name>.<name>size</name></name><argument_list>()</argument_list></call> == 1</expr>)</condition><then> <comment type="line">// rare case of just one wide row, key already set</comment>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>tuple</name>.<name>append</name></name><argument_list>(<argument><expr><name>bag</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                            <return>return <expr><name>tuple</name></expr>;</return>
+                        }</block></then>
+                        <else>else
+                            <return>return <expr>null</expr>;</return></else></if>
+                    }</block></else></if>
+                }</block></then></if>
+                <if>if <condition>(<expr><name>key</name> != null &amp;&amp; !((<name>ByteBuffer</name>)<call><name><name>reader</name>.<name>getCurrentKey</name></name><argument_list>()</argument_list></call>).<call><name>equals</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>)</condition><then> <comment type="line">// key changed</comment>
+                <block>{
+                    <comment type="line">// read too much, hold on to it for next time</comment>
+                    <expr_stmt><expr><name>lastKey</name> = (<name>ByteBuffer</name>)<call><name><name>reader</name>.<name>getCurrentKey</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>lastRow</name> = (<name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name>IColumn</name></argument>&gt;</argument_list></name>)<call><name><name>reader</name>.<name>getCurrentValue</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <comment type="line">// but return what we have so far</comment>
+                    <expr_stmt><expr><call><name><name>tuple</name>.<name>append</name></name><argument_list>(<argument><expr><name>bag</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <return>return <expr><name>tuple</name></expr>;</return>
+                }</block></then></if>
+                <if>if <condition>(<expr><name>key</name> == null</expr>)</condition><then> <comment type="line">// only set the key on the first iteration</comment>
+                <block>{
+                    <expr_stmt><expr><name>key</name> = (<name>ByteBuffer</name>)<call><name><name>reader</name>.<name>getCurrentKey</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><name>lastKey</name> != null &amp;&amp; !(<call><name><name>key</name>.<name>equals</name></name><argument_list>(<argument><expr><name>lastKey</name></expr></argument>)</argument_list></call>)</expr>)</condition><then> <comment type="line">// last key only had one value</comment>
+                    <block>{
+                        <if>if <condition>(<expr><name>tuple</name> == null</expr>)</condition><then>
+                            <expr_stmt><expr><name>tuple</name> = <call><name>keyToTuple</name><argument_list>(<argument><expr><name>lastKey</name></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getKey_validation_class</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                        <else>else
+                            <expr_stmt><expr><call><name>addKeyToTuple</name><argument_list>(<argument><expr><name>tuple</name></expr></argument>, <argument><expr><name>lastKey</name></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getKey_validation_class</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+                        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>lastRow</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                        <block>{
+                            <expr_stmt><expr><call><name><name>bag</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>columnToTuple</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getComparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></for>
+                        <expr_stmt><expr><call><name><name>tuple</name>.<name>append</name></name><argument_list>(<argument><expr><name>bag</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>lastKey</name> = <name>key</name></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>lastRow</name> = (<name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name>IColumn</name></argument>&gt;</argument_list></name>)<call><name><name>reader</name>.<name>getCurrentValue</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <return>return <expr><name>tuple</name></expr>;</return>
+                    }</block></then></if>
+                    <if>if <condition>(<expr><name>tuple</name> == null</expr>)</condition><then>
+                        <expr_stmt><expr><name>tuple</name> = <call><name>keyToTuple</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getKey_validation_class</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                    <else>else
+                        <expr_stmt><expr><call><name>addKeyToTuple</name><argument_list>(<argument><expr><name>tuple</name></expr></argument>, <argument><expr><name>lastKey</name></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getKey_validation_class</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+                }</block></then></if>
+                <decl_stmt><decl><type><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>row</name> <init>= <expr>(<name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name>IColumn</name></argument>&gt;</argument_list></name>)<call><name><name>reader</name>.<name>getCurrentValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>lastRow</name> != null</expr>)</condition><then> <comment type="line">// prepend what was read last time</comment>
+                <block>{
+                    <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>lastRow</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <block>{
+                        <expr_stmt><expr><call><name><name>bag</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>columnToTuple</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getComparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></for>
+                    <expr_stmt><expr><name>lastKey</name> = null</expr>;</expr_stmt>
+                    <expr_stmt><expr><name>lastRow</name> = null</expr>;</expr_stmt>
+                }</block></then></if>
+                <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>row</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <expr_stmt><expr><call><name><name>bag</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>columnToTuple</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getComparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></while>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>Tuple</name></type> <name>getNext</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>widerows</name></expr>)</condition><then>
+            <return>return <expr><call><name>getNextWide</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+        <try>try
+        <block>{
+            <comment type="line">// load the next pair</comment>
+            <if>if <condition>(<expr>!<call><name><name>reader</name>.<name>nextKeyValue</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr>null</expr>;</return></then></if>
+
+            <decl_stmt><decl><type><name>CfDef</name></type> <name>cfDef</name> <init>= <expr><call><name>getCfDef</name><argument_list>(<argument><expr><name>loadSignature</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>key</name> <init>= <expr><call><name><name>reader</name>.<name>getCurrentKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>cf</name> <init>= <expr><call><name><name>reader</name>.<name>getCurrentValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><name>key</name> != null &amp;&amp; <name>cf</name> != null</expr>;</assert>
+
+            <comment type="line">// output tuple, will hold the key, each indexed column in a tuple, then a bag of the rest</comment>
+            <comment type="line">// NOTE: we're setting the tuple size here only for the key so we can use setTupleValue on it</comment>
+
+            <decl_stmt><decl><type><name>Tuple</name></type> <name>tuple</name> <init>= <expr><call><name>keyToTuple</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getKey_validation_class</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>DefaultDataBag</name></type> <name>bag</name> <init>= <expr>new <call><name>DefaultDataBag</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// we must add all the indexed columns first to match the schema</comment>
+            <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name></type> <name>added</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// take care to iterate these in the same order as the schema does</comment>
+            <for>for (<init><decl><type><name>ColumnDef</name></type> <name>cdef</name> <range>: <expr><name><name>cfDef</name>.<name>column_metadata</name></name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>cf</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>tuple</name>.<name>append</name></name><argument_list>(<argument><expr><call><name>columnToTuple</name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getComparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{   <comment type="line">// otherwise, we need to add an empty tuple to take its place</comment>
+                    <expr_stmt><expr><call><name><name>tuple</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>TupleFactory</name>.<name>getInstance</name></name><argument_list>()</argument_list></call>.<call><name>newTuple</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+                <expr_stmt><expr><call><name><name>added</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <comment type="line">// now add all the other columns</comment>
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>cf</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr>!<call><name><name>added</name>.<name>containsKey</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>bag</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>columnToTuple</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getComparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></for>
+            <expr_stmt><expr><call><name><name>tuple</name>.<name>append</name></name><argument_list>(<argument><expr><name>bag</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// finally, special top-level indexes if needed</comment>
+            <if>if <condition>(<expr><name>usePartitionFilter</name></expr>)</condition><then>
+            <block>{
+                <for>for (<init><decl><type><name>ColumnDef</name></type> <name>cdef</name> <range>: <expr><call><name>getIndexes</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>Tuple</name></type> <name>throwaway</name> <init>= <expr><call><name>columnToTuple</name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getComparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>tuple</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>throwaway</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></then></if>
+            <return>return <expr><name>tuple</name></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     *  Deconstructs a composite type to a Tuple.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>Tuple</name></type> <name>composeComposite</name><parameter_list>( <param><decl><type><name>AbstractCompositeType</name></type> <name>comparator</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param> )</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>CompositeComponent</name></argument>&gt;</argument_list></name></type> <name>result</name> <init>= <expr><call><name><name>comparator</name>.<name>deconstruct</name></name><argument_list>( <argument><expr><name>name</name></expr></argument> )</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>Tuple</name></type> <name>t</name> <init>= <expr><call><name><name>TupleFactory</name>.<name>getInstance</name></name><argument_list>()</argument_list></call>.<call><name>newTuple</name><argument_list>( <argument><expr><call><name><name>result</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument> )</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for( <init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>result</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr> )
+        <block>{
+            <expr_stmt><expr><call><name>setTupleValue</name><argument_list>( <argument><expr><name>t</name></expr></argument>, <argument><expr><name>i</name></expr></argument>, <argument><expr><call><name><name>result</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call>.<call><name><name>comparator</name>.<name>compose</name></name><argument_list>( <argument><expr><call><name><name>result</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call>.<name>value</name></expr></argument> )</argument_list></call></expr></argument> )</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <return>return <expr><name>t</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>Tuple</name></type> <name>keyToTuple</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name>CfDef</name></type> <name>cfDef</name></decl></param>, <param><decl><type><name>AbstractType</name></type> <name>comparator</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>Tuple</name></type> <name>tuple</name> <init>= <expr><call><name><name>TupleFactory</name>.<name>getInstance</name></name><argument_list>()</argument_list></call>.<call><name>newTuple</name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>addKeyToTuple</name><argument_list>(<argument><expr><name>tuple</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><name>comparator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>tuple</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>addKeyToTuple</name><parameter_list>(<param><decl><type><name>Tuple</name></type> <name>tuple</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name>CfDef</name></type> <name>cfDef</name></decl></param>, <param><decl><type><name>AbstractType</name></type> <name>comparator</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if<condition>( <expr><name>comparator</name> instanceof <name>AbstractCompositeType</name></expr> )</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>setTupleValue</name><argument_list>(<argument><expr><name>tuple</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name>composeComposite</name><argument_list>(<argument><expr>(<name>AbstractCompositeType</name>)<name>comparator</name></expr></argument>,<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name>setTupleValue</name><argument_list>(<argument><expr><name>tuple</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name>getDefaultMarshallers</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>KEY_VALIDATOR</name></name></expr></argument>)</argument_list></call>.<call><name>compose</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>Tuple</name></type> <name>columnToTuple</name><parameter_list>(<param><decl><type><name>IColumn</name></type> <name>col</name></decl></param>, <param><decl><type><name>CfDef</name></type> <name>cfDef</name></decl></param>, <param><decl><type><name>AbstractType</name></type> <name>comparator</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>Tuple</name></type> <name>pair</name> <init>= <expr><call><name><name>TupleFactory</name>.<name>getInstance</name></name><argument_list>()</argument_list></call>.<call><name>newTuple</name><argument_list>(<argument><expr>2</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if<condition>( <expr><name>comparator</name> instanceof <name>AbstractCompositeType</name></expr> )</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>setTupleValue</name><argument_list>(<argument><expr><name>pair</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name>composeComposite</name><argument_list>(<argument><expr>(<name>AbstractCompositeType</name>)<name>comparator</name></expr></argument>,<argument><expr><call><name><name>col</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name>setTupleValue</name><argument_list>(<argument><expr><name>pair</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>comparator</name>.<name>compose</name></name><argument_list>(<argument><expr><call><name><name>col</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <if>if <condition>(<expr><name>col</name> instanceof <name>Column</name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// standard</comment>
+            <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>validators</name> <init>= <expr><call><name>getValidatorMap</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><call><name><name>validators</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>col</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>MarshallerType</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>marshallers</name> <init>= <expr><call><name>getDefaultMarshallers</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name>setTupleValue</name><argument_list>(<argument><expr><name>pair</name></expr></argument>, <argument><expr>1</expr></argument>, <argument><expr><call><name><name>marshallers</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>DEFAULT_VALIDATOR</name></name></expr></argument>)</argument_list></call>.<call><name>compose</name><argument_list>(<argument><expr><call><name><name>col</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+                <expr_stmt><expr><call><name>setTupleValue</name><argument_list>(<argument><expr><name>pair</name></expr></argument>, <argument><expr>1</expr></argument>, <argument><expr><call><name><name>validators</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>col</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>compose</name><argument_list>(<argument><expr><call><name><name>col</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+            <return>return <expr><name>pair</name></expr>;</return>
+        }</block></then>
+        <else>else
+        <block>{
+            <comment type="line">// super</comment>
+            <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Tuple</name></argument>&gt;</argument_list></name></type> <name>subcols</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Tuple</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>IColumn</name></type> <name>subcol</name> <range>: <expr><call><name><name>col</name>.<name>getSubColumns</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>subcols</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>columnToTuple</name><argument_list>(<argument><expr><name>subcol</name></expr></argument>, <argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getSubcomparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+            <expr_stmt><expr><call><name><name>pair</name>.<name>set</name></name><argument_list>(<argument><expr>1</expr></argument>, <argument><expr>new <call><name>DefaultDataBag</name><argument_list>(<argument><expr><name>subcols</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <return>return <expr><name>pair</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>setTupleValue</name><parameter_list>(<param><decl><type><name>Tuple</name></type> <name>pair</name></decl></param>, <param><decl><type><name>int</name></type> <name>position</name></decl></param>, <param><decl><type><name>Object</name></type> <name>value</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ExecException</name></expr></argument></throws>
+    <block>{
+       <if>if <condition>(<expr><name>value</name> instanceof <name>BigInteger</name></expr>)</condition><then>
+           <expr_stmt><expr><call><name><name>pair</name>.<name>set</name></name><argument_list>(<argument><expr><name>position</name></expr></argument>, <argument><expr>((<name>BigInteger</name>) <name>value</name>).<call><name>intValue</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+       <else>else <if>if <condition>(<expr><name>value</name> instanceof <name>ByteBuffer</name></expr>)</condition><then>
+           <expr_stmt><expr><call><name><name>pair</name>.<name>set</name></name><argument_list>(<argument><expr><name>position</name></expr></argument>, <argument><expr>new <call><name>DataByteArray</name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>getArray</name></name><argument_list>(<argument><expr>(<name>ByteBuffer</name>) <name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+       <else>else <if>if <condition>(<expr><name>value</name> instanceof <name>UUID</name></expr>)</condition><then>
+           <expr_stmt><expr><call><name><name>pair</name>.<name>set</name></name><argument_list>(<argument><expr><name>position</name></expr></argument>, <argument><expr>new <call><name>DataByteArray</name><argument_list>(<argument><expr><call><name><name>UUIDGen</name>.<name>decompose</name></name><argument_list>(<argument><expr>(<name><name>java</name>.<name>util</name>.<name>UUID</name></name>) <name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+       <else>else <if>if <condition>(<expr><name>value</name> instanceof <name>Date</name></expr>)</condition><then>
+           <expr_stmt><expr><call><name><name>pair</name>.<name>set</name></name><argument_list>(<argument><expr><name>position</name></expr></argument>, <argument><expr><call><name><name>DateType</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr>(<name>Date</name>) <name>value</name></expr></argument>)</argument_list></call>.<call><name>getLong</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+       <else>else
+           <expr_stmt><expr><call><name><name>pair</name>.<name>set</name></name><argument_list>(<argument><expr><name>position</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if></else></if></else></if></else></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>CfDef</name></type> <name>getCfDef</name><parameter_list>(<param><decl><type><name>String</name></type> <name>signature</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>UDFContext</name></type> <name>context</name> <init>= <expr><call><name><name>UDFContext</name>.<name>getUDFContext</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Properties</name></type> <name>property</name> <init>= <expr><call><name><name>context</name>.<name>getUDFProperties</name></name><argument_list>(<argument><expr><name><name>CassandraStorage</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name>cfdefFromString</name><argument_list>(<argument><expr><call><name><name>property</name>.<name>getProperty</name></name><argument_list>(<argument><expr><name>signature</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>getIndexExpressions</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>UDFContext</name></type> <name>context</name> <init>= <expr><call><name><name>UDFContext</name>.<name>getUDFContext</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Properties</name></type> <name>property</name> <init>= <expr><call><name><name>context</name>.<name>getUDFProperties</name></name><argument_list>(<argument><expr><name><name>CassandraStorage</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>property</name>.<name>getProperty</name></name><argument_list>(<argument><expr><name>PARTITION_FILTER_SIGNATURE</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <return>return <expr><call><name>indexExpressionsFromString</name><argument_list>(<argument><expr><call><name><name>property</name>.<name>getProperty</name></name><argument_list>(<argument><expr><name>PARTITION_FILTER_SIGNATURE</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return></then>
+        <else>else
+            <return>return <expr>null</expr>;</return></else></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>MarshallerType</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>getDefaultMarshallers</name><parameter_list>(<param><decl><type><name>CfDef</name></type> <name>cfDef</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>MarshallerType</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>marshallers</name> <init>= <expr>new <call><name><name>EnumMap</name><argument_list>&lt;<argument><name>MarshallerType</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>AbstractType</name></type> <name>comparator</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>AbstractType</name></type> <name>subcomparator</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>AbstractType</name></type> <name>default_validator</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>AbstractType</name></type> <name>key_validator</name></decl>;</decl_stmt>
+
+        <expr_stmt><expr><name>comparator</name> = <call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getComparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>subcomparator</name> = <call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getSubcomparator_type</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>default_validator</name> = <call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getDefault_validation_class</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>key_validator</name> = <call><name>parseType</name><argument_list>(<argument><expr><call><name><name>cfDef</name>.<name>getKey_validation_class</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>marshallers</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>COMPARATOR</name></name></expr></argument>, <argument><expr><name>comparator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>marshallers</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>DEFAULT_VALIDATOR</name></name></expr></argument>, <argument><expr><name>default_validator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>marshallers</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>KEY_VALIDATOR</name></name></expr></argument>, <argument><expr><name>key_validator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>marshallers</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>SUBCOMPARATOR</name></name></expr></argument>, <argument><expr><name>subcomparator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>marshallers</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>getValidatorMap</name><parameter_list>(<param><decl><type><name>CfDef</name></type> <name>cfDef</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>validators</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ColumnDef</name></type> <name>cd</name> <range>: <expr><call><name><name>cfDef</name>.<name>getColumn_metadata</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>cd</name>.<name>getValidation_class</name></name><argument_list>()</argument_list></call> != null &amp;&amp; !<call><name><name>cd</name>.<name>getValidation_class</name></name><argument_list>()</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>AbstractType</name></type> <name>validator</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>validator</name> = <call><name><name>TypeParser</name>.<name>parse</name></name><argument_list>(<argument><expr><call><name><name>cd</name>.<name>getValidation_class</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>validators</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>cd</name>.<name>name</name></name></expr></argument>, <argument><expr><name>validator</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></then></if>
+        }</block></for>
+        <return>return <expr><name>validators</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>AbstractType</name></type> <name>parseType</name><parameter_list>(<param><decl><type><name>String</name></type> <name>type</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <try>try
+        <block>{
+            <comment type="line">// always treat counters like longs, specifically CCT.compose is not what we need</comment>
+            <if>if <condition>(<expr><name>type</name> != null &amp;&amp; <call><name><name>type</name>.<name>equals</name></name><argument_list>(<argument><expr>"org.apache.cassandra.db.marshal.CounterColumnType"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><name><name>LongType</name>.<name>instance</name></name></expr>;</return></then></if>
+            <return>return <expr><call><name><name>TypeParser</name>.<name>parse</name></name><argument_list>(<argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>InputFormat</name></type> <name>getInputFormat</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>FBUtilities</name>.<name>construct</name></name><argument_list>(<argument><expr><name>inputFormatClass</name></expr></argument>, <argument><expr>"inputformat"</expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>prepareToRead</name><parameter_list>(<param><decl><type><name>RecordReader</name></type> <name>reader</name></decl></param>, <param><decl><type><name>PigSplit</name></type> <name>split</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>reader</name></name> = <name>reader</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getQueryMap</name><parameter_list>(<param><decl><type><name>String</name></type> <name>query</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>params</name> <init>= <expr><call><name><name>query</name>.<name>split</name></name><argument_list>(<argument><expr>"&amp;"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>String</name></type> <name>param</name> <range>: <expr><name>params</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>keyValue</name> <init>= <expr><call><name><name>param</name>.<name>split</name></name><argument_list>(<argument><expr>"="</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>map</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>keyValue</name><index>[<expr>0</expr>]</index></name></expr></argument>, <argument><expr><name><name>keyValue</name><index>[<expr>1</expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>map</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>setLocationFromUri</name><parameter_list>(<param><decl><type><name>String</name></type> <name>location</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <try>try
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>location</name>.<name>startsWith</name></name><argument_list>(<argument><expr>"cassandra://"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>Exception</name><argument_list>(<argument><expr>"Bad scheme."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>urlParts</name> <init>= <expr><call><name><name>location</name>.<name>split</name></name><argument_list>(<argument><expr>"\\?"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name><name>urlParts</name>.<name>length</name></name> &gt; 1</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>urlQuery</name> <init>= <expr><call><name>getQueryMap</name><argument_list>(<argument><expr><name><name>urlParts</name><index>[<expr>1</expr>]</index></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>AbstractType</name></type> <name>comparator</name> <init>= <expr><name><name>BytesType</name>.<name>instance</name></name></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>urlQuery</name>.<name>containsKey</name></name><argument_list>(<argument><expr>"comparator"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>comparator</name> = <call><name><name>TypeParser</name>.<name>parse</name></name><argument_list>(<argument><expr><call><name><name>urlQuery</name>.<name>get</name></name><argument_list>(<argument><expr>"comparator"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>urlQuery</name>.<name>containsKey</name></name><argument_list>(<argument><expr>"slice_start"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>slice_start</name> = <call><name><name>comparator</name>.<name>fromString</name></name><argument_list>(<argument><expr><call><name><name>urlQuery</name>.<name>get</name></name><argument_list>(<argument><expr>"slice_start"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>urlQuery</name>.<name>containsKey</name></name><argument_list>(<argument><expr>"slice_end"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>slice_end</name> = <call><name><name>comparator</name>.<name>fromString</name></name><argument_list>(<argument><expr><call><name><name>urlQuery</name>.<name>get</name></name><argument_list>(<argument><expr>"slice_end"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>urlQuery</name>.<name>containsKey</name></name><argument_list>(<argument><expr>"reversed"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>slice_reverse</name> = <call><name><name>Boolean</name>.<name>parseBoolean</name></name><argument_list>(<argument><expr><call><name><name>urlQuery</name>.<name>get</name></name><argument_list>(<argument><expr>"reversed"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>urlQuery</name>.<name>containsKey</name></name><argument_list>(<argument><expr>"limit"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>limit</name> = <call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><call><name><name>urlQuery</name>.<name>get</name></name><argument_list>(<argument><expr>"limit"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>urlQuery</name>.<name>containsKey</name></name><argument_list>(<argument><expr>"allow_deletes"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>allow_deletes</name> = <call><name><name>Boolean</name>.<name>parseBoolean</name></name><argument_list>(<argument><expr><call><name><name>urlQuery</name>.<name>get</name></name><argument_list>(<argument><expr>"allow_deletes"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>urlQuery</name>.<name>containsKey</name></name><argument_list>(<argument><expr>"widerows"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>widerows</name> = <call><name><name>Boolean</name>.<name>parseBoolean</name></name><argument_list>(<argument><expr><call><name><name>urlQuery</name>.<name>get</name></name><argument_list>(<argument><expr>"widerows"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr><call><name><name>urlQuery</name>.<name>containsKey</name></name><argument_list>(<argument><expr>"use_secondary"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>usePartitionFilter</name> = <call><name><name>Boolean</name>.<name>parseBoolean</name></name><argument_list>(<argument><expr><call><name><name>urlQuery</name>.<name>get</name></name><argument_list>(<argument><expr>"use_secondary"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></then></if>
+            <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>parts</name> <init>= <expr><name><name>urlParts</name><index>[<expr>0</expr>]</index></name>.<call><name>split</name><argument_list>(<argument><expr>"/+"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>credentialsAndKeyspace</name> <init>= <expr><name><name>parts</name><index>[<expr>1</expr>]</index></name>.<call><name>split</name><argument_list>(<argument><expr>"@"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name><name>credentialsAndKeyspace</name>.<name>length</name></name> &gt; 1</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>credentials</name> <init>= <expr><name><name>credentialsAndKeyspace</name><index>[<expr>0</expr>]</index></name>.<call><name>split</name><argument_list>(<argument><expr>":"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>username</name> = <name><name>credentials</name><index>[<expr>0</expr>]</index></name></expr>;</expr_stmt>
+                <expr_stmt><expr><name>password</name> = <name><name>credentials</name><index>[<expr>1</expr>]</index></name></expr>;</expr_stmt>
+                <expr_stmt><expr><name>keyspace</name> = <name><name>credentialsAndKeyspace</name><index>[<expr>1</expr>]</index></name></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><name>keyspace</name> = <name><name>parts</name><index>[<expr>1</expr>]</index></name></expr>;</expr_stmt>
+            }</block></else></if>
+            <expr_stmt><expr><name>column_family</name> = <name><name>parts</name><index>[<expr>2</expr>]</index></name></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Expected 'cassandra://[username:password@]&lt;keyspace&gt;/&lt;columnfamily&gt;[?slice_start=&lt;start&gt;&amp;slice_end=&lt;end&gt;[&amp;reversed=true][&amp;limit=1][&amp;allow_deletes=true][widerows=true][use_secondary=true]]': " + <call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>setConnectionInformation</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_RPC_PORT</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputRpcPort</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_RPC_PORT</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setOutputRpcPort</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_RPC_PORT</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INPUT_RPC_PORT</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputRpcPort</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INPUT_RPC_PORT</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_OUTPUT_RPC_PORT</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setOutputRpcPort</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_OUTPUT_RPC_PORT</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INITIAL_ADDRESS</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputInitialAddress</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INITIAL_ADDRESS</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setOutputInitialAddress</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INITIAL_ADDRESS</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INPUT_INITIAL_ADDRESS</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputInitialAddress</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INPUT_INITIAL_ADDRESS</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_OUTPUT_INITIAL_ADDRESS</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setOutputInitialAddress</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_OUTPUT_INITIAL_ADDRESS</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_PARTITIONER</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputPartitioner</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_PARTITIONER</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setOutputPartitioner</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_PARTITIONER</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <if>if<condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INPUT_PARTITIONER</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputPartitioner</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INPUT_PARTITIONER</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if<condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_OUTPUT_PARTITIONER</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setOutputPartitioner</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_OUTPUT_PARTITIONER</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INPUT_FORMAT</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><name>inputFormatClass</name> = <call><name>getFullyQualifiedClassName</name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_INPUT_FORMAT</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><name>inputFormatClass</name> = <name>DEFAULT_INPUT_FORMAT</name></expr>;</expr_stmt></else></if>
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_OUTPUT_FORMAT</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><name>outputFormatClass</name> = <call><name>getFullyQualifiedClassName</name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_OUTPUT_FORMAT</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><name>outputFormatClass</name> = <name>DEFAULT_OUTPUT_FORMAT</name></expr>;</expr_stmt></else></if>
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_ALLOW_DELETES</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><name>allow_deletes</name> = <call><name><name>Boolean</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_ALLOW_DELETES</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>String</name></type> <name>getFullyQualifiedClassName</name><parameter_list>(<param><decl><type><name>String</name></type> <name>classname</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>classname</name>.<name>contains</name></name><argument_list>(<argument><expr>"."</expr></argument>)</argument_list></call> ? <name>classname</name> : "org.apache.cassandra.hadoop." + <name>classname</name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>setLocation</name><parameter_list>(<param><decl><type><name>String</name></type> <name>location</name></decl></param>, <param><decl><type><name>Job</name></type> <name>job</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name>conf</name> = <call><name><name>job</name>.<name>getConfiguration</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>setLocationFromUri</name><argument_list>(<argument><expr><name>location</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getInputSlicePredicate</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>SliceRange</name></type> <name>range</name> <init>= <expr>new <call><name>SliceRange</name><argument_list>(<argument><expr><name>slice_start</name></expr></argument>, <argument><expr><name>slice_end</name></expr></argument>, <argument><expr><name>slice_reverse</name></expr></argument>, <argument><expr><name>limit</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>SlicePredicate</name></type> <name>predicate</name> <init>= <expr>new <call><name>SlicePredicate</name><argument_list>()</argument_list></call>.<call><name>setSlice_range</name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputSlicePredicate</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><name>predicate</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_WIDEROW_INPUT</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><name>widerows</name> = <call><name><name>Boolean</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_WIDEROW_INPUT</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_USE_SECONDARY</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><name>usePartitionFilter</name> = <call><name><name>Boolean</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_USE_SECONDARY</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><name>usePartitionFilter</name> &amp;&amp; <call><name>getIndexExpressions</name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputRange</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><call><name>getIndexExpressions</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><name>username</name> != null &amp;&amp; <name>password</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputKeyspaceUserNameAndPassword</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><name>username</name></expr></argument>, <argument><expr><name>password</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setInputColumnFamily</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>column_family</name></expr></argument>, <argument><expr><name>widerows</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>setConnectionInformation</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getInputRpcPort</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"PIG_INPUT_RPC_PORT or PIG_RPC_PORT environment variable not set"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getInputInitialAddress</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"PIG_INPUT_INITIAL_ADDRESS or PIG_INITIAL_ADDRESS environment variable not set"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getInputPartitioner</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"PIG_INPUT_PARTITIONER or PIG_PARTITIONER environment variable not set"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><name>loadSignature</name> == null</expr>)</condition><then>
+            <expr_stmt><expr><name>loadSignature</name> = <name>location</name></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><call><name>initSchema</name><argument_list>(<argument><expr><name>loadSignature</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ResourceSchema</name></type> <name>getSchema</name><parameter_list>(<param><decl><type><name>String</name></type> <name>location</name></decl></param>, <param><decl><type><name>Job</name></type> <name>job</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>setLocation</name><argument_list>(<argument><expr><name>location</name></expr></argument>, <argument><expr><name>job</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>CfDef</name></type> <name>cfDef</name> <init>= <expr><call><name>getCfDef</name><argument_list>(<argument><expr><name>loadSignature</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>cfDef</name>.<name>column_type</name>.<name>equals</name></name><argument_list>(<argument><expr>"Super"</expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+        <comment type="block">/*
+        Our returned schema should look like this:
+        (key, index1:(name, value), index2:(name, value), columns:{(name, value)})
+        Which is to say, columns that have metadata will be returned as named tuples, but unknown columns will go into a bag.
+        This way, wide rows can still be handled by the bag, but known columns can easily be referenced.
+         */</comment>
+
+        <comment type="line">// top-level schema, no type</comment>
+        <decl_stmt><decl><type><name>ResourceSchema</name></type> <name>schema</name> <init>= <expr>new <call><name>ResourceSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// get default marshallers and validators</comment>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>MarshallerType</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>marshallers</name> <init>= <expr><call><name>getDefaultMarshallers</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>,<argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>validators</name> <init>= <expr><call><name>getValidatorMap</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// add key</comment>
+        <decl_stmt><decl><type><name>ResourceFieldSchema</name></type> <name>keyFieldSchema</name> <init>= <expr>new <call><name>ResourceFieldSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>keyFieldSchema</name>.<name>setName</name></name><argument_list>(<argument><expr>"key"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>keyFieldSchema</name>.<name>setType</name></name><argument_list>(<argument><expr><call><name>getPigType</name><argument_list>(<argument><expr><call><name><name>marshallers</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>KEY_VALIDATOR</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>ResourceSchema</name></type> <name>bagSchema</name> <init>= <expr>new <call><name>ResourceSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ResourceFieldSchema</name></type> <name>bagField</name> <init>= <expr>new <call><name>ResourceFieldSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>bagField</name>.<name>setType</name></name><argument_list>(<argument><expr><name><name>DataType</name>.<name>BAG</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bagField</name>.<name>setName</name></name><argument_list>(<argument><expr>"columns"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// inside the bag, place one tuple with the default comparator/validator schema</comment>
+        <decl_stmt><decl><type><name>ResourceSchema</name></type> <name>bagTupleSchema</name> <init>= <expr>new <call><name>ResourceSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ResourceFieldSchema</name></type> <name>bagTupleField</name> <init>= <expr>new <call><name>ResourceFieldSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>bagTupleField</name>.<name>setType</name></name><argument_list>(<argument><expr><name><name>DataType</name>.<name>TUPLE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>ResourceFieldSchema</name></type> <name>bagcolSchema</name> <init>= <expr>new <call><name>ResourceFieldSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ResourceFieldSchema</name></type> <name>bagvalSchema</name> <init>= <expr>new <call><name>ResourceFieldSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>bagcolSchema</name>.<name>setName</name></name><argument_list>(<argument><expr>"name"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bagvalSchema</name>.<name>setName</name></name><argument_list>(<argument><expr>"value"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bagcolSchema</name>.<name>setType</name></name><argument_list>(<argument><expr><call><name>getPigType</name><argument_list>(<argument><expr><call><name><name>marshallers</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>COMPARATOR</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bagvalSchema</name>.<name>setType</name></name><argument_list>(<argument><expr><call><name>getPigType</name><argument_list>(<argument><expr><call><name><name>marshallers</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>DEFAULT_VALIDATOR</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bagTupleSchema</name>.<name>setFields</name></name><argument_list>(<argument><expr>new <name><name>ResourceFieldSchema</name><index>[]</index></name> <block>{ <expr><name>bagcolSchema</name></expr>, <expr><name>bagvalSchema</name></expr> }</block></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bagTupleField</name>.<name>setSchema</name></name><argument_list>(<argument><expr><name>bagTupleSchema</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bagSchema</name>.<name>setFields</name></name><argument_list>(<argument><expr>new <name><name>ResourceFieldSchema</name><index>[]</index></name> <block>{ <expr><name>bagTupleField</name></expr> }</block></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bagField</name>.<name>setSchema</name></name><argument_list>(<argument><expr><name>bagSchema</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// will contain all fields for this schema</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ResourceFieldSchema</name></argument>&gt;</argument_list></name></type> <name>allSchemaFields</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ResourceFieldSchema</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// add the key first, then the indexed columns, and finally the bag</comment>
+        <expr_stmt><expr><call><name><name>allSchemaFields</name>.<name>add</name></name><argument_list>(<argument><expr><name>keyFieldSchema</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// defined validators/indexes</comment>
+        <for>for (<init><decl><type><name>ColumnDef</name></type> <name>cdef</name> <range>: <expr><name><name>cfDef</name>.<name>column_metadata</name></name></expr></range></decl></init>)
+        <block>{
+            <comment type="line">// make a new tuple for each col/val pair</comment>
+            <decl_stmt><decl><type><name>ResourceSchema</name></type> <name>innerTupleSchema</name> <init>= <expr>new <call><name>ResourceSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ResourceFieldSchema</name></type> <name>innerTupleField</name> <init>= <expr>new <call><name>ResourceFieldSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>innerTupleField</name>.<name>setType</name></name><argument_list>(<argument><expr><name><name>DataType</name>.<name>TUPLE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>innerTupleField</name>.<name>setSchema</name></name><argument_list>(<argument><expr><name>innerTupleSchema</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>innerTupleField</name>.<name>setName</name></name><argument_list>(<argument><expr>new <call><name>String</name><argument_list>(<argument><expr><call><name><name>cdef</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>ResourceFieldSchema</name></type> <name>idxColSchema</name> <init>= <expr>new <call><name>ResourceFieldSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>idxColSchema</name>.<name>setName</name></name><argument_list>(<argument><expr>"name"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>idxColSchema</name>.<name>setType</name></name><argument_list>(<argument><expr><call><name>getPigType</name><argument_list>(<argument><expr><call><name><name>marshallers</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>COMPARATOR</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>ResourceFieldSchema</name></type> <name>valSchema</name> <init>= <expr>new <call><name>ResourceFieldSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>AbstractType</name></type> <name>validator</name> <init>= <expr><call><name><name>validators</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>validator</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>validator</name> = <call><name><name>marshallers</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>DEFAULT_VALIDATOR</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>valSchema</name>.<name>setName</name></name><argument_list>(<argument><expr>"value"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>valSchema</name>.<name>setType</name></name><argument_list>(<argument><expr><call><name>getPigType</name><argument_list>(<argument><expr><name>validator</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>innerTupleSchema</name>.<name>setFields</name></name><argument_list>(<argument><expr>new <name><name>ResourceFieldSchema</name><index>[]</index></name> <block>{ <expr><name>idxColSchema</name></expr>, <expr><name>valSchema</name></expr> }</block></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>allSchemaFields</name>.<name>add</name></name><argument_list>(<argument><expr><name>innerTupleField</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <comment type="line">// bag at the end for unknown columns</comment>
+        <expr_stmt><expr><call><name><name>allSchemaFields</name>.<name>add</name></name><argument_list>(<argument><expr><name>bagField</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// add top-level index elements if needed</comment>
+        <if>if <condition>(<expr><name>usePartitionFilter</name></expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>ColumnDef</name></type> <name>cdef</name> <range>: <expr><call><name>getIndexes</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>ResourceFieldSchema</name></type> <name>idxSchema</name> <init>= <expr>new <call><name>ResourceFieldSchema</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>idxSchema</name>.<name>setName</name></name><argument_list>(<argument><expr>"index_" + new <call><name>String</name><argument_list>(<argument><expr><call><name><name>cdef</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>AbstractType</name></type> <name>validator</name> <init>= <expr><call><name><name>validators</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>cdef</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>validator</name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><name>validator</name> = <call><name><name>marshallers</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>MarshallerType</name>.<name>DEFAULT_VALIDATOR</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <expr_stmt><expr><call><name><name>idxSchema</name>.<name>setType</name></name><argument_list>(<argument><expr><call><name>getPigType</name><argument_list>(<argument><expr><name>validator</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>allSchemaFields</name>.<name>add</name></name><argument_list>(<argument><expr><name>idxSchema</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></then></if>
+        <comment type="line">// top level schema contains everything</comment>
+        <expr_stmt><expr><call><name><name>schema</name>.<name>setFields</name></name><argument_list>(<argument><expr><call><name><name>allSchemaFields</name>.<name>toArray</name></name><argument_list>(<argument><expr>new <name><name>ResourceFieldSchema</name><index>[<expr><call><name><name>allSchemaFields</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>]</index></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>schema</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>byte</name></type> <name>getPigType</name><parameter_list>(<param><decl><type><name>AbstractType</name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>type</name> instanceof <name>LongType</name> || <name>type</name> instanceof <name>DateType</name></expr>)</condition><then> <comment type="line">// DateType is bad and it should feel bad</comment>
+            <return>return <expr><name><name>DataType</name>.<name>LONG</name></name></expr>;</return></then>
+        <else>else <if>if <condition>(<expr><name>type</name> instanceof <name>IntegerType</name> || <name>type</name> instanceof <name>Int32Type</name></expr>)</condition><then> <comment type="line">// IntegerType will overflow at 2**31, but is kept for compatibility until pig has a BigInteger</comment>
+            <return>return <expr><name><name>DataType</name>.<name>INTEGER</name></name></expr>;</return></then>
+        <else>else <if>if <condition>(<expr><name>type</name> instanceof <name>AsciiType</name></expr>)</condition><then>
+            <return>return <expr><name><name>DataType</name>.<name>CHARARRAY</name></name></expr>;</return></then>
+        <else>else <if>if <condition>(<expr><name>type</name> instanceof <name>UTF8Type</name></expr>)</condition><then>
+            <return>return <expr><name><name>DataType</name>.<name>CHARARRAY</name></name></expr>;</return></then>
+        <else>else <if>if <condition>(<expr><name>type</name> instanceof <name>FloatType</name></expr>)</condition><then>
+            <return>return <expr><name><name>DataType</name>.<name>FLOAT</name></name></expr>;</return></then>
+        <else>else <if>if <condition>(<expr><name>type</name> instanceof <name>DoubleType</name></expr>)</condition><then>
+            <return>return <expr><name><name>DataType</name>.<name>DOUBLE</name></name></expr>;</return></then>
+        <else>else <if>if <condition>(<expr><name>type</name> instanceof <name>AbstractCompositeType</name></expr> )</condition><then>
+            <return>return <expr><name><name>DataType</name>.<name>TUPLE</name></name></expr>;</return></then></if></else></if></else></if></else></if></else></if></else></if></else></if>
+
+        <return>return <expr><name><name>DataType</name>.<name>BYTEARRAY</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ResourceStatistics</name></type> <name>getStatistics</name><parameter_list>(<param><decl><type><name>String</name></type> <name>location</name></decl></param>, <param><decl><type><name>Job</name></type> <name>job</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name><index>[]</index></type> <name>getPartitionKeys</name><parameter_list>(<param><decl><type><name>String</name></type> <name>location</name></decl></param>, <param><decl><type><name>Job</name></type> <name>job</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<name>usePartitionFilter</name></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnDef</name></argument>&gt;</argument_list></name></type> <name>indexes</name> <init>= <expr><call><name>getIndexes</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>partitionKeys</name> <init>= <expr>new <name><name>String</name><index>[<expr><call><name><name>indexes</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>indexes</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <expr_stmt><expr><name><name>partitionKeys</name><index>[<expr><name>i</name></expr>]</index></name> = new <call><name>String</name><argument_list>(<argument><expr><call><name><name>indexes</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call>.<call><name>getName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>partitionKeys</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setPartitionFilter</name><parameter_list>(<param><decl><type><name>Expression</name></type> <name>partitionFilter</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>UDFContext</name></type> <name>context</name> <init>= <expr><call><name><name>UDFContext</name>.<name>getUDFContext</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Properties</name></type> <name>property</name> <init>= <expr><call><name><name>context</name>.<name>getUDFProperties</name></name><argument_list>(<argument><expr><name><name>CassandraStorage</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>property</name>.<name>setProperty</name></name><argument_list>(<argument><expr><name>PARTITION_FILTER_SIGNATURE</name></expr></argument>, <argument><expr><call><name>indexExpressionsToString</name><argument_list>(<argument><expr><call><name>filterToIndexExpressions</name><argument_list>(<argument><expr><name>partitionFilter</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>filterToIndexExpressions</name><parameter_list>(<param><decl><type><name>Expression</name></type> <name>expression</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>indexExpressions</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Expression</name>.<name>BinaryExpression</name></name></type> <name>be</name> <init>= <expr>(<name><name>Expression</name>.<name>BinaryExpression</name></name>)<name>expression</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>name</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>be</name>.<name>getLhs</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call>.<call><name>getBytes</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>value</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>be</name>.<name>getRhs</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call>.<call><name>getBytes</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <switch>switch <condition>(<expr><call><name><name>expression</name>.<name>getOpType</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <case>case <expr><name>OP_EQ</name></expr>:
+                <expr_stmt><expr><call><name><name>indexExpressions</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>IndexExpression</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>IndexOperator</name>.<name>EQ</name></name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>OP_GE</name></expr>:
+                <expr_stmt><expr><call><name><name>indexExpressions</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>IndexExpression</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>IndexOperator</name>.<name>GTE</name></name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>OP_GT</name></expr>:
+                <expr_stmt><expr><call><name><name>indexExpressions</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>IndexExpression</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>IndexOperator</name>.<name>GT</name></name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>OP_LE</name></expr>:
+                <expr_stmt><expr><call><name><name>indexExpressions</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>IndexExpression</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>IndexOperator</name>.<name>LTE</name></name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>OP_LT</name></expr>:
+                <expr_stmt><expr><call><name><name>indexExpressions</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>IndexExpression</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name><name>IndexOperator</name>.<name>LT</name></name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><case>case <expr><name>OP_AND</name></expr>:
+                <expr_stmt><expr><call><name><name>indexExpressions</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name>filterToIndexExpressions</name><argument_list>(<argument><expr><call><name><name>be</name>.<name>getLhs</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>indexExpressions</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name>filterToIndexExpressions</name><argument_list>(<argument><expr><call><name><name>be</name>.<name>getRhs</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <break>break;</break>
+            </case><default>default:
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Unsupported expression type: " + <call><name><name>expression</name>.<name>getOpType</name></name><argument_list>()</argument_list></call>.<call><name>name</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        </default>}</block></switch>
+        <return>return <expr><name>indexExpressions</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ColumnDef</name></argument>&gt;</argument_list></name></type> <name>getIndexes</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>CfDef</name></type> <name>cfdef</name> <init>= <expr><call><name>getCfDef</name><argument_list>(<argument><expr><name>loadSignature</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnDef</name></argument>&gt;</argument_list></name></type> <name>indexes</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ColumnDef</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>ColumnDef</name></type> <name>cdef</name> <range>: <expr><name><name>cfdef</name>.<name>column_metadata</name></name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name><name>cdef</name>.<name>index_type</name></name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>indexes</name>.<name>add</name></name><argument_list>(<argument><expr><name>cdef</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <return>return <expr><name>indexes</name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>relativeToAbsolutePath</name><parameter_list>(<param><decl><type><name>String</name></type> <name>location</name></decl></param>, <param><decl><type><name>Path</name></type> <name>curDir</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><name>location</name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>setUDFContextSignature</name><parameter_list>(<param><decl><type><name>String</name></type> <name>signature</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>loadSignature</name></name> = <name>signature</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block">/* StoreFunc methods */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setStoreFuncUDFContextSignature</name><parameter_list>(<param><decl><type><name>String</name></type> <name>signature</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>storeSignature</name></name> = <name>signature</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>relToAbsPathForStoreLocation</name><parameter_list>(<param><decl><type><name>String</name></type> <name>location</name></decl></param>, <param><decl><type><name>Path</name></type> <name>curDir</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>relativeToAbsolutePath</name><argument_list>(<argument><expr><name>location</name></expr></argument>, <argument><expr><name>curDir</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setStoreLocation</name><parameter_list>(<param><decl><type><name>String</name></type> <name>location</name></decl></param>, <param><decl><type><name>Job</name></type> <name>job</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name>conf</name> = <call><name><name>job</name>.<name>getConfiguration</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>setLocationFromUri</name><argument_list>(<argument><expr><name>location</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>username</name> != null &amp;&amp; <name>password</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setOutputKeyspaceUserNameAndPassword</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><name>username</name></expr></argument>, <argument><expr><name>password</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name><name>ConfigHelper</name>.<name>setOutputColumnFamily</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>, <argument><expr><name>keyspace</name></expr></argument>, <argument><expr><name>column_family</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>setConnectionInformation</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getOutputRpcPort</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"PIG_OUTPUT_RPC_PORT or PIG_RPC_PORT environment variable not set"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getOutputInitialAddress</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"PIG_OUTPUT_INITIAL_ADDRESS or PIG_INITIAL_ADDRESS environment variable not set"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getOutputPartitioner</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"PIG_OUTPUT_PARTITIONER or PIG_PARTITIONER environment variable not set"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <comment type="line">// we have to do this again here for the check in writeColumnsFromTuple</comment>
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_USE_SECONDARY</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <expr_stmt><expr><name>usePartitionFilter</name> = <call><name><name>Boolean</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name><name>System</name>.<name>getenv</name></name><argument_list>(<argument><expr><name>PIG_USE_SECONDARY</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name>initSchema</name><argument_list>(<argument><expr><name>storeSignature</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>OutputFormat</name></type> <name>getOutputFormat</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>FBUtilities</name>.<name>construct</name></name><argument_list>(<argument><expr><name>outputFormatClass</name></expr></argument>, <argument><expr>"outputformat"</expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>checkSchema</name><parameter_list>(<param><decl><type><name>ResourceSchema</name></type> <name>schema</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// we don't care about types, they all get casted to ByteBuffers</comment>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>prepareToWrite</name><parameter_list>(<param><decl><type><name>RecordWriter</name></type> <name>writer</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>writer</name></name> = <name>writer</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>objToBB</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>o</name> == null</expr>)</condition><then>
+            <return>return <expr>(<name>ByteBuffer</name>)<name>o</name></expr>;</return></then></if>
+        <if>if <condition>(<expr><name>o</name> instanceof <name><name>java</name>.<name>lang</name>.<name>String</name></name></expr>)</condition><then>
+            <return>return <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr>new <call><name>DataByteArray</name><argument_list>(<argument><expr>(<name>String</name>)<name>o</name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return></then></if>
+        <if>if <condition>(<expr><name>o</name> instanceof <name>Integer</name></expr>)</condition><then>
+            <return>return <expr><call><name><name>Int32Type</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr>(<name>Integer</name>)<name>o</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+        <if>if <condition>(<expr><name>o</name> instanceof <name>Long</name></expr>)</condition><then>
+            <return>return <expr><call><name><name>LongType</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr>(<name>Long</name>)<name>o</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+        <if>if <condition>(<expr><name>o</name> instanceof <name>Float</name></expr>)</condition><then>
+            <return>return <expr><call><name><name>FloatType</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr>(<name>Float</name>)<name>o</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+        <if>if <condition>(<expr><name>o</name> instanceof <name>Double</name></expr>)</condition><then>
+            <return>return <expr><call><name><name>DoubleType</name>.<name>instance</name>.<name>decompose</name></name><argument_list>(<argument><expr>(<name>Double</name>)<name>o</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+        <if>if <condition>(<expr><name>o</name> instanceof <name>UUID</name></expr>)</condition><then>
+            <return>return <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>UUIDGen</name>.<name>decompose</name></name><argument_list>(<argument><expr>(<name>UUID</name>) <name>o</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return></then></if>
+        <if>if<condition>(<expr><name>o</name> instanceof <name>Tuple</name></expr>)</condition><then> <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name></type> <name>objects</name> <init>= <expr>((<name>Tuple</name>)<name>o</name>).<call><name>getAll</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>serialized</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>objects</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>totalLength</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <for>for(<init><decl><type><name>Object</name></type> <name>sub</name> <range>: <expr><name>objects</name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>buffer</name> <init>= <expr><call><name>objToBB</name><argument_list>(<argument><expr><name>sub</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>serialized</name>.<name>add</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>totalLength</name> += 2 + <call><name><name>buffer</name>.<name>remaining</name></name><argument_list>()</argument_list></call> + 1</expr>;</expr_stmt>
+            }</block></for>
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>out</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>allocate</name></name><argument_list>(<argument><expr><name>totalLength</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>bb</name> <range>: <expr><name>serialized</name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>length</name> <init>= <expr><call><name><name>bb</name>.<name>remaining</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>put</name></name><argument_list>(<argument><expr><call>(<name>byte</name>) <argument_list>(<argument><expr>(<name>length</name> &gt;&gt; 8) &amp; 0xFF</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>put</name></name><argument_list>(<argument><expr><call>(<name>byte</name>) <argument_list>(<argument><expr><name>length</name> &amp; 0xFF</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>put</name></name><argument_list>(<argument><expr><name>bb</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>put</name></name><argument_list>(<argument><expr>(<name>byte</name>) 0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <expr_stmt><expr><call><name><name>out</name>.<name>flip</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>out</name></expr>;</return>
+        }</block></then></if>
+
+        <return>return <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr>((<name>DataByteArray</name>) <name>o</name>).<call><name>get</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>putNext</name><parameter_list>(<param><decl><type><name>Tuple</name></type> <name>t</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="block">/*
+        We support two cases for output:
+        First, the original output:
+            (key, (name, value), (name,value), {(name,value)}) (tuples or bag is optional)
+        For supers, we only accept the original output.
+        */</comment>
+
+        <if>if <condition>(<expr><call><name><name>t</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; 1</expr>)</condition><then>
+        <block>{
+            <comment type="line">// simply nothing here, we can't even delete without a key</comment>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Empty output skipped, filter empty tuples to suppress this warning"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>key</name> <init>= <expr><call><name>objToBB</name><argument_list>(<argument><expr><call><name><name>t</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>t</name>.<name>getType</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call> == <name><name>DataType</name>.<name>TUPLE</name></name></expr>)</condition><then>
+            <expr_stmt><expr><call><name>writeColumnsFromTuple</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>t</name></expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else <if>if <condition>(<expr><call><name><name>t</name>.<name>getType</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call> == <name><name>DataType</name>.<name>BAG</name></name></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>t</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 2</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"No arguments allowed after bag"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><call><name>writeColumnsFromBag</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr>(<name>DefaultDataBag</name>) <call><name><name>t</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Second argument in output must be a tuple or bag"</expr></argument>)</argument_list></call></expr>;</throw></else></if></else></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>writeColumnsFromTuple</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name>Tuple</name></type> <name>t</name></decl></param>, <param><decl><type><name>int</name></type> <name>offset</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name></type> <name>mutationList</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name>offset</name></expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>t</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>t</name>.<name>getType</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call> == <name><name>DataType</name>.<name>BAG</name></name></expr>)</condition><then>
+                <expr_stmt><expr><call><name>writeColumnsFromBag</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr>(<name>DefaultDataBag</name>) <call><name><name>t</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else <if>if <condition>(<expr><call><name><name>t</name>.<name>getType</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call> == <name><name>DataType</name>.<name>TUPLE</name></name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>Tuple</name></type> <name>inner</name> <init>= <expr>(<name>Tuple</name>) <call><name><name>t</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>inner</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then> <comment type="line">// may be empty, for an indexed column that wasn't present</comment>
+                    <expr_stmt><expr><call><name><name>mutationList</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>mutationFromTuple</name><argument_list>(<argument><expr><name>inner</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></then>
+            <else>else <if>if <condition>(<expr>!<name>usePartitionFilter</name></expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Output type was not a bag or a tuple"</expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if></else></if></else></if>
+        }</block></for>
+        <if>if <condition>(<expr><call><name><name>mutationList</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+            <expr_stmt><expr><call><name>writeMutations</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>mutationList</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>Mutation</name></type> <name>mutationFromTuple</name><parameter_list>(<param><decl><type><name>Tuple</name></type> <name>t</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>Mutation</name></type> <name>mutation</name> <init>= <expr>new <call><name>Mutation</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>t</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name>allow_deletes</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name><name>mutation</name>.<name>deletion</name></name> = new <call><name>Deletion</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>mutation</name>.<name>deletion</name>.<name>predicate</name></name> = new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>SlicePredicate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>mutation</name>.<name>deletion</name>.<name>predicate</name>.<name>column_names</name></name> = <call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><call><name>objToBB</name><argument_list>(<argument><expr><call><name><name>t</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>mutation</name>.<name>deletion</name>.<name>setTimestamp</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+                <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"null found but deletes are disabled, set " + <name>PIG_ALLOW_DELETES</name> +
+                    "=true in environment or allow_deletes=true in URL to enable"</expr></argument>)</argument_list></call></expr>;</throw></else></if>
+        }</block></then>
+        <else>else
+        <block>{
+            <decl_stmt><decl><type><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>Column</name></name></type> <name>column</name> <init>= <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>Column</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>column</name>.<name>setName</name></name><argument_list>(<argument><expr><call><name>objToBB</name><argument_list>(<argument><expr><call><name><name>t</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>column</name>.<name>setValue</name></name><argument_list>(<argument><expr><call><name>objToBB</name><argument_list>(<argument><expr><call><name><name>t</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>column</name>.<name>setTimestamp</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>mutation</name>.<name>column_or_supercolumn</name></name> = new <call><name>ColumnOrSuperColumn</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>mutation</name>.<name>column_or_supercolumn</name>.<name>column</name></name> = <name>column</name></expr>;</expr_stmt>
+        }</block></else></if>
+        <return>return <expr><name>mutation</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>writeColumnsFromBag</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name>DefaultDataBag</name></type> <name>bag</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name></type> <name>mutationList</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Tuple</name></type> <name>pair</name> <range>: <expr><name>bag</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>Mutation</name></type> <name>mutation</name> <init>= <expr>new <call><name>Mutation</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>DataType</name>.<name>findType</name></name><argument_list>(<argument><expr><call><name><name>pair</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call> == <name><name>DataType</name>.<name>BAG</name></name></expr>)</condition><then> <comment type="line">// supercolumn</comment>
+            <block>{
+                <decl_stmt><decl><type><name>SuperColumn</name></type> <name>sc</name> <init>= <expr>new <call><name>SuperColumn</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>sc</name>.<name>setName</name></name><argument_list>(<argument><expr><call><name>objToBB</name><argument_list>(<argument><expr><call><name><name>pair</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>Column</name></name></argument>&gt;</argument_list></name></type> <name>columns</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>Column</name></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>Tuple</name></type> <name>subcol</name> <range>: <expr>(<name>DefaultDataBag</name>) <call><name><name>pair</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>Column</name></name></type> <name>column</name> <init>= <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>Column</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>column</name>.<name>setName</name></name><argument_list>(<argument><expr><call><name>objToBB</name><argument_list>(<argument><expr><call><name><name>subcol</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>column</name>.<name>setValue</name></name><argument_list>(<argument><expr><call><name>objToBB</name><argument_list>(<argument><expr><call><name><name>subcol</name>.<name>get</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>column</name>.<name>setTimestamp</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>columns</name>.<name>add</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+                <if>if <condition>(<expr><call><name><name>columns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><name>allow_deletes</name></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><name><name>mutation</name>.<name>deletion</name></name> = new <call><name>Deletion</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name><name>mutation</name>.<name>deletion</name>.<name>super_column</name></name> = <call><name>objToBB</name><argument_list>(<argument><expr><call><name><name>pair</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>mutation</name>.<name>deletion</name>.<name>setTimestamp</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>timestampMicros</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then>
+                    <else>else
+                        <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"SuperColumn deletion attempted with empty bag, but deletes are disabled, set " +
+                            <name>PIG_ALLOW_DELETES</name> + "=true in environment or allow_deletes=true in URL to enable"</expr></argument>)</argument_list></call></expr>;</throw></else></if>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><name><name>sc</name>.<name>columns</name></name> = <name>columns</name></expr>;</expr_stmt>
+                    <expr_stmt><expr><name><name>mutation</name>.<name>column_or_supercolumn</name></name> = new <call><name>ColumnOrSuperColumn</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name><name>mutation</name>.<name>column_or_supercolumn</name>.<name>super_column</name></name> = <name>sc</name></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></then>
+            <else>else
+                <expr_stmt><expr><name>mutation</name> = <call><name>mutationFromTuple</name><argument_list>(<argument><expr><name>pair</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+            <expr_stmt><expr><call><name><name>mutationList</name>.<name>add</name></name><argument_list>(<argument><expr><name>mutation</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// for wide rows, we need to limit the amount of mutations we write at once</comment>
+            <if>if <condition>(<expr><call><name><name>mutationList</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt;= 10</expr>)</condition><then> <comment type="line">// arbitrary, CFOF will re-batch this up, and BOF won't care</comment>
+            <block>{
+                <expr_stmt><expr><call><name>writeMutations</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>mutationList</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>mutationList</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+        <comment type="line">// write the last batch</comment>
+        <if>if <condition>(<expr><call><name><name>mutationList</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+            <expr_stmt><expr><call><name>writeMutations</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>mutationList</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>writeMutations</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Mutation</name></argument>&gt;</argument_list></name></type> <name>mutations</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>writer</name>.<name>write</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>mutations</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>cleanupOnFailure</name><parameter_list>(<param><decl><type><name>String</name></type> <name>failure</name></decl></param>, <param><decl><type><name>Job</name></type> <name>job</name></decl></param>)</parameter_list>
+    <block>{
+    }</block></function>
+
+    <comment type="block">/* Methods to get the column family schema from Cassandra */</comment>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>initSchema</name><parameter_list>(<param><decl><type><name>String</name></type> <name>signature</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Properties</name></type> <name>properties</name> <init>= <expr><call><name><name>UDFContext</name>.<name>getUDFContext</name></name><argument_list>()</argument_list></call>.<call><name>getUDFProperties</name><argument_list>(<argument><expr><name><name>CassandraStorage</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// Only get the schema if we haven't already gotten it</comment>
+        <if>if <condition>(<expr>!<call><name><name>properties</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>signature</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <try>try
+            <block>{
+                <decl_stmt><decl><type><name><name>Cassandra</name>.<name>Client</name></name></type> <name>client</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getClientFromInputAddressList</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>client</name>.<name>set_keyspace</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <if>if <condition>(<expr><name>username</name> != null &amp;&amp; <name>password</name> != null</expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>credentials</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>2</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>credentials</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>USERNAME_KEY</name></name></expr></argument>, <argument><expr><name>username</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>credentials</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>PASSWORD_KEY</name></name></expr></argument>, <argument><expr><name>password</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                    <try>try
+                    <block>{
+                        <expr_stmt><expr><call><name><name>client</name>.<name>login</name></name><argument_list>(<argument><expr>new <call><name>AuthenticationRequest</name><argument_list>(<argument><expr><name>credentials</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block>
+                    <catch>catch <parameter_list>(<param><decl><type><name>AuthenticationException</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Authentication exception: invalid username and/or password"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                    }</block></catch>
+                    <catch>catch <parameter_list>(<param><decl><type><name>AuthorizationException</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw> <comment type="line">// never actually throws AuthorizationException.</comment>
+                    }</block></catch></try>
+                }</block></then></if>
+
+                <decl_stmt><decl><type><name>CfDef</name></type> <name>cfDef</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>KsDef</name></type> <name>ksDef</name> <init>= <expr><call><name><name>client</name>.<name>describe_keyspace</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>CfDef</name></argument>&gt;</argument_list></name></type> <name>defs</name> <init>= <expr><call><name><name>ksDef</name>.<name>getCf_defs</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>CfDef</name></type> <name>def</name> <range>: <expr><name>defs</name></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>column_family</name>.<name>equalsIgnoreCase</name></name><argument_list>(<argument><expr><call><name><name>def</name>.<name>getName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><name>cfDef</name> = <name>def</name></expr>;</expr_stmt>
+                        <break>break;</break>
+                    }</block></then></if>
+                }</block></for>
+                <if>if <condition>(<expr><name>cfDef</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>properties</name>.<name>setProperty</name></name><argument_list>(<argument><expr><name>signature</name></expr></argument>, <argument><expr><call><name>cfdefToString</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                <else>else
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Column family '%s' not found in keyspace '%s'"</expr></argument>,
+                                                             <argument><expr><name>column_family</name></expr></argument>,
+                                                             <argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></else></if>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>TException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>InvalidRequestException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>NotFoundException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>String</name></type> <name>cfdefToString</name><parameter_list>(<param><decl><type><name>CfDef</name></type> <name>cfDef</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>cfDef</name> != null</expr>;</assert>
+        <comment type="line">// this is so awful it's kind of cool!</comment>
+        <decl_stmt><decl><type><name>TSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>TSerializer</name><argument_list>(<argument><expr>new <call><name><name>TBinaryProtocol</name>.<name>Factory</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>Hex</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><call><name><name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>TException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>CfDef</name></type> <name>cfdefFromString</name><parameter_list>(<param><decl><type><name>String</name></type> <name>st</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>st</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><name>TDeserializer</name></type> <name>deserializer</name> <init>= <expr>new <call><name>TDeserializer</name><argument_list>(<argument><expr>new <call><name><name>TBinaryProtocol</name>.<name>Factory</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>CfDef</name></type> <name>cfDef</name> <init>= <expr>new <call><name>CfDef</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>deserializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>, <argument><expr><call><name><name>Hex</name>.<name>hexToBytes</name></name><argument_list>(<argument><expr><name>st</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>TException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <return>return <expr><name>cfDef</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>String</name></type> <name>indexExpressionsToString</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>indexExpressions</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>indexExpressions</name> != null</expr>;</assert>
+        <comment type="line">// oh, you thought cfdefToString was awful?</comment>
+        <decl_stmt><decl><type><name>IndexClause</name></type> <name>indexClause</name> <init>= <expr>new <call><name>IndexClause</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>indexClause</name>.<name>setExpressions</name></name><argument_list>(<argument><expr><name>indexExpressions</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>indexClause</name>.<name>setStart_key</name></name><argument_list>(<argument><expr>"".<call><name>getBytes</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>TSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>TSerializer</name><argument_list>(<argument><expr>new <call><name><name>TBinaryProtocol</name>.<name>Factory</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>Hex</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><call><name><name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>indexClause</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>TException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>indexExpressionsFromString</name><parameter_list>(<param><decl><type><name>String</name></type> <name>ie</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>ie</name> != null</expr>;</assert>
+        <decl_stmt><decl><type><name>TDeserializer</name></type> <name>deserializer</name> <init>= <expr>new <call><name>TDeserializer</name><argument_list>(<argument><expr>new <call><name><name>TBinaryProtocol</name>.<name>Factory</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>IndexClause</name></type> <name>indexClause</name> <init>= <expr>new <call><name>IndexClause</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>deserializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>indexClause</name></expr></argument>, <argument><expr><call><name><name>Hex</name>.<name>hexToBytes</name></name><argument_list>(<argument><expr><name>ie</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>TException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <return>return <expr><call><name><name>indexClause</name>.<name>getExpressions</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+
+</unit>

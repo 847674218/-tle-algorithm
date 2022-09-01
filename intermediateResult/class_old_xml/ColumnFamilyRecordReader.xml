@@ -1,0 +1,580 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\hadoop\ColumnFamilyRecordReader.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>hadoop</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>NetworkInterface</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>SocketException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TTransport</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>auth</name>.<name>IAuthenticator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>IColumn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>TypeParser</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>IPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>conf</name>.<name>Configuration</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name>.<name>InputSplit</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name>.<name>RecordReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapreduce</name>.<name>TaskAttemptContext</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>TException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>thrift</name>.<name>transport</name>.<name>TSocket</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>ColumnFamilyRecordReader</name> <super><extends>extends <name><name>RecordReader</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></extends>
+    <implements>implements <name><name>org</name>.<name>apache</name>.<name>hadoop</name>.<name>mapred</name>.<name><name>RecordReader</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>ColumnFamilyRecordReader</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>CASSANDRA_HADOOP_MAX_KEY_SIZE_DEFAULT</name> <init>= <expr>8192</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ColumnFamilySplit</name></type> <name>split</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>RowIterator</name></type> <name>iter</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>currentRow</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>SlicePredicate</name></type> <name>predicate</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>isEmptyPredicate</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>totalRowCount</name></decl>;</decl_stmt> <comment type="line">// total number of rows to fetch</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>batchSize</name></decl>;</decl_stmt> <comment type="line">// fetch this many per batch</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>cfName</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>String</name></type> <name>keyspace</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>TSocket</name></type> <name>socket</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>Cassandra</name>.<name>Client</name></name></type> <name>client</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ConsistencyLevel</name></type> <name>consistencyLevel</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>keyBufferSize</name> <init>= <expr>8192</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IndexExpression</name></argument>&gt;</argument_list></name></type> <name>filter</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>ColumnFamilyRecordReader</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name><name>ColumnFamilyRecordReader</name>.<name>CASSANDRA_HADOOP_MAX_KEY_SIZE_DEFAULT</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><specifier>public</specifier> <name>ColumnFamilyRecordReader</name><parameter_list>(<param><decl><type><name>int</name></type> <name>keyBufferSize</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>keyBufferSize</name></name> = <name>keyBufferSize</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>socket</name> != null &amp;&amp; <call><name><name>socket</name>.<name>isOpen</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>socket</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>socket</name> = null</expr>;</expr_stmt>
+            <expr_stmt><expr><name>client</name> = null</expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>getCurrentKey</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>currentRow</name>.<name>left</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>getCurrentValue</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>currentRow</name>.<name>right</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>float</name></type> <name>getProgress</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>1.0F</expr>;</return></then></if>
+
+        <comment type="line">// the progress is likely to be reported slightly off the actual but close enough</comment>
+        <decl_stmt><decl><type><name>float</name></type> <name>progress</name> <init>= <expr>((<name>float</name>) <call><name><name>iter</name>.<name>rowsRead</name></name><argument_list>()</argument_list></call> / <name>totalRowCount</name>)</expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>progress</name> &gt; 1.0F ? 1.0F : <name>progress</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>static</specifier> <name>boolean</name></type> <name>isEmptyPredicate</name><parameter_list>(<param><decl><type><name>SlicePredicate</name></type> <name>predicate</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>predicate</name> == null</expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+
+        <if>if <condition>(<expr><call><name><name>predicate</name>.<name>isSetColumn_names</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>predicate</name>.<name>getSlice_range</name></name><argument_list>()</argument_list></call> == null</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <if>if <condition>(<expr><call><name><name>predicate</name>.<name>getSlice_range</name></name><argument_list>()</argument_list></call> == null</expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>start</name> <init>= <expr><call><name><name>predicate</name>.<name>getSlice_range</name></name><argument_list>()</argument_list></call>.<call><name>getStart</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>(<name>start</name> != null) &amp;&amp; (<name><name>start</name>.<name>length</name></name> &gt; 0)</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+            
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>finish</name> <init>= <expr><call><name><name>predicate</name>.<name>getSlice_range</name></name><argument_list>()</argument_list></call>.<call><name>getFinish</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>(<name>finish</name> != null) &amp;&amp; (<name><name>finish</name>.<name>length</name></name> &gt; 0)</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>initialize</name><parameter_list>(<param><decl><type><name>InputSplit</name></type> <name>split</name></decl></param>, <param><decl><type><name>TaskAttemptContext</name></type> <name>context</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>split</name></name> = (<name>ColumnFamilySplit</name>) <name>split</name></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>Configuration</name></type> <name>conf</name> <init>= <expr><call><name><name>context</name>.<name>getConfiguration</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>KeyRange</name></type> <name>jobRange</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getInputKeyRange</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>filter</name> = <name>jobRange</name> == null ? null : <name><name>jobRange</name>.<name>row_filter</name></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>predicate</name> = <call><name><name>ConfigHelper</name>.<name>getInputSlicePredicate</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>widerows</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getInputIsWide</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>isEmptyPredicate</name> = <call><name>isEmptyPredicate</name><argument_list>(<argument><expr><name>predicate</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>totalRowCount</name> = (<name>int</name>) <call><name><name>this</name>.<name>split</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>batchSize</name> = <call><name><name>ConfigHelper</name>.<name>getRangeBatchSize</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>cfName</name> = <call><name><name>ConfigHelper</name>.<name>getInputColumnFamily</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>consistencyLevel</name> = <call><name><name>ConsistencyLevel</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name><name>ConfigHelper</name>.<name>getReadConsistencyLevel</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name>keyspace</name> = <call><name><name>ConfigHelper</name>.<name>getInputKeyspace</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <comment type="line">// only need to connect once</comment>
+            <if>if <condition>(<expr><name>socket</name> != null &amp;&amp; <call><name><name>socket</name>.<name>isOpen</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <comment type="line">// create connection using thrift</comment>
+            <decl_stmt><decl><type><name>String</name></type> <name>location</name> <init>= <expr><call><name>getLocation</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>socket</name> = new <call><name>TSocket</name><argument_list>(<argument><expr><name>location</name></expr></argument>, <argument><expr><call><name><name>ConfigHelper</name>.<name>getInputRpcPort</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>TTransport</name></type> <name>transport</name> <init>= <expr><call><name><name>ConfigHelper</name>.<name>getInputTransportFactory</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call>.<call><name>openTransport</name><argument_list>(<argument><expr><name>socket</name></expr></argument>, <argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>TBinaryProtocol</name></type> <name>binaryProtocol</name> <init>= <expr>new <call><name>TBinaryProtocol</name><argument_list>(<argument><expr><name>transport</name></expr></argument>, <argument><expr>true</expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>client</name> = new <call><name><name>Cassandra</name>.<name>Client</name></name><argument_list>(<argument><expr><name>binaryProtocol</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// log in</comment>
+            <expr_stmt><expr><call><name><name>client</name>.<name>set_keyspace</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>ConfigHelper</name>.<name>getInputKeyspaceUserName</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>creds</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>creds</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>USERNAME_KEY</name></name></expr></argument>, <argument><expr><call><name><name>ConfigHelper</name>.<name>getInputKeyspaceUserName</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>creds</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>IAuthenticator</name>.<name>PASSWORD_KEY</name></name></expr></argument>, <argument><expr><call><name><name>ConfigHelper</name>.<name>getInputKeyspacePassword</name></name><argument_list>(<argument><expr><name>conf</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>AuthenticationRequest</name></type> <name>authRequest</name> <init>= <expr>new <call><name>AuthenticationRequest</name><argument_list>(<argument><expr><name>creds</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>client</name>.<name>login</name></name><argument_list>(<argument><expr><name>authRequest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><name>iter</name> = <name>widerows</name> ? new <call><name>WideRowIterator</name><argument_list>()</argument_list></call> : new <call><name>StaticRowIterator</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"created {}"</expr></argument>, <argument><expr><name>iter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>nextKeyValue</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Finished scanning " + <call><name><name>iter</name>.<name>rowsRead</name></name><argument_list>()</argument_list></call> + " rows (estimate was: " + <name>totalRowCount</name> + ")"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>false</expr>;</return>
+        }</block></then></if>
+
+        <expr_stmt><expr><name>currentRow</name> = <call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <comment type="line">// we don't use endpointsnitch since we are trying to support hadoop nodes that are</comment>
+    <comment type="line">// not necessarily on Cassandra machines, too.  This should be adequate for single-DC clusters, at least.</comment>
+    <function><type><specifier>private</specifier> <name>String</name></type> <name>getLocation</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>localAddresses</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>Enumeration</name><argument_list>&lt;<argument><name>NetworkInterface</name></argument>&gt;</argument_list></name></type> <name>nets</name> <init>= <expr><call><name><name>NetworkInterface</name>.<name>getNetworkInterfaces</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <while>while <condition>(<expr><call><name><name>nets</name>.<name>hasMoreElements</name></name><argument_list>()</argument_list></call></expr>)</condition>
+                <expr_stmt><expr><call><name><name>localAddresses</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>Collections</name>.<name>list</name></name><argument_list>(<argument><expr><call><name><name>nets</name>.<name>nextElement</name></name><argument_list>()</argument_list></call>.<call><name>getInetAddresses</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></while>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>SocketException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <for>for (<init><decl><type><name>InetAddress</name></type> <name>address</name> <range>: <expr><name>localAddresses</name></expr></range></decl></init>)
+        <block>{
+            <for>for (<init><decl><type><name>String</name></type> <name>location</name> <range>: <expr><call><name><name>split</name>.<name>getLocations</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>InetAddress</name></type> <name>locationAddress</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>locationAddress</name> = <call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>location</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>UnknownHostException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+                <if>if <condition>(<expr><call><name><name>address</name>.<name>equals</name></name><argument_list>(<argument><expr><name>locationAddress</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <return>return <expr><name>location</name></expr>;</return>
+                }</block></then></if>
+            }</block></for>
+        }</block></for>
+        <return>return <expr><call><name><name>split</name>.<name>getLocations</name></name><argument_list>()</argument_list></call><index>[<expr>0</expr>]</index></expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>abstract</specifier> class <name>RowIterator</name> <super><extends>extends <name><name>AbstractIterator</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>protected</specifier> <name><name>List</name><argument_list>&lt;<argument><name>KeySlice</name></argument>&gt;</argument_list></name></type> <name>rows</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>protected</specifier> <name>int</name></type> <name>totalRead</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>subComparator</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>IPartitioner</name></type> <name>partitioner</name></decl>;</decl_stmt>
+
+        <constructor><specifier>private</specifier> <name>RowIterator</name><parameter_list>()</parameter_list>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>partitioner</name> = <call><name><name>FBUtilities</name>.<name>newPartitioner</name></name><argument_list>(<argument><expr><call><name><name>client</name>.<name>describe_partitioner</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <comment type="line">// Get the Keyspace metadata, then get the specific CF metadata</comment>
+                <comment type="line">// in order to populate the sub/comparator.</comment>
+                <decl_stmt><decl><type><name>KsDef</name></type> <name>ks_def</name> <init>= <expr><call><name><name>client</name>.<name>describe_keyspace</name></name><argument_list>(<argument><expr><name>keyspace</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>cfnames</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>CfDef</name></type> <name>cfd</name> <range>: <expr><name><name>ks_def</name>.<name>cf_defs</name></name></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>cfnames</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>cfd</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                <decl_stmt><decl><type><name>int</name></type> <name>idx</name> <init>= <expr><call><name><name>cfnames</name>.<name>indexOf</name></name><argument_list>(<argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>CfDef</name></type> <name>cf_def</name> <init>= <expr><call><name><name>ks_def</name>.<name>cf_defs</name>.<name>get</name></name><argument_list>(<argument><expr><name>idx</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <expr_stmt><expr><name>comparator</name> = <call><name><name>TypeParser</name>.<name>parse</name></name><argument_list>(<argument><expr><name><name>cf_def</name>.<name>comparator_type</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>subComparator</name> = <name><name>cf_def</name>.<name>subcomparator_type</name></name> == null ? null : <call><name><name>TypeParser</name>.<name>parse</name></name><argument_list>(<argument><expr><name><name>cf_def</name>.<name>subcomparator_type</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"unable to load sub/comparator"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>TException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"error communicating via Thrift"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"unable to load keyspace " + <name>keyspace</name></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/**
+         * @return total number of rows read by this record reader
+         */</comment>
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>rowsRead</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>totalRead</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>IColumn</name></type> <name>unthriftify</name><parameter_list>(<param><decl><type><name>ColumnOrSuperColumn</name></type> <name>cosc</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name><name>cosc</name>.<name>counter_column</name></name> != null</expr>)</condition><then>
+                <return>return <expr><call><name>unthriftifyCounter</name><argument_list>(<argument><expr><name><name>cosc</name>.<name>counter_column</name></name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+            <if>if <condition>(<expr><name><name>cosc</name>.<name>counter_super_column</name></name> != null</expr>)</condition><then>
+                <return>return <expr><call><name>unthriftifySuperCounter</name><argument_list>(<argument><expr><name><name>cosc</name>.<name>counter_super_column</name></name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+            <if>if <condition>(<expr><name><name>cosc</name>.<name>super_column</name></name> != null</expr>)</condition><then>
+                <return>return <expr><call><name>unthriftifySuper</name><argument_list>(<argument><expr><name><name>cosc</name>.<name>super_column</name></name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+            <assert>assert <expr><name><name>cosc</name>.<name>column</name></name> != null</expr>;</assert>
+            <return>return <expr><call><name>unthriftifySimple</name><argument_list>(<argument><expr><name><name>cosc</name>.<name>column</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>IColumn</name></type> <name>unthriftifySuper</name><parameter_list>(<param><decl><type><name>SuperColumn</name></type> <name>super_column</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>SuperColumn</name></name></type> <name>sc</name> <init>= <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>SuperColumn</name></name><argument_list>(<argument><expr><name><name>super_column</name>.<name>name</name></name></expr></argument>, <argument><expr><name>subComparator</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>Column</name></type> <name>column</name> <range>: <expr><name><name>super_column</name>.<name>columns</name></name></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>sc</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name>unthriftifySimple</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <return>return <expr><name>sc</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>IColumn</name></type> <name>unthriftifySimple</name><parameter_list>(<param><decl><type><name>Column</name></type> <name>column</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Column</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>value</name></name></expr></argument>, <argument><expr><name><name>column</name>.<name>timestamp</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>IColumn</name></type> <name>unthriftifyCounter</name><parameter_list>(<param><decl><type><name>CounterColumn</name></type> <name>column</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">//CounterColumns read the nodeID from the System table, so need the StorageService running and access</comment>
+            <comment type="line">//to cassandra.yaml. To avoid a Hadoop needing access to yaml return a regular Column.</comment>
+            <return>return <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Column</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr><name><name>column</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>IColumn</name></type> <name>unthriftifySuperCounter</name><parameter_list>(<param><decl><type><name>CounterSuperColumn</name></type> <name>superColumn</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>SuperColumn</name></name></type> <name>sc</name> <init>= <expr>new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>SuperColumn</name></name><argument_list>(<argument><expr><name><name>superColumn</name>.<name>name</name></name></expr></argument>, <argument><expr><name>subComparator</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>CounterColumn</name></type> <name>column</name> <range>: <expr><name><name>superColumn</name>.<name>columns</name></name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>sc</name>.<name>addColumn</name></name><argument_list>(<argument><expr><call><name>unthriftifyCounter</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <return>return <expr><name>sc</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> class <name>StaticRowIterator</name> <super><extends>extends <name>RowIterator</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>protected</specifier> <name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>maybeInit</name><parameter_list>()</parameter_list>
+        <block>{
+            <comment type="line">// check if we need another batch</comment>
+            <if>if <condition>(<expr><name>rows</name> != null &amp;&amp; <name>i</name> &lt; <call><name><name>rows</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <decl_stmt><decl><type><name>String</name></type> <name>startToken</name></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>totalRead</name> == 0</expr>)</condition><then>
+            <block>{
+                <comment type="line">// first request</comment>
+                <expr_stmt><expr><name>startToken</name> = <call><name><name>split</name>.<name>getStartToken</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><name>startToken</name> = <call><name><name>partitioner</name>.<name>getTokenFactory</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>(<argument><expr><call><name><name>partitioner</name>.<name>getToken</name></name><argument_list>(<argument><expr><call><name><name>Iterables</name>.<name>getLast</name></name><argument_list>(<argument><expr><name>rows</name></expr></argument>)</argument_list></call>.<name>key</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>startToken</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>split</name>.<name>getEndToken</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// reached end of the split</comment>
+                    <expr_stmt><expr><name>rows</name> = null</expr>;</expr_stmt>
+                    <return>return;</return>
+                }</block></then></if>
+            }</block></else></if>
+
+            <decl_stmt><decl><type><name>KeyRange</name></type> <name>keyRange</name> <init>= <expr>new <call><name>KeyRange</name><argument_list>(<argument><expr><name>batchSize</name></expr></argument>)</argument_list></call>
+                                .<call><name>setStart_token</name><argument_list>(<argument><expr><name>startToken</name></expr></argument>)</argument_list></call>
+                                .<call><name>setEnd_token</name><argument_list>(<argument><expr><call><name><name>split</name>.<name>getEndToken</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+                                .<call><name>setRow_filter</name><argument_list>(<argument><expr><name>filter</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>rows</name> = <call><name><name>client</name>.<name>get_range_slices</name></name><argument_list>(<argument><expr>new <call><name>ColumnParent</name><argument_list>(<argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>predicate</name></expr></argument>, <argument><expr><name>keyRange</name></expr></argument>, <argument><expr><name>consistencyLevel</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <comment type="line">// nothing new? reached the end</comment>
+                <if>if <condition>(<expr><call><name><name>rows</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>rows</name> = null</expr>;</expr_stmt>
+                    <return>return;</return>
+                }</block></then></if>
+
+                <comment type="line">// remove ghosts when fetching all columns</comment>
+                <if>if <condition>(<expr><name>isEmptyPredicate</name></expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>KeySlice</name></argument>&gt;</argument_list></name></type> <name>it</name> <init>= <expr><call><name><name>rows</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>KeySlice</name></type> <name>ks</name></decl>;</decl_stmt>
+                    <do>do
+                    <block>{
+                        <expr_stmt><expr><name>ks</name> = <call><name><name>it</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <if>if <condition>(<expr><call><name><name>ks</name>.<name>getColumnsSize</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+                        <block>{
+                            <expr_stmt><expr><call><name><name>it</name>.<name>remove</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        }</block></then></if>
+                    }</block> while <condition>(<expr><call><name><name>it</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>;</do>
+
+                    <comment type="line">// all ghosts, spooky</comment>
+                    <if>if <condition>(<expr><call><name><name>rows</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <comment type="line">// maybeInit assumes it can get the start-with key from the rows collection, so add back the last</comment>
+                        <expr_stmt><expr><call><name><name>rows</name>.<name>add</name></name><argument_list>(<argument><expr><name>ks</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name>maybeInit</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <return>return;</return>
+                    }</block></then></if>
+                }</block></then></if>
+
+                <comment type="line">// reset to iterate through this new batch</comment>
+                <expr_stmt><expr><name>i</name> = 0</expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>maybeInit</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>rows</name> == null</expr>)</condition><then>
+                <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+            <expr_stmt><expr><name>totalRead</name>++</expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>KeySlice</name></type> <name>ks</name> <init>= <expr><call><name><name>rows</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name>++</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr>new <call><name><name>TreeMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>comparator</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>ColumnOrSuperColumn</name></type> <name>cosc</name> <range>: <expr><name><name>ks</name>.<name>columns</name></name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name>unthriftify</name><argument_list>(<argument><expr><name>cosc</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>map</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <return>return <expr>new <call><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>ks</name>.<name>key</name></name></expr></argument>, <argument><expr><name>map</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> class <name>WideRowIterator</name> <super><extends>extends <name>RowIterator</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <name><name>PeekingIterator</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>wideColumns</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>lastColumn</name> <init>= <expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>lastCountedKey</name> <init>= <expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></init></decl>;</decl_stmt>
+
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>maybeInit</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>wideColumns</name> != null &amp;&amp; <call><name><name>wideColumns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return;</return></then></if>
+
+            <decl_stmt><decl><type><name>KeyRange</name></type> <name>keyRange</name></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>totalRead</name> == 0</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>startToken</name> <init>= <expr><call><name><name>split</name>.<name>getStartToken</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>keyRange</name> = new <call><name>KeyRange</name><argument_list>(<argument><expr><name>batchSize</name></expr></argument>)</argument_list></call>
+                          .<call><name>setStart_token</name><argument_list>(<argument><expr><name>startToken</name></expr></argument>)</argument_list></call>
+                          .<call><name>setEnd_token</name><argument_list>(<argument><expr><call><name><name>split</name>.<name>getEndToken</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+                          .<call><name>setRow_filter</name><argument_list>(<argument><expr><name>filter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name>KeySlice</name></type> <name>lastRow</name> <init>= <expr><call><name><name>Iterables</name>.<name>getLast</name></name><argument_list>(<argument><expr><name>rows</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Starting with last-seen row {}"</expr></argument>, <argument><expr><name><name>lastRow</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>keyRange</name> = new <call><name>KeyRange</name><argument_list>(<argument><expr><name>batchSize</name></expr></argument>)</argument_list></call>
+                          .<call><name>setStart_key</name><argument_list>(<argument><expr><name><name>lastRow</name>.<name>key</name></name></expr></argument>)</argument_list></call>
+                          .<call><name>setEnd_token</name><argument_list>(<argument><expr><call><name><name>split</name>.<name>getEndToken</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+                          .<call><name>setRow_filter</name><argument_list>(<argument><expr><name>filter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>rows</name> = <call><name><name>client</name>.<name>get_paged_slice</name></name><argument_list>(<argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>keyRange</name></expr></argument>, <argument><expr><name>lastColumn</name></expr></argument>, <argument><expr><name>consistencyLevel</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>KeySlice</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+                    <expr_stmt><expr><name>n</name> += <call><name><name>row</name>.<name>columns</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"read {} columns in {} rows for {} starting with {}"</expr></argument>,
+                             <argument><expr>new <name><name>Object</name><index>[]</index></name><block>{ <expr><name>n</name></expr>, <expr><call><name><name>rows</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>, <expr><name>keyRange</name></expr>, <expr><name>lastColumn</name></expr> }</block></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <expr_stmt><expr><name>wideColumns</name> = <call><name><name>Iterators</name>.<name>peekingIterator</name></name><argument_list>(<argument><expr>new <call><name>WideColumnIterator</name><argument_list>(<argument><expr><name>rows</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>wideColumns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>wideColumns</name>.<name>peek</name></name><argument_list>()</argument_list></call>.<call><name><name>right</name>.<name>keySet</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>lastColumn</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>wideColumns</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr>!<call><name><name>wideColumns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>rows</name> = null</expr>;</expr_stmt></then></if>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>maybeInit</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>rows</name> == null</expr>)</condition><then>
+                <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+            <decl_stmt><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>next</name> <init>= <expr><call><name><name>wideColumns</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>lastColumn</name> = <call><name><name>next</name>.<name>right</name>.<name>values</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call>.<call><name>name</name><argument_list>()</argument_list></call>.<call><name>duplicate</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name>maybeIncreaseRowCounter</name><argument_list>(<argument><expr><name>next</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>next</name></expr>;</return>
+        }</block></function>
+
+
+        <comment type="block" format="javadoc">/**
+         * Increases the row counter only if we really moved to the next row.
+         * @param next just fetched row slice
+         */</comment>
+        <function><type><specifier>private</specifier> <name>void</name></type> <name>maybeIncreaseRowCounter</name><parameter_list>(<param><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>next</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>currentKey</name> <init>= <expr><name><name>next</name>.<name>left</name></name></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>!<call><name><name>currentKey</name>.<name>equals</name></name><argument_list>(<argument><expr><name>lastCountedKey</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>totalRead</name>++</expr>;</expr_stmt>
+                <expr_stmt><expr><name>lastCountedKey</name> = <name>currentKey</name></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></function>
+
+        <class><specifier>private</specifier> class <name>WideColumnIterator</name> <super><extends>extends <name><name>AbstractIterator</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></extends></super>
+        <block>{
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>KeySlice</name></argument>&gt;</argument_list></name></type> <name>rows</name></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>private</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>ColumnOrSuperColumn</name></argument>&gt;</argument_list></name></type> <name>columns</name></decl>;</decl_stmt>
+            <decl_stmt><decl><type><specifier>public</specifier> <name>KeySlice</name></type> <name>currentRow</name></decl>;</decl_stmt>
+
+            <constructor><specifier>public</specifier> <name>WideColumnIterator</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>KeySlice</name></argument>&gt;</argument_list></name></type> <name>rows</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><name><name>this</name>.<name>rows</name></name> = <call><name><name>rows</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>this</name>.<name>rows</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name>nextRow</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then>
+                <else>else
+                    <expr_stmt><expr><name>columns</name> = <call><name><name>Iterators</name>.<name>emptyIterator</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></else></if>
+            }</block></constructor>
+
+            <function><type><specifier>private</specifier> <name>void</name></type> <name>nextRow</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><name>currentRow</name> = <call><name><name>rows</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>columns</name> = <call><name><name>currentRow</name>.<name>columns</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>protected</specifier> <name><name>Pair</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+            <block>{
+                <while>while <condition>(<expr>true</expr>)</condition>
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>columns</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <decl_stmt><decl><type><name>ColumnOrSuperColumn</name></type> <name>cosc</name> <init>= <expr><call><name><name>columns</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name>unthriftify</name><argument_list>(<argument><expr><name>cosc</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <decl_stmt><decl><type><name><name>ImmutableSortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr><call><name><name>ImmutableSortedMap</name>.<name>of</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>column</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <return>return <expr><name><name>Pair</name>.</name>&lt;<name>ByteBuffer</name></expr>, <expr><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name>&gt;<call><name>create</name><argument_list>(<argument><expr><name><name>currentRow</name>.<name>key</name></name></expr></argument>, <argument><expr><name>map</name></expr></argument>)</argument_list></call></expr>;</return>
+                    }</block></then></if>
+
+                    <if>if <condition>(<expr>!<call><name><name>rows</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+                    <expr_stmt><expr><call><name>nextRow</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></while>
+            }</block></function>
+        }</block></class>
+    }</block></class>
+
+    <comment type="line">// Because the old Hadoop API wants us to write to the key and value</comment>
+    <comment type="line">// and the new asks for them, we need to copy the output of the new API</comment>
+    <comment type="line">// to the old. Thus, expect a small performance hit.</comment>
+    <comment type="line">// And obviously this wouldn't work for wide rows. But since ColumnFamilyInputFormat</comment>
+    <comment type="line">// and ColumnFamilyRecordReader don't support them, it should be fine for now.</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>next</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>value</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>this</name>.<name>nextKeyValue</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>key</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>key</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>this</name>.<name>getCurrentKey</name></name><argument_list>()</argument_list></call>.<call><name>duplicate</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>key</name>.<name>flip</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>value</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>value</name>.<name>putAll</name></name><argument_list>(<argument><expr><call><name><name>this</name>.<name>getCurrentValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <return>return <expr>true</expr>;</return>
+        }</block></then></if>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>createKey</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr>new <name><name>byte</name><index>[<expr><name><name>this</name>.<name>keyBufferSize</name></name></expr>]</index></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>SortedMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name></type> <name>createValue</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name><name>TreeMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>IColumn</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getPos</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr>(<name>long</name>)<call><name><name>iter</name>.<name>rowsRead</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

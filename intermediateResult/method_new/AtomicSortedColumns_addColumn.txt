@@ -1,0 +1,37 @@
+long addColumn(IColumn column, Allocator allocator, SecondaryIndexManager.Updater indexer)
+        {
+            ByteBuffer name = column.name();
+            while (true)
+            {
+                IColumn oldColumn = map.putIfAbsent(name, column);
+                if (oldColumn == null)
+                {
+                    indexer.insert(column);
+                    return column.dataSize();
+                }
+
+                if (oldColumn instanceof SuperColumn)
+                {
+                    assert column instanceof SuperColumn;
+                    long previousSize = oldColumn.dataSize();
+                    ((SuperColumn) oldColumn).putColumn((SuperColumn)column, allocator);
+                    return oldColumn.dataSize() - previousSize;
+                }
+                else
+                {
+                    IColumn reconciledColumn = column.reconcile(oldColumn, allocator);
+                    if (map.replace(name, oldColumn, reconciledColumn))
+                    {
+                        // for memtable updates we only care about oldcolumn, reconciledcolumn, but when compacting
+                        // we need to make sure we update indexes no matter the order we merge
+                        if (reconciledColumn == column)
+                            indexer.update(oldColumn, reconciledColumn);
+                        else
+                            indexer.update(column, reconciledColumn);
+                        return reconciledColumn.dataSize() - oldColumn.dataSize();
+                    }
+                    // We failed to replace column due to a concurrent update or a concurrent removal. Keep trying.
+                    // (Currently, concurrent removal should not happen (only updates), but let us support that anyway.)
+                }
+            }
+        }

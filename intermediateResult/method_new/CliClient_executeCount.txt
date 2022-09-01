@@ -1,0 +1,30 @@
+private void executeCount(Tree statement)
+            throws TException, InvalidRequestException, UnavailableException, TimedOutException
+    {
+        if (!CliMain.isConnected() || !hasKeySpace())
+            return;
+
+        Tree columnFamilySpec = statement.getChild(0);
+
+        String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec, currentCfDefs());
+        int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
+
+        ColumnParent colParent = new ColumnParent(columnFamily).setSuper_column((ByteBuffer) null);
+
+        if (columnSpecCnt != 0)
+        {
+            Tree columnTree = columnFamilySpec.getChild(2);
+
+            byte[] superColumn = (columnTree.getType() == CliParser.FUNCTION_CALL)
+                                  ? convertValueByFunction(columnTree, null, null).array()
+                                  : columnNameAsByteArray(CliCompiler.getColumn(columnFamilySpec, 0), columnFamily);
+
+            colParent = new ColumnParent(columnFamily).setSuper_column(superColumn);
+        }
+
+        SliceRange range = new SliceRange(ByteBufferUtil.EMPTY_BYTE_BUFFER, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, Integer.MAX_VALUE);
+        SlicePredicate predicate = new SlicePredicate().setColumn_names(null).setSlice_range(range);
+
+        int count = thriftClient.get_count(getKeyAsBytes(columnFamily, columnFamilySpec.getChild(1)), colParent, predicate, consistencyLevel);
+        sessionState.out.printf("%d columns%n", count);
+    }

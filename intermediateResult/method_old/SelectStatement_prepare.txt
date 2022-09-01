@@ -1,0 +1,225 @@
+public ParsedStatement.Prepared prepare() throws InvalidRequestException
+        {
+            CFMetaData cfm = ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
+            ThriftValidation.validateConsistencyLevel(keyspace(), parameters.consistencyLevel, RequestType.READ);
+
+            if (parameters.limit <= 0)
+                throw new InvalidRequestException("LIMIT must be strictly positive");
+
+            CFDefinition cfDef = cfm.getCfDef();
+            SelectStatement stmt = new SelectStatement(cfDef, getBoundsTerms(), parameters);
+            CFDefinition.Name[] names = new CFDefinition.Name[getBoundsTerms()];
+
+            // Select clause
+            if (parameters.isCount)
+            {
+                if (!selectClause.isEmpty())
+                    throw new InvalidRequestException("Only COUNT(*) and COUNT(1) operations are currently supported.");
+            }
+            else
+            {
+                for (Selector t : selectClause)
+                {
+                    CFDefinition.Name name = cfDef.get(t.id());
+                    if (name == null)
+                        throw new InvalidRequestException(String.format("Undefined name %s in selection clause", t.id()));
+                    if (t.hasFunction() && name.kind != CFDefinition.Name.Kind.COLUMN_METADATA && name.kind != CFDefinition.Name.Kind.VALUE_ALIAS)
+                        throw new InvalidRequestException(String.format("Cannot use function %s on PRIMARY KEY part %s", t.function(), name));
+
+                    stmt.selectedNames.add(Pair.create(name, t));
+                }
+            }
+
+            /*
+             * WHERE clause. For a given entity, rules are:
+             *   - EQ relation conflicts with anything else (including a 2nd EQ)
+             *   - Can't have more than one LT(E) relation (resp. GT(E) relation)
+             *   - IN relation are restricted to row keys (for now) and conflics with anything else
+             *     (we could allow two IN for the same entity but that doesn't seem very useful)
+             *   - The value_alias cannot be restricted in any way (we don't support wide rows with indexed value in CQL so far)
+             */
+            for (Relation rel : whereClause)
+            {
+                CFDefinition.Name name = cfDef.get(rel.getEntity());
+                if (name == null)
+                    throw new InvalidRequestException(String.format("Undefined name %s in where clause ('%s')", rel.getEntity(), rel));
+
+                if (rel.operator() == Relation.Type.IN)
+                {
+                    for (Term value : rel.getInValues())
+                        if (value.isBindMarker())
+                            names[value.bindIndex] = name;
+                }
+                else
+                {
+                    Term value = rel.getValue();
+                    if (value.isBindMarker())
+                        names[value.bindIndex] = name;
+                }
+
+                switch (name.kind)
+                {
+                    case KEY_ALIAS:
+                        if (rel.operator() != Relation.Type.EQ && rel.operator() != Relation.Type.IN && !rel.onToken && !StorageService.getPartitioner().preservesOrder())
+                            throw new InvalidRequestException("Only EQ and IN relation are supported on first component of the PRIMARY KEY for RandomPartitioner (unless you use the token() function)");
+                        stmt.keyRestriction = updateRestriction(name, stmt.keyRestriction, rel);
+                        break;
+                    case COLUMN_ALIAS:
+                        stmt.columnRestrictions[name.position] = updateRestriction(name, stmt.columnRestrictions[name.position], rel);
+                        break;
+                    case VALUE_ALIAS:
+                        throw new InvalidRequestException(String.format("Restricting the value of a compact CF (%s) is not supported", name.name));
+                    case COLUMN_METADATA:
+                        stmt.metadataRestrictions.put(name, updateRestriction(name, stmt.metadataRestrictions.get(name), rel));
+                        break;
+                }
+            }
+
+            boolean keyIsInRelation = stmt.keyRestriction != null && stmt.keyRestriction.isEquality() && stmt.keyRestriction.eqValues.size() > 1;
+
+            /*
+             * At this point, the select statement if fully constructed, but we still have a few things to validate
+             */
+
+            // If a component of the PRIMARY KEY is restricted by a non-EQ relation, all preceding
+            // components must have a EQ, and all following must have no restriction
+            boolean shouldBeDone = false;
+            CFDefinition.Name previous = null;
+            Iterator<CFDefinition.Name> iter = cfDef.columns.values().iterator();
+            for (int i = 0; i < stmt.columnRestrictions.length; i++)
+            {
+                CFDefinition.Name cname = iter.next();
+                Restriction restriction = stmt.columnRestrictions[i];
+                if (restriction == null)
+                {
+                    shouldBeDone = true;
+                }
+                else if (shouldBeDone)
+                {
+                    throw new InvalidRequestException(String.format("PRIMARY KEY part %s cannot be restricted (preceding part %s is either not restricted or by a non-EQ relation)", cname, previous));
+                }
+                else if (!restriction.isEquality())
+                {
+                    shouldBeDone = true;
+                    // For non-composite slices, we don't support internally the difference between exclusive and
+                    // inclusive bounds, so we deal with it manually.
+                    if (!cfDef.isComposite && (!restriction.isInclusive(Bound.START) || !restriction.isInclusive(Bound.END)))
+                        stmt.sliceRestriction = restriction;
+                }
+                // We only support IN for the last name so far
+                else if (restriction.eqValues.size() > 1 && i != stmt.columnRestrictions.length - 1)
+                {
+                    throw new InvalidRequestException(String.format("PRIMARY KEY part %s cannot be restricted by IN relation (only the first and last parts can)", cname));
+                }
+
+                previous = cname;
+            }
+
+            // Deal with indexed columns
+            if (!stmt.metadataRestrictions.isEmpty())
+            {
+                boolean hasEq = false;
+                Set<ByteBuffer> indexed = Table.open(keyspace()).getColumnFamilyStore(columnFamily()).indexManager.getIndexedColumns();
+
+                for (Map.Entry<CFDefinition.Name, Restriction> entry : stmt.metadataRestrictions.entrySet())
+                {
+                    Restriction restriction = entry.getValue();
+                    if (!restriction.isEquality())
+                        continue;
+
+                    // We don't support IN for indexed values (basically this would require supporting a form of OR)
+                    if (restriction.eqValues.size() > 1)
+                        throw new InvalidRequestException("Cannot use IN operator on column not part of the PRIMARY KEY");
+
+                    if (indexed.contains(entry.getKey().name.key))
+                    {
+                        hasEq = true;
+                        break;
+                    }
+                }
+                if (!hasEq)
+                    throw new InvalidRequestException("No indexed columns present in by-columns clause with Equal operator");
+
+                // If we have indexed columns and the key = X clause, we will do a range query, but if it's a IN relation, we don't know how to handle it.
+                if (stmt.keyRestriction != null && stmt.keyRestriction.isEquality() && stmt.keyRestriction.eqValues.size() > 1)
+                    throw new InvalidRequestException("Select on indexed columns and with IN clause for the PRIMARY KEY are not supported");
+            }
+
+            if (!stmt.parameters.orderings.isEmpty())
+            {
+                if (!stmt.metadataRestrictions.isEmpty())
+                    throw new InvalidRequestException("ORDER BY with 2ndary indexes is not supported.");
+
+                if (stmt.isKeyRange())
+                    throw new InvalidRequestException("ORDER BY is only supported when the partition key is restricted by an EQ or an IN.");
+
+                // If we order an IN query, we'll have to do a manual sort post-query. Currently, this sorting requires that we
+                // have queried the column on which we sort (TODO: we should update it to add the column on which we sort to the one
+                // queried automatically, and then removing it from the resultSet afterwards if needed)
+                if (keyIsInRelation && !stmt.selectedNames.isEmpty()) // empty means wildcard was used
+                {
+                    for (ColumnIdentifier column : stmt.parameters.orderings.keySet())
+                    {
+                        CFDefinition.Name name = cfDef.get(column);
+
+                        boolean hasColumn = false;
+                        for (Pair<CFDefinition.Name, Selector> selectPair : stmt.selectedNames)
+                        {
+                            if (selectPair.left.equals(name))
+                            {
+                                hasColumn = true;
+                                break;
+                            }
+                        }
+
+                        if (!hasColumn)
+                            throw new InvalidRequestException("ORDER BY could not be used on columns missing in select clause.");
+                    }
+                }
+
+                Boolean[] reversedMap = new Boolean[cfDef.columns.size()];
+                int i = 0;
+                for (Map.Entry<ColumnIdentifier, Boolean> entry : stmt.parameters.orderings.entrySet())
+                {
+                    ColumnIdentifier column = entry.getKey();
+                    boolean reversed = entry.getValue();
+
+                    CFDefinition.Name name = cfDef.get(column);
+                    if (name == null)
+                        throw new InvalidRequestException(String.format("Order by on unknown column %s", column));
+
+                    if (name.kind != CFDefinition.Name.Kind.COLUMN_ALIAS)
+                        throw new InvalidRequestException(String.format("Order by is currently only supported on the clustered columns of the PRIMARY KEY, got %s", column));
+
+                    if (i++ != name.position)
+                        throw new InvalidRequestException(String.format("Order by currently only support the ordering of columns following their declared order in the PRIMARY KEY"));
+
+                    reversedMap[name.position] = (reversed != isReversedType(name));
+                }
+
+                // Check that all boolean in reversedMap, if set, agrees
+                Boolean isReversed = null;
+                for (Boolean b : reversedMap)
+                {
+                    // Column on which order is specified can be in any order
+                    if (b == null)
+                        continue;
+
+                    if (isReversed == null)
+                    {
+                        isReversed = b;
+                        continue;
+                    }
+                    if (isReversed != b)
+                        throw new InvalidRequestException(String.format("Unsupported order by relation"));
+                }
+                assert isReversed != null;
+                stmt.isReversed = isReversed;
+            }
+
+            // If this is a query on tokens, it's necessary a range query (there can be more than one key per token), so reject IN queries (as we don't know how to do them)
+            if (stmt.keyRestriction != null && stmt.keyRestriction.onToken && stmt.keyRestriction.isEquality() && stmt.keyRestriction.eqValues.size() > 1)
+                throw new InvalidRequestException("Select using the token() function don't support IN clause");
+
+            return new ParsedStatement.Prepared(stmt, Arrays.<CFDefinition.Name>asList(names));
+        }

@@ -1,0 +1,36 @@
+static Set<InetAddress> getNeighbors(String table, Range<Token> toRepair)
+    {
+        StorageService ss = StorageService.instance;
+        Map<Range<Token>, List<InetAddress>> replicaSets = ss.getRangeToAddressMap(table);
+        Range<Token> rangeSuperSet = null;
+        for (Range<Token> range : ss.getLocalRanges(table))
+        {
+            if (range.contains(toRepair))
+            {
+                rangeSuperSet = range;
+                break;
+            }
+            else if (range.intersects(toRepair))
+            {
+                throw new IllegalArgumentException("Requested range intersects a local range but is not fully contained in one; this would lead to imprecise repair");
+            }
+        }
+        if (rangeSuperSet == null || !replicaSets.containsKey(rangeSuperSet))
+            return Collections.emptySet();
+
+        Set<InetAddress> neighbors = new HashSet<InetAddress>(replicaSets.get(rangeSuperSet));
+        neighbors.remove(FBUtilities.getBroadcastAddress());
+        // Excluding all node with version <= 0.7 since they don't know how to
+        // create a correct merkle tree (they build it over the full range)
+        Iterator<InetAddress> iter = neighbors.iterator();
+        while (iter.hasNext())
+        {
+            InetAddress endpoint = iter.next();
+            if (Gossiper.instance.getVersion(endpoint) <= MessagingService.VERSION_07)
+            {
+                logger.info("Excluding " + endpoint + " from repair because it is on version 0.7 or sooner. You should consider updating this node before running repair again.");
+                iter.remove();
+            }
+        }
+        return neighbors;
+    }

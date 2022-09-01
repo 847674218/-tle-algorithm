@@ -1,0 +1,65 @@
+private void executeIncr(Tree statement, long multiplier)
+            throws TException, NotFoundException, InvalidRequestException, UnavailableException, TimedOutException, IllegalAccessException, InstantiationException, ClassNotFoundException, NoSuchFieldException
+    {
+        if (!CliMain.isConnected() || !hasKeySpace())
+            return;
+
+        Tree columnFamilySpec = statement.getChild(0);
+
+        String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec, keyspacesMap.get(keySpace).cf_defs);
+        ByteBuffer key = getKeyAsBytes(columnFamily, columnFamilySpec.getChild(1));
+        int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
+
+        byte[] superColumnName = null;
+        ByteBuffer columnName;
+
+        // table.cf['key']['column'] -- incr standard
+        if (columnSpecCnt == 1)
+        {
+            columnName = getColumnName(columnFamily, columnFamilySpec.getChild(2));
+        }
+        // table.cf['key']['column']['column'] -- incr super
+        else if (columnSpecCnt == 2)
+        {
+            superColumnName = getColumnName(columnFamily, columnFamilySpec.getChild(2)).array();
+            columnName = getSubColumnName(columnFamily, columnFamilySpec.getChild(3));
+        }
+        // The parser groks an arbitrary number of these so it is possible to get here.
+        else
+        {
+            sessionState.out.println("Invalid row, super column, or column specification.");
+            return;
+        }
+
+        ColumnParent parent = new ColumnParent(columnFamily);
+        if(superColumnName != null)
+            parent.setSuper_column(superColumnName);
+
+        long value = 1L;
+
+        // children count = 3 mean that we have by in arguments
+        if (statement.getChildCount() == 2)
+        {
+            String byValue = statement.getChild(1).getText();
+
+            try
+            {
+                value = Long.parseLong(byValue);
+            }
+            catch (NumberFormatException e)
+            {
+                sessionState.err.println(String.format("'%s' is an invalid value, should be an integer.", byValue));
+                return;
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        CounterColumn columnToInsert = new CounterColumn(columnName, multiplier * value);
+
+        // do the insert
+        thriftClient.add(key, parent, columnToInsert, consistencyLevel);
+        sessionState.out.printf("Value %s%n", multiplier < 0 ? "decremented." : "incremented.");
+    }

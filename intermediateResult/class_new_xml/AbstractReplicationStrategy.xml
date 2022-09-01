@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\locator\AbstractReplicationStrategy.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>lang</name>.<name>reflect</name>.<name>Constructor</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>annotations</name>.<name>VisibleForTesting</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>HashMultimap</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Multimap</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ConsistencyLevel</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>WriteType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>RingPosition</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>AbstractWriteResponseHandler</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>DatacenterSyncWriteResponseHandler</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>DatacenterWriteResponseHandler</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>WriteResponseHandler</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>cliffc</name>.<name>high_scale_lib</name>.<name>NonBlockingHashMap</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * A abstract parent for all replication strategies.
+*/</comment>
+<class><specifier>public</specifier> <specifier>abstract</specifier> class <name>AbstractReplicationStrategy</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>AbstractReplicationStrategy</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><annotation>@<name>VisibleForTesting</name></annotation>
+    <specifier>final</specifier> <name>String</name></type> <name>tableName</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>Table</name></type> <name>table</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>configOptions</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>TokenMetadata</name></type> <name>tokenMetadata</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <name>IEndpointSnitch</name></type> <name>snitch</name></decl>;</decl_stmt>
+
+    <constructor><name>AbstractReplicationStrategy</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>TokenMetadata</name></type> <name>tokenMetadata</name></decl></param>, <param><decl><type><name>IEndpointSnitch</name></type> <name>snitch</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>configOptions</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>tableName</name> != null</expr>;</assert>
+        <assert>assert <expr><name>snitch</name> != null</expr>;</assert>
+        <assert>assert <expr><name>tokenMetadata</name> != null</expr>;</assert>
+        <expr_stmt><expr><name><name>this</name>.<name>tokenMetadata</name></name> = <name>tokenMetadata</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>snitch</name></name> = <name>snitch</name></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>this</name>.<name>tokenMetadata</name>.<name>register</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>configOptions</name></name> = <name>configOptions</name> == null ? <name><name>Collections</name>.</name>&lt;<name>String</name></expr>, <expr><name>String</name>&gt;<call><name>emptyMap</name><argument_list>()</argument_list></call> : <name>configOptions</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>tableName</name></name> = <name>tableName</name></expr>;</expr_stmt>
+        <comment type="line">// lazy-initialize table itself since we don't create them until after the replication strategies</comment>
+    }</block></constructor>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>cachedEndpoints</name> <init>= <expr>new <call><name><name>NonBlockingHashMap</name><argument_list>&lt;<argument><name>Token</name></argument>, <argument><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getCachedEndpoints</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>t</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cachedEndpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>cacheEndpoint</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>t</name></decl></param>, <param><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>addr</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>cachedEndpoints</name>.<name>put</name></name><argument_list>(<argument><expr><name>t</name></expr></argument>, <argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>clearEndpointCache</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"clearing cached endpoints"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>cachedEndpoints</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * get the (possibly cached) endpoints that should store the given Token.
+     * Note that while the endpoints are conceptually a Set (no duplicates will be included),
+     * we return a List to avoid an extra allocation when sorting by proximity later
+     * @param searchPosition the position the natural endpoints are requested for
+     * @return a copy of the natural endpoints for the given token
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getNaturalEndpoints</name><parameter_list>(<param><decl><type><name>RingPosition</name></type> <name>searchPosition</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Token</name></type> <name>searchToken</name> <init>= <expr><call><name><name>searchPosition</name>.<name>getToken</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Token</name></type> <name>keyToken</name> <init>= <expr><call><name><name>TokenMetadata</name>.<name>firstToken</name></name><argument_list>(<argument><expr><call><name><name>tokenMetadata</name>.<name>sortedTokens</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>searchToken</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name> <init>= <expr><call><name>getCachedEndpoints</name><argument_list>(<argument><expr><name>keyToken</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>endpoints</name> == null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>TokenMetadata</name></type> <name>tokenMetadataClone</name> <init>= <expr><call><name><name>tokenMetadata</name>.<name>cloneOnlyTokenMap</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>keyToken</name> = <call><name><name>TokenMetadata</name>.<name>firstToken</name></name><argument_list>(<argument><expr><call><name><name>tokenMetadataClone</name>.<name>sortedTokens</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>searchToken</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>endpoints</name> = new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name>calculateNaturalEndpoints</name><argument_list>(<argument><expr><name>searchToken</name></expr></argument>, <argument><expr><name>tokenMetadataClone</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>cacheEndpoint</name><argument_list>(<argument><expr><name>keyToken</name></expr></argument>, <argument><expr><name>endpoints</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <return>return <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>endpoints</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * calculate the natural endpoints for the given token
+     *
+     * @see #getNaturalEndpoints(org.apache.cassandra.dht.RingPosition)
+     *
+     * @param searchToken the token the natural endpoints are requested for
+     * @return a copy of the natural endpoints for the given token
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>calculateNaturalEndpoints</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>searchToken</name></decl></param>, <param><decl><type><name>TokenMetadata</name></type> <name>tokenMetadata</name></decl></param>)</parameter_list>;</function_decl>
+
+    <function><type><specifier>public</specifier> <name>AbstractWriteResponseHandler</name></type> <name>getWriteResponseHandler</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>naturalEndpoints</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>pendingEndpoints</name></decl></param>, <param><decl><type><name>ConsistencyLevel</name></type> <name>consistency_level</name></decl></param>, <param><decl><type><name>Runnable</name></type> <name>callback</name></decl></param>, <param><decl><type><name>WriteType</name></type> <name>writeType</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>consistency_level</name> == <name><name>ConsistencyLevel</name>.<name>LOCAL_QUORUM</name></name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// block for in this context will be localnodes block.</comment>
+            <return>return <expr>new <call><name>DatacenterWriteResponseHandler</name><argument_list>(<argument><expr><name>naturalEndpoints</name></expr></argument>, <argument><expr><name>pendingEndpoints</name></expr></argument>, <argument><expr><name>consistency_level</name></expr></argument>, <argument><expr><call><name>getTable</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>callback</name></expr></argument>, <argument><expr><name>writeType</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then>
+        <else>else <if>if <condition>(<expr><name>consistency_level</name> == <name><name>ConsistencyLevel</name>.<name>EACH_QUORUM</name></name></expr>)</condition><then>
+        <block>{
+            <return>return <expr>new <call><name>DatacenterSyncWriteResponseHandler</name><argument_list>(<argument><expr><name>naturalEndpoints</name></expr></argument>, <argument><expr><name>pendingEndpoints</name></expr></argument>, <argument><expr><name>consistency_level</name></expr></argument>, <argument><expr><call><name>getTable</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>callback</name></expr></argument>, <argument><expr><name>writeType</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then></if></else></if>
+        <return>return <expr>new <call><name>WriteResponseHandler</name><argument_list>(<argument><expr><name>naturalEndpoints</name></expr></argument>, <argument><expr><name>pendingEndpoints</name></expr></argument>, <argument><expr><name>consistency_level</name></expr></argument>, <argument><expr><call><name>getTable</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>callback</name></expr></argument>, <argument><expr><name>writeType</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>Table</name></type> <name>getTable</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>table</name> == null</expr>)</condition><then>
+            <expr_stmt><expr><name>table</name> = <call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <return>return <expr><name>table</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * calculate the RF based on strategy_options. When overwriting, ensure that this get()
+     *  is FAST, as this is called often.
+     *
+     * @return the replication factor
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>int</name></type> <name>getReplicationFactor</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <comment type="block">/*
+     * NOTE: this is pretty inefficient. also the inverse (getRangeAddresses) below.
+     * this is fine as long as we don't use this on any critical path.
+     * (fixing this would probably require merging tokenmetadata into replicationstrategy,
+     * so we could cache/invalidate cleanly.)
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getAddressRanges</name><parameter_list>(<param><decl><type><name>TokenMetadata</name></type> <name>metadata</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr><call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>Token</name></type> <name>token</name> <range>: <expr><call><name><name>metadata</name>.<name>sortedTokens</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <init>= <expr><call><name><name>metadata</name>.<name>getPrimaryRangeFor</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>InetAddress</name></type> <name>ep</name> <range>: <expr><call><name>calculateNaturalEndpoints</name><argument_list>(<argument><expr><name>token</name></expr></argument>, <argument><expr><name>metadata</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>map</name>.<name>put</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></for>
+
+        <return>return <expr><name>map</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getRangeAddresses</name><parameter_list>(<param><decl><type><name>TokenMetadata</name></type> <name>metadata</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr><call><name><name>HashMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>Token</name></type> <name>token</name> <range>: <expr><call><name><name>metadata</name>.<name>sortedTokens</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <init>= <expr><call><name><name>metadata</name>.<name>getPrimaryRangeFor</name></name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>InetAddress</name></type> <name>ep</name> <range>: <expr><call><name>calculateNaturalEndpoints</name><argument_list>(<argument><expr><name>token</name></expr></argument>, <argument><expr><name>metadata</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>map</name>.<name>put</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></for>
+
+        <return>return <expr><name>map</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Multimap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getAddressRanges</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getAddressRanges</name><argument_list>(<argument><expr><call><name><name>tokenMetadata</name>.<name>cloneOnlyTokenMap</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getPendingAddressRanges</name><parameter_list>(<param><decl><type><name>TokenMetadata</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>Token</name></type> <name>pendingToken</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>pendingAddress</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getPendingAddressRanges</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name>pendingToken</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>pendingAddress</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getPendingAddressRanges</name><parameter_list>(<param><decl><type><name>TokenMetadata</name></type> <name>metadata</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>pendingTokens</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>pendingAddress</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>TokenMetadata</name></type> <name>temp</name> <init>= <expr><call><name><name>metadata</name>.<name>cloneOnlyTokenMap</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>temp</name>.<name>updateNormalTokens</name></name><argument_list>(<argument><expr><name>pendingTokens</name></expr></argument>, <argument><expr><name>pendingAddress</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name>getAddressRanges</name><argument_list>(<argument><expr><name>temp</name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>pendingAddress</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>invalidateCachedTokenEndpointValues</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>clearEndpointCache</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>validateOptions</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>;</function_decl>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>AbstractReplicationStrategy</name></type> <name>createReplicationStrategy</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>,
+                                                                        <param><decl><type><name><name>Class</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>AbstractReplicationStrategy</name></extends></argument>&gt;</argument_list></name></type> <name>strategyClass</name></decl></param>,
+                                                                        <param><decl><type><name>TokenMetadata</name></type> <name>tokenMetadata</name></decl></param>,
+                                                                        <param><decl><type><name>IEndpointSnitch</name></type> <name>snitch</name></decl></param>,
+                                                                        <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>strategyOptions</name></decl></param>)</parameter_list>
+            <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>AbstractReplicationStrategy</name></type> <name>strategy</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Class</name> <index>[]</index></type> <name>parameterTypes</name> <init>= <expr>new <name><name>Class</name><index>[]</index></name> <block>{<expr><name><name>String</name>.<name>class</name></name></expr>, <expr><name><name>TokenMetadata</name>.<name>class</name></name></expr>, <expr><name><name>IEndpointSnitch</name>.<name>class</name></name></expr>, <expr><name><name>Map</name>.<name>class</name></name></expr>}</block></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>Constructor</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>AbstractReplicationStrategy</name></extends></argument>&gt;</argument_list></name></type> <name>constructor</name> <init>= <expr><call><name><name>strategyClass</name>.<name>getConstructor</name></name><argument_list>(<argument><expr><name>parameterTypes</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>strategy</name> = <call><name><name>constructor</name>.<name>newInstance</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>tokenMetadata</name></expr></argument>, <argument><expr><name>snitch</name></expr></argument>, <argument><expr><name>strategyOptions</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <comment type="line">// Throws Config Exception if strat_opts don't contain required info</comment>
+        <expr_stmt><expr><call><name><name>strategy</name>.<name>validateOptions</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <return>return <expr><name>strategy</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>AbstractReplicationStrategy</name></type> <name>createReplicationStrategy</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>,
+                                                                        <param><decl><type><name>String</name></type> <name>strategyClassName</name></decl></param>,
+                                                                        <param><decl><type><name>TokenMetadata</name></type> <name>tokenMetadata</name></decl></param>,
+                                                                        <param><decl><type><name>IEndpointSnitch</name></type> <name>snitch</name></decl></param>,
+                                                                        <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>strategyOptions</name></decl></param>)</parameter_list>
+            <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Class</name><argument_list>&lt;<argument><name>AbstractReplicationStrategy</name></argument>&gt;</argument_list></name></type> <name>c</name> <init>= <expr><call><name>getClass</name><argument_list>(<argument><expr><name>strategyClassName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name>createReplicationStrategy</name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name>c</name></expr></argument>, <argument><expr><name>tokenMetadata</name></expr></argument>, <argument><expr><name>snitch</name></expr></argument>, <argument><expr><name>strategyOptions</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Class</name><argument_list>&lt;<argument><name>AbstractReplicationStrategy</name></argument>&gt;</argument_list></name></type> <name>getClass</name><parameter_list>(<param><decl><type><name>String</name></type> <name>cls</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>className</name> <init>= <expr><call><name><name>cls</name>.<name>contains</name></name><argument_list>(<argument><expr>"."</expr></argument>)</argument_list></call> ? <name>cls</name> : "org.apache.cassandra.locator." + <name>cls</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Class</name><argument_list>&lt;<argument><name>AbstractReplicationStrategy</name></argument>&gt;</argument_list></name></type> <name>strategyClass</name> <init>= <expr><call><name><name>FBUtilities</name>.<name>classForName</name></name><argument_list>(<argument><expr><name>className</name></expr></argument>, <argument><expr>"replication strategy"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>!<call><name><name>AbstractReplicationStrategy</name>.<name><name>class</name>.<name>isAssignableFrom</name></name></name><argument_list>(<argument><expr><name>strategyClass</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Specified replication strategy class (%s) is not derived from AbstractReplicationStrategy"</expr></argument>, <argument><expr><name>className</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+        <return>return <expr><name>strategyClass</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>validateReplicationFactor</name><parameter_list>(<param><decl><type><name>String</name></type> <name>rf</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><name>rf</name></expr></argument>)</argument_list></call> &lt; 0</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Replication factor must be non-negative; found " + <name>rf</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>NumberFormatException</name></type> <name>e2</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Replication factor must be numeric; found " + <name>rf</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>validateExpectedOptions</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>expectedOptions</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <for>for (<init><decl><type><name>String</name></type> <name>key</name> <range>: <expr><call><name><name>configOptions</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>expectedOptions</name>.<name>contains</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Unrecognized strategy option {%s} passed to %s for keyspace %s"</expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>tableName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></for>
+    }</block></function>
+}</block></class>
+</unit>

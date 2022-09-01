@@ -1,0 +1,39 @@
+public void runMayThrow() throws Exception
+        {
+            Message message = new Message(FBUtilities.getBroadcastAddress(),
+                                          StorageService.Verb.MIGRATION_REQUEST,
+                                          ArrayUtils.EMPTY_BYTE_ARRAY,
+                                          Gossiper.instance.getVersion(endpoint));
+
+            if (!FailureDetector.instance.isAlive(endpoint))
+            {
+                logger.error("Can't send migration request: node {} is down.", endpoint);
+                return;
+            }
+
+            IAsyncCallback cb = new IAsyncCallback()
+            {
+                public void response(Message message)
+                {
+                    try
+                    {
+                        DefsTable.mergeRemoteSchema(message.getMessageBody(), message.getVersion());
+                    }
+                    catch (IOException e)
+                    {
+                        logger.error("IOException merging remote schema", e);
+                    }
+                    catch (ConfigurationException e)
+                    {
+                        logger.error("Configuration exception merging remote schema", e);
+                    }
+                }
+
+                public boolean isLatencyForSnitch()
+                {
+                    return false;
+                }
+            };
+
+            MessagingService.instance().sendRR(message, endpoint, cb);
+        }

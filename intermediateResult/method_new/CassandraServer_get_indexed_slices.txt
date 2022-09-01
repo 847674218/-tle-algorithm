@@ -1,0 +1,66 @@
+public List<KeySlice> get_indexed_slices(ColumnParent column_parent, IndexClause index_clause, SlicePredicate column_predicate, ConsistencyLevel consistency_level)
+    throws InvalidRequestException, UnavailableException, TimedOutException, TException
+    {
+        if (startSessionIfRequested())
+        {
+            Map<String, String> traceParameters = ImmutableMap.of("column_parent", column_parent.toString(),
+                                                                  "index_clause", index_clause.toString(),
+                                                                  "slice_predicate", column_predicate.toString(),
+                                                                  "consistency_level", consistency_level.name());
+            Tracing.instance().begin("get_indexed_slices", traceParameters);
+        }
+        else
+        {
+            logger.debug("scan");
+        }
+
+        try
+        {
+            ThriftClientState cState = state();
+            String keyspace = cState.getKeyspace();
+            cState.hasColumnFamilyAccess(keyspace, column_parent.column_family, Permission.SELECT);
+            CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_parent.column_family, false);
+            ThriftValidation.validateColumnParent(metadata, column_parent);
+            ThriftValidation.validatePredicate(metadata, column_parent, column_predicate);
+            ThriftValidation.validateIndexClauses(metadata, index_clause);
+            org.apache.cassandra.db.ConsistencyLevel consistencyLevel = ThriftConversion.fromThrift(consistency_level);
+            consistencyLevel.validateForRead(keyspace);
+
+            IPartitioner p = StorageService.getPartitioner();
+            AbstractBounds<RowPosition> bounds = new Bounds<RowPosition>(RowPosition.forKey(index_clause.start_key, p),
+                                                                         p.getMinimumToken().minKeyBound());
+
+            IDiskAtomFilter filter = ThriftValidation.asIFilter(column_predicate, metadata.getComparatorFor(column_parent.super_column));
+            RangeSliceCommand command = new RangeSliceCommand(keyspace,
+                                                              column_parent.column_family,
+                                                              null,
+                                                              filter,
+                                                              bounds,
+                                                              index_clause.expressions,
+                                                              index_clause.count);
+
+            List<Row> rows = StorageProxy.getRangeSlice(command, consistencyLevel);
+            return thriftifyKeySlices(rows, column_parent, column_predicate);
+        }
+        catch (RequestValidationException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (ReadTimeoutException e)
+        {
+            logger.debug("... timed out");
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (org.apache.cassandra.exceptions.UnavailableException e)
+        {
+            throw ThriftConversion.toThrift(e);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+        finally
+        {
+            Tracing.instance().stopSession();
+        }
+    }

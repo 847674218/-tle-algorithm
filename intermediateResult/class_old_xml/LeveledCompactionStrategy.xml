@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\compaction\LeveledCompactionStrategy.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicReference</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>annotations</name>.<name>VisibleForTesting</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Joiner</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DecoratedKey</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name>.<name>IColumnIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableScanner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>notifications</name>.<name>INotification</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>notifications</name>.<name>INotificationConsumer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>notifications</name>.<name>SSTableAddedNotification</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>notifications</name>.<name>SSTableListChangedNotification</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>LeveledCompactionStrategy</name> <super><extends>extends <name>AbstractCompactionStrategy</name></extends> <implements>implements <name>INotificationConsumer</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>LeveledCompactionStrategy</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>SSTABLE_SIZE_OPTION</name> <init>= <expr>"sstable_size_in_mb"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><annotation>@<name>VisibleForTesting</name></annotation>
+    <specifier>final</specifier> <name>LeveledManifest</name></type> <name>manifest</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>maxSSTableSizeInMB</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>AtomicReference</name><argument_list>&lt;<argument><name>LeveledCompactionTask</name></argument>&gt;</argument_list></name></type> <name>task</name> <init>= <expr>new <call><name><name>AtomicReference</name><argument_list>&lt;<argument><name>LeveledCompactionTask</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>LeveledCompactionStrategy</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>options</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>configuredMaxSSTableSize</name> <init>= <expr>5</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>options</name> != null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>value</name> <init>= <expr><call><name><name>options</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>SSTABLE_SIZE_OPTION</name></expr></argument>)</argument_list></call> ? <call><name><name>options</name>.<name>get</name></name><argument_list>(<argument><expr><name>SSTABLE_SIZE_OPTION</name></expr></argument>)</argument_list></call> : null</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>null != <name>value</name></expr>)</condition><then>
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>configuredMaxSSTableSize</name> = <call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>NumberFormatException</name></type> <name>ex</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%s is not a parsable int (base10) for %s using default value"</expr></argument>,
+                                              <argument><expr><name>value</name></expr></argument>, <argument><expr><name>SSTABLE_SIZE_OPTION</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></catch></try>
+            }</block></then></if>
+        }</block></then></if>
+        <expr_stmt><expr><name>maxSSTableSizeInMB</name> = <name>configuredMaxSSTableSize</name></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>cfs</name>.<name>getDataTracker</name></name><argument_list>()</argument_list></call>.<call><name>subscribe</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"{} subscribed to the data tracker."</expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name>manifest</name> = <call><name><name>LeveledManifest</name>.<name>create</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name><name>this</name>.<name>maxSSTableSizeInMB</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Created {}"</expr></argument>, <argument><expr><name>manifest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>shutdown</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>super</name>.<name>shutdown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>cfs</name>.<name>getDataTracker</name></name><argument_list>()</argument_list></call>.<call><name>unsubscribe</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getLevelSize</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>manifest</name>.<name>getLevelSize</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * the only difference between background and maximal in LCS is that maximal is still allowed
+     * (by explicit user request) even when compaction is disabled.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>AbstractCompactionTask</name></type> <name>getNextBackgroundTask</name><parameter_list>(<param><decl><type><name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>cfs</name>.<name>isCompactionDisabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+
+        <return>return <expr><call><name>getMaximalTask</name><argument_list>(<argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>AbstractCompactionTask</name></type> <name>getMaximalTask</name><parameter_list>(<param><decl><type><name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>LeveledCompactionTask</name></type> <name>currentTask</name> <init>= <expr><call><name><name>task</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>currentTask</name> != null &amp;&amp; !<call><name><name>currentTask</name>.<name>isDone</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Compaction still in progress for {}"</expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>null</expr>;</return>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name> <init>= <expr><call><name><name>manifest</name>.<name>getCompactionCandidates</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>sstables</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"No compaction necessary for {}"</expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>null</expr>;</return>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>LeveledCompactionTask</name></type> <name>newTask</name> <init>= <expr>new <call><name>LeveledCompactionTask</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>, <argument><expr><name><name>this</name>.<name>maxSSTableSizeInMB</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>task</name>.<name>compareAndSet</name></name><argument_list>(<argument><expr><name>currentTask</name></expr></argument>, <argument><expr><name>newTask</name></expr></argument>)</argument_list></call>
+               ? <name>newTask</name>
+               : null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>AbstractCompactionTask</name></type> <name>getUserDefinedTask</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"LevelDB compaction strategy does not allow user-specified compactions"</expr></argument>)</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getEstimatedRemainingTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>manifest</name>.<name>getEstimatedTasks</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>handleNotification</name><parameter_list>(<param><decl><type><name>INotification</name></type> <name>notification</name></decl></param>, <param><decl><type><name>Object</name></type> <name>sender</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>notification</name> instanceof <name>SSTableAddedNotification</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>SSTableAddedNotification</name></type> <name>flushedNotification</name> <init>= <expr>(<name>SSTableAddedNotification</name>) <name>notification</name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>manifest</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>flushedNotification</name>.<name>added</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else <if>if <condition>(<expr><name>notification</name> instanceof <name>SSTableListChangedNotification</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>SSTableListChangedNotification</name></type> <name>listChangedNotification</name> <init>= <expr>(<name>SSTableListChangedNotification</name>) <name>notification</name></expr></init></decl>;</decl_stmt>
+            <switch>switch <condition>(<expr><name><name>listChangedNotification</name>.<name>compactionType</name></name></expr>)</condition>
+            <block>{
+                <comment type="line">// Cleanup, scrub and updateSSTable shouldn't promote (see #3989)</comment>
+                <case>case <expr><name>CLEANUP</name></expr>:
+                </case><case>case <expr><name>SCRUB</name></expr>:
+                </case><case>case <expr><name>UPGRADE_SSTABLES</name></expr>:
+                    <expr_stmt><expr><call><name><name>manifest</name>.<name>replace</name></name><argument_list>(<argument><expr><name><name>listChangedNotification</name>.<name>removed</name></name></expr></argument>, <argument><expr><name><name>listChangedNotification</name>.<name>added</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                </case><default>default:
+                    <expr_stmt><expr><call><name><name>manifest</name>.<name>promote</name></name><argument_list>(<argument><expr><name><name>listChangedNotification</name>.<name>removed</name></name></expr></argument>, <argument><expr><name><name>listChangedNotification</name>.<name>added</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+            </default>}</block></switch>
+        }</block></then></if></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getMaxSSTableSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>maxSSTableSizeInMB</name> * 1024L * 1024L</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isKeyExistenceExpensive</name><parameter_list>(<param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SSTable</name></extends></argument>&gt;</argument_list></name></type> <name>sstablesToIgnore</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>L0</name> <init>= <expr><call><name><name>ImmutableSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><call><name><name>manifest</name>.<name>getLevel</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><name>L0</name></expr></argument>, <argument><expr><name>sstablesToIgnore</name></expr></argument>)</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> + <call><name><name>manifest</name>.<name>getLevelCount</name></name><argument_list>()</argument_list></call> &gt; 20</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ICompactionScanner</name></argument>&gt;</argument_list></name></type> <name>getScanners</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Multimap</name><argument_list>&lt;<argument><name>Integer</name></argument>, <argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>byLevel</name> <init>= <expr><call><name><name>ArrayListMultimap</name>.<name>create</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>byLevel</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>manifest</name>.<name>levelOf</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ICompactionScanner</name></argument>&gt;</argument_list></name></type> <name>scanners</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ICompactionScanner</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>sstables</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Integer</name></type> <name>level</name> <range>: <expr><call><name><name>byLevel</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <comment type="line">// level can be -1 when sstables are added to DataTracker but not to LeveledManifest</comment>
+            <comment type="line">// since we don't know which level those sstable belong yet, we simply do the same as L0 sstables.</comment>
+            <if>if <condition>(<expr><name>level</name> &lt;= 0</expr>)</condition><then>
+            <block>{
+                <comment type="line">// L0 makes no guarantees about overlapping-ness.  Just create a direct scanner for each</comment>
+                <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><call><name><name>byLevel</name>.<name>get</name></name><argument_list>(<argument><expr><name>level</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>scanners</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>sstable</name>.<name>getDirectScanner</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></then>
+            <else>else
+            <block>{
+                <comment type="line">// Create a LeveledScanner that only opens one sstable at a time, in sorted order</comment>
+                <expr_stmt><expr><call><name><name>scanners</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>LeveledScanner</name><argument_list>(<argument><expr><call><name><name>byLevel</name>.<name>get</name></name><argument_list>(<argument><expr><name>level</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></for>
+
+        <return>return <expr><name>scanners</name></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// Lazily creates SSTableBoundedScanner for sstable that are assumed to be from the</comment>
+    <comment type="line">// same level (e.g. non overlapping) - see #4142</comment>
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>LeveledScanner</name> <super><extends>extends <name><name>AbstractIterator</name><argument_list>&lt;<argument><name>IColumnIterator</name></argument>&gt;</argument_list></name></extends> <implements>implements <name>ICompactionScanner</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstableIterator</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>totalLength</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <name>SSTableScanner</name></type> <name>currentScanner</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>positionOffset</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>LeveledScanner</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>range</name></name> = <name>range</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>sstables</name></name> = new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>sstables</name></name></expr></argument>, <argument><expr><name><name>SSTable</name>.<name>sstableComparator</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>sstableIterator</name> = <call><name><name>this</name>.<name>sstables</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>currentScanner</name> = <call><name><name>sstableIterator</name>.<name>next</name></name><argument_list>()</argument_list></call>.<call><name>getDirectScanner</name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>long</name></type> <name>length</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+                <expr_stmt><expr><name>length</name> += <call><name><name>sstable</name>.<name>uncompressedLength</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><name>totalLength</name> = <name>length</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>protected</specifier> <name>IColumnIterator</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <try>try
+            <block>{
+                <while>while <condition>(<expr>true</expr>)</condition>
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>currentScanner</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <return>return <expr><call><name><name>currentScanner</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+                    <expr_stmt><expr><name>positionOffset</name> += <call><name><name>currentScanner</name>.<name>getLengthInBytes</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>currentScanner</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr>!<call><name><name>sstableIterator</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <comment type="line">// reset to null so getCurrentPosition does not return wrong value</comment>
+                        <expr_stmt><expr><name>currentScanner</name> = null</expr>;</expr_stmt>
+                        <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return>
+                    }</block></then></if>
+                    <expr_stmt><expr><name>currentScanner</name> = <call><name><name>sstableIterator</name>.<name>next</name></name><argument_list>()</argument_list></call>.<call><name>getDirectScanner</name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></while>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <if>if <condition>(<expr><name>currentScanner</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>currentScanner</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>getLengthInBytes</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>totalLength</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>getCurrentPosition</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>positionOffset</name> + (<name>currentScanner</name> == null ? 0L : <call><name><name>currentScanner</name>.<name>getCurrentPosition</name></name><argument_list>()</argument_list></call>)</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>String</name></type> <name>getBackingFiles</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>Joiner</name>.<name>on</name></name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call>.<call><name>join</name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"LCS@%d(%s)"</expr></argument>, <argument><expr><call><name>hashCode</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>cfs</name>.<name>columnFamily</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

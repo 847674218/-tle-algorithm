@@ -1,0 +1,47 @@
+public Set<DecoratedKey> readSaved(String ksName, String cfName, IPartitioner partitioner)
+    {
+        File path = getCachePath(ksName, cfName);
+        Set<DecoratedKey> keys = new TreeSet<DecoratedKey>();
+        if (path.exists())
+        {
+            DataInputStream in = null;
+            try
+            {
+                long start = System.currentTimeMillis();
+
+                logger.info(String.format("reading saved cache %s", path));
+                in = new DataInputStream(new BufferedInputStream(new FileInputStream(path)));
+                while (in.available() > 0)
+                {
+                    int size = in.readInt();
+                    byte[] bytes = new byte[size];
+                    in.readFully(bytes);
+                    ByteBuffer buffer = ByteBuffer.wrap(bytes);
+                    DecoratedKey key;
+                    try
+                    {
+                        key = partitioner.decorateKey(buffer);
+                    }
+                    catch (Exception e)
+                    {
+                        logger.info(String.format("unable to read entry #%s from saved cache %s; skipping remaining entries",
+                                keys.size(), path.getAbsolutePath()), e);
+                        break;
+                    }
+                    keys.add(key);
+                }
+                if (logger.isDebugEnabled())
+                    logger.debug(String.format("completed reading (%d ms; %d keys) saved cache %s",
+                            System.currentTimeMillis() - start, keys.size(), path));
+            }
+            catch (Exception e)
+            {
+                logger.warn(String.format("error reading saved cache %s", path.getAbsolutePath()), e);
+            }
+            finally
+            {
+                FileUtils.closeQuietly(in);
+            }
+        }
+        return keys;
+    }

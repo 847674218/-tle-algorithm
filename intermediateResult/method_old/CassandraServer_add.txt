@@ -1,0 +1,31 @@
+public void add(ByteBuffer key, ColumnParent column_parent, CounterColumn column, ConsistencyLevel consistency_level)
+            throws InvalidRequestException, UnavailableException, TimedOutException, TException
+    {
+        logger.debug("add");
+
+        ClientState cState = state();
+        String keyspace = cState.getKeyspace();
+        cState.hasColumnFamilyAccess(keyspace, column_parent.column_family, Permission.WRITE);
+
+        CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_parent.column_family, true);
+        ThriftValidation.validateKey(metadata, key);
+        ThriftValidation.validateCommutativeForWrite(metadata, consistency_level);
+        ThriftValidation.validateColumnParent(metadata, column_parent);
+        // SuperColumn field is usually optional, but not when we're adding
+        if (metadata.cfType == ColumnFamilyType.Super && column_parent.super_column == null)
+        {
+            throw new InvalidRequestException("missing mandatory super column name for super CF " + column_parent.column_family);
+        }
+        ThriftValidation.validateColumnNames(metadata, column_parent, Arrays.asList(column.name));
+
+        RowMutation rm = new RowMutation(keyspace, key);
+        try
+        {
+            rm.addCounter(new QueryPath(column_parent.column_family, column_parent.super_column, column.name), column.value);
+        }
+        catch (MarshalException e)
+        {
+            throw new InvalidRequestException(e.getMessage());
+        }
+        doInsert(consistency_level, Arrays.asList(new CounterMutation(rm, consistency_level)));
+    }

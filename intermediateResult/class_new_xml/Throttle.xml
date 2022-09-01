@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\utils\Throttle.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>;</package>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Encapsulates the timing/state required to throttle a caller to a target throughput in
+ * bytes per millisecond, when periodically passed an absolute count of bytes.
+ */</comment>
+<class><specifier>public</specifier> class <name>Throttle</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>Throttle</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>name</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ThroughputFunction</name></type> <name>fun</name></decl>;</decl_stmt>
+
+    <comment type="line">// the bytes that had been handled the last time we delayed to throttle,</comment>
+    <comment type="line">// and the time in milliseconds when we last throttled</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>bytesAtLastDelay</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>timeAtLastDelay</name></decl>;</decl_stmt>
+
+    <comment type="line">// current target bytes of throughput per millisecond</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>targetBytesPerMS</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>Throttle</name><parameter_list>(<param><decl><type><name>String</name></type> <name>name</name></decl></param>, <param><decl><type><name>ThroughputFunction</name></type> <name>fun</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>name</name></name> = <name>name</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>fun</name></name> = <name>fun</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/** @param currentBytes Bytes of throughput since the beginning of the task. */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>throttle</name><parameter_list>(<param><decl><type><name>long</name></type> <name>currentBytes</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>throttleDelta</name><argument_list>(<argument><expr><name>currentBytes</name> - <name>bytesAtLastDelay</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** @param bytesDelta Bytes of throughput since the last call to throttle*() */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>throttleDelta</name><parameter_list>(<param><decl><type><name>long</name></type> <name>bytesDelta</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>newTargetBytesPerMS</name> <init>= <expr><call><name><name>fun</name>.<name>targetThroughput</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>newTargetBytesPerMS</name> &lt; 1</expr>)</condition><then>
+            <comment type="line">// throttling disabled</comment>
+            <return>return;</return></then></if>
+
+        <if>if <condition>(<expr><name>newTargetBytesPerMS</name> != <name>targetBytesPerMS</name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// restart throttling based on the new target to avoid getting bogus answers based on comparing</comment>
+            <comment type="line">// the rate under the old throttle, with the desired rate under the new.  (If the new rate is higher</comment>
+            <comment type="line">// than the old, it doesn't much matter, but if the new rate is lower, it would result in a long</comment>
+            <comment type="line">// sleep to bring the average down.  See CASSANDRA-5087.)</comment>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"{} target throughput now {} bytes/ms."</expr></argument>, <argument><expr><name>this</name></expr></argument>, <argument><expr><name>newTargetBytesPerMS</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>targetBytesPerMS</name> = <name>newTargetBytesPerMS</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>bytesAtLastDelay</name> += <name>bytesDelta</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>timeAtLastDelay</name> = <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <comment type="line">// time passed since last delay</comment>
+        <decl_stmt><decl><type><name>long</name></type> <name>msSinceLast</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>timeAtLastDelay</name></expr></init></decl>;</decl_stmt>
+        <comment type="line">// the excess bytes in this period</comment>
+        <decl_stmt><decl><type><name>long</name></type> <name>excessBytes</name> <init>= <expr><name>bytesDelta</name> - <name>msSinceLast</name> * <name>targetBytesPerMS</name></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// the time to delay to recap the deficit</comment>
+        <decl_stmt><decl><type><name>long</name></type> <name>timeToDelay</name> <init>= <expr><name>excessBytes</name> / <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>1</expr></argument>, <argument><expr><name>targetBytesPerMS</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>timeToDelay</name> &gt; 0</expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%s actual throughput was %d bytes in %d ms: throttling for %d ms"</expr></argument>,
+                                           <argument><expr><name>this</name></expr></argument>, <argument><expr><name>bytesDelta</name></expr></argument>, <argument><expr><name>msSinceLast</name></expr></argument>, <argument><expr><name>timeToDelay</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr><name>timeToDelay</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></then></if>
+        <expr_stmt><expr><name>bytesAtLastDelay</name> += <name>bytesDelta</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>timeAtLastDelay</name> = <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>"Throttle(for=" + <name>name</name> + ")"</expr>;</return>
+    }</block></function>
+
+    <class type="interface"><specifier>public</specifier> interface <name>ThroughputFunction</name>
+    <block>{
+        <comment type="block" format="javadoc">/**
+         * @return The instantaneous target throughput in bytes per millisecond. Targets less
+         * than or equal to zero will disable throttling.
+         */</comment>
+        <function_decl><type><specifier>public</specifier> <name>int</name></type> <name>targetThroughput</name><parameter_list>()</parameter_list>;</function_decl>
+    }</block></class>
+}</block></class>
+</unit>

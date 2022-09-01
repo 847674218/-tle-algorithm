@@ -1,0 +1,32 @@
+public void decommission() throws InterruptedException
+    {
+        if (!tokenMetadata.isMember(FBUtilities.getBroadcastAddress()))
+            throw new UnsupportedOperationException("local node is not a member of the token ring yet");
+        if (tokenMetadata.cloneAfterAllLeft().sortedTokens().size() < 2)
+            throw new UnsupportedOperationException("no other normal nodes in the ring; decommission would be pointless");
+        for (String table : Schema.instance.getNonSystemTables())
+        {
+            if (tokenMetadata.getPendingRanges(table, FBUtilities.getBroadcastAddress()).size() > 0)
+                throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
+        }
+
+        if (logger.isDebugEnabled())
+            logger.debug("DECOMMISSIONING");
+        startLeaving();
+        setMode(Mode.LEAVING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
+        Thread.sleep(RING_DELAY);
+
+        Runnable finishLeaving = new Runnable()
+        {
+            public void run()
+            {
+                stopRPCServer();
+                Gossiper.instance.stop();
+                MessagingService.instance().shutdown();
+                StageManager.shutdownNow();
+                setMode(Mode.DECOMMISSIONED, true);
+                // let op be responsible for killing the process
+            }
+        };
+        unbootstrap(finishLeaving);
+    }

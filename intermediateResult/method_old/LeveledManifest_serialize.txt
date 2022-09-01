@@ -1,0 +1,44 @@
+public synchronized void serialize()
+    {
+        File manifestFile = cfs.directories.getOrCreateLeveledManifest();
+        File oldFile = new File(manifestFile.getPath().replace(EXTENSION, "-old.json"));
+        File tmpFile = new File(manifestFile.getPath().replace(EXTENSION, "-tmp.json"));
+
+        JsonFactory f = new JsonFactory();
+        try
+        {
+            FileOutputStream fos = new FileOutputStream(tmpFile);
+            JsonGenerator g = f.createJsonGenerator(fos, JsonEncoding.UTF8);
+            g.useDefaultPrettyPrinter();
+            g.writeStartObject();
+            g.writeArrayFieldStart("generations");
+            for (int level = 0; level < generations.length; level++)
+            {
+                g.writeStartObject();
+                g.writeNumberField("generation", level);
+                g.writeArrayFieldStart("members");
+                for (SSTableReader ssTableReader : generations[level])
+                    g.writeNumber(ssTableReader.descriptor.generation);
+                g.writeEndArray(); // members
+
+                g.writeEndObject(); // generation
+            }
+            g.writeEndArray(); // for field generations
+            g.writeEndObject(); // write global object
+            g.flush();
+            fos.getFD().sync();
+            g.close();
+
+            if (oldFile.exists() && manifestFile.exists())
+                FileUtils.deleteWithConfirm(oldFile);
+            if (manifestFile.exists())
+                FileUtils.renameWithConfirm(manifestFile, oldFile);
+            assert tmpFile.exists();
+            FileUtils.renameWithConfirm(tmpFile, manifestFile);
+            logger.debug("Saved manifest {}", manifestFile);
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+    }

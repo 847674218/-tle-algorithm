@@ -1,0 +1,47 @@
+@Override
+    protected void flushData()
+    {
+        seekToChunkStart();
+
+
+        int compressedLength;
+        try
+        {
+            // compressing data with buffer re-use
+            compressedLength = compressor.compress(buffer, 0, validBufferBytes, compressed, 0);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException("Compression exception", e); // shouldn't happen
+        }
+
+        originalSize += validBufferBytes;
+        compressedSize += compressedLength;
+
+        // update checksum
+        checksum.update(buffer, 0, validBufferBytes);
+
+        try
+        {
+            // write an offset of the newly written chunk to the index file
+            metadataWriter.writeLong(chunkOffset);
+            chunkCount++;
+
+            assert compressedLength <= compressed.buffer.length;
+
+            // write data itself
+            out.write(compressed.buffer, 0, compressedLength);
+            // write corresponding checksum
+            out.writeInt((int) checksum.getValue());
+        }
+        catch (IOException e)
+        {
+            throw new FSWriteError(e, getPath());
+        }
+
+        // reset checksum object to the blank state for re-use
+        checksum.reset();
+
+        // next chunk should be written right after current + length of the checksum (int)
+        chunkOffset += compressedLength + 4;
+    }

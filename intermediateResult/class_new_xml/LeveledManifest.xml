@@ -1,0 +1,667 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\compaction\LeveledManifest.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>annotations</name>.<name>VisibleForTesting</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Predicate</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Predicates</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>ImmutableSortedSet</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Sets</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>primitives</name>.<name>Ints</name></name>;</import>
+<import>import <name><name>org</name>.<name>codehaus</name>.<name>jackson</name>.<name>JsonEncoding</name></name>;</import>
+<import>import <name><name>org</name>.<name>codehaus</name>.<name>jackson</name>.<name>JsonFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>codehaus</name>.<name>jackson</name>.<name>JsonGenerator</name></name>;</import>
+<import>import <name><name>org</name>.<name>codehaus</name>.<name>jackson</name>.<name>JsonNode</name></name>;</import>
+<import>import <name><name>org</name>.<name>codehaus</name>.<name>jackson</name>.<name>map</name>.<name>ObjectMapper</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowPosition</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Bounds</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSWriteError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>LeveledManifest</name>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>LeveledManifest</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>EXTENSION</name> <init>= <expr>".json"</expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * limit the number of L0 sstables we do at once, because compaction bloom filter creation
+     * uses a pessimistic estimate of how many keys overlap (none), so we risk wasting memory
+     * or even OOMing when compacting highly overlapping sstables
+     */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>MAX_COMPACTING_L0</name> <init>= <expr>32</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>cfs</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><index>[]</index></type> <name>generations</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>sstableGenerations</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>RowPosition</name><index>[]</index></type> <name>lastCompactedKeys</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>maxSSTableSizeInBytes</name></decl>;</decl_stmt>
+
+    <constructor><specifier>private</specifier> <name>LeveledManifest</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxSSTableSizeInMB</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>cfs</name></name> = <name>cfs</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>maxSSTableSizeInBytes</name></name> = <name>maxSSTableSizeInMB</name> * 1024 * 1024</expr>;</expr_stmt>
+
+        <comment type="line">// allocate enough generations for a PB of data</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>(<name>int</name>) <call><name><name>Math</name>.<name>log10</name></name><argument_list>(<argument><expr>1000 * 1000 * 1000 / <name>maxSSTableSizeInMB</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>generations</name> = new <name><name>List</name><index>[<expr><name>n</name></expr>]</index></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>lastCompactedKeys</name> = new <name><name>RowPosition</name><index>[<expr><name>n</name></expr>]</index></name></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>generations</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <expr_stmt><expr><name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name> = new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>lastCompactedKeys</name><index>[<expr><name>i</name></expr>]</index></name> = <call><name><name>cfs</name>.<name>partitioner</name>.<name>getMinimumToken</name></name><argument_list>()</argument_list></call>.<call><name>minKeyBound</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <expr_stmt><expr><name>sstableGenerations</name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>static</specifier> <name>LeveledManifest</name></type> <name>create</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxSSTableSize</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>create</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>maxSSTableSize</name></expr></argument>, <argument><expr><call><name><name>cfs</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>LeveledManifest</name></type> <name>create</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxSSTableSize</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>LeveledManifest</name></type> <name>manifest</name> <init>= <expr>new <call><name>LeveledManifest</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>maxSSTableSize</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>load</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>manifest</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// ensure all SSTables are in the manifest</comment>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>ssTableReader</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>manifest</name>.<name>levelOf</name></name><argument_list>(<argument><expr><name>ssTableReader</name></expr></argument>)</argument_list></call> &lt; 0</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>manifest</name>.<name>add</name></name><argument_list>(<argument><expr><name>ssTableReader</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+
+        <return>return <expr><name>manifest</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>load</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name>LeveledManifest</name></type> <name>manifest</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>manifestFile</name> <init>= <expr><call><name>tryGetManifest</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>manifestFile</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>parseManifest</name><argument_list>(<argument><expr><name>manifest</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>manifestFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Error parsing manifest"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>File</name></type> <name>oldFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>manifestFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call>.<call><name>replace</name><argument_list>(<argument><expr><name>EXTENSION</name></expr></argument>, <argument><expr>"-old.json"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>oldFile</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name>parseManifest</name><argument_list>(<argument><expr><name>manifest</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>oldFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <return>return;</return>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>old</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Old manifest present but corrupt"</expr></argument>, <argument><expr><name>old</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></catch></try>
+            }</block></then></if>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Manifest present but corrupt. Cassandra will re-level {} from scratch"</expr></argument>, <argument><expr><name><name>cfs</name>.<name>columnFamily</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>parseManifest</name><parameter_list>(<param><decl><type><name>LeveledManifest</name></type> <name>manifest</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name>File</name></type> <name>manifestFile</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>ObjectMapper</name></type> <name>m</name> <init>= <expr>new <call><name>ObjectMapper</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>JsonNode</name></type> <name>rootNode</name> <init>= <expr><call><name><name>m</name>.<name>readValue</name></name><argument_list>(<argument><expr><name>manifestFile</name></expr></argument>, <argument><expr><name><name>JsonNode</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>JsonNode</name></type> <name>generations</name> <init>= <expr><call><name><name>rootNode</name>.<name>get</name></name><argument_list>(<argument><expr>"generations"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><call><name><name>generations</name>.<name>isArray</name></name><argument_list>()</argument_list></call></expr>;</assert>
+        <for>for (<init><decl><type><name>JsonNode</name></type> <name>generation</name> <range>: <expr><name>generations</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>level</name> <init>= <expr><call><name><name>generation</name>.<name>get</name></name><argument_list>(<argument><expr>"generation"</expr></argument>)</argument_list></call>.<call><name>getIntValue</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>JsonNode</name></type> <name>generationValues</name> <init>= <expr><call><name><name>generation</name>.<name>get</name></name><argument_list>(<argument><expr>"members"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>JsonNode</name></type> <name>generationValue</name> <range>: <expr><name>generationValues</name></expr></range></decl></init>)
+            <block>{
+                <for>for (<init><decl><type><name>SSTableReader</name></type> <name>ssTableReader</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr><name><name>ssTableReader</name>.<name>descriptor</name>.<name>generation</name></name> == <call><name><name>generationValue</name>.<name>getIntValue</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Loading {} at L{}"</expr></argument>, <argument><expr><name>ssTableReader</name></expr></argument>, <argument><expr><name>level</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>manifest</name>.<name>add</name></name><argument_list>(<argument><expr><name>ssTableReader</name></expr></argument>, <argument><expr><name>level</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                }</block></for>
+            }</block></for>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>reader</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>logDistribution</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Adding {} to L0"</expr></argument>, <argument><expr><name>reader</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>add</name><argument_list>(<argument><expr><name>reader</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>serialize</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * if the number of SSTables in the current compacted set *by itself* exceeds the target level's
+     * (regardless of the level's current contents), find an empty level instead
+     */</comment>
+    <function><type><specifier>private</specifier> <name>int</name></type> <name>skipLevels</name><parameter_list>(<param><decl><type><name>int</name></type> <name>newLevel</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>added</name></decl></param>)</parameter_list>
+    <block>{
+        <while>while <condition>(<expr><call><name>maxBytesForLevel</name><argument_list>(<argument><expr><name>newLevel</name></expr></argument>)</argument_list></call> &lt; <call><name><name>SSTableReader</name>.<name>getTotalBytes</name></name><argument_list>(<argument><expr><name>added</name></expr></argument>)</argument_list></call>
+            &amp;&amp; <name><name>generations</name><index>[<expr>(<name>newLevel</name> + 1)</expr>]</index></name>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <expr_stmt><expr><name>newLevel</name>++</expr>;</expr_stmt>
+        }</block></while>
+        <return>return <expr><name>newLevel</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>promote</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>removed</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>added</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr>!<call><name><name>Iterables</name>.<name>isEmpty</name></name><argument_list>(<argument><expr><name>removed</name></expr></argument>)</argument_list></call></expr>;</assert> <comment type="line">// use add() instead of promote when adding new sstables</comment>
+        <expr_stmt><expr><call><name>logDistribution</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Replacing [" + <call><name>toString</name><argument_list>(<argument><expr><name>removed</name></expr></argument>)</argument_list></call> + "]"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <comment type="line">// the level for the added sstables is the max of the removed ones,</comment>
+        <comment type="line">// plus one if the removed were all on the same level</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>minimumLevel</name> <init>= <expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>maximumLevel</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>removed</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>thisLevel</name> <init>= <expr><call><name>remove</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><name>thisLevel</name> &gt;= 0</expr>;</assert>
+            <expr_stmt><expr><name>maximumLevel</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>maximumLevel</name></expr></argument>, <argument><expr><name>thisLevel</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>minimumLevel</name> = <call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>minimumLevel</name></expr></argument>, <argument><expr><name>thisLevel</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <comment type="line">// it's valid to do a remove w/o an add (e.g. on truncate)</comment>
+        <if>if <condition>(<expr>!<call><name><name>added</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>hasNext</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>newLevel</name></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>minimumLevel</name> == 0 &amp;&amp; <name>maximumLevel</name> == 0 &amp;&amp; <call><name><name>SSTable</name>.<name>getTotalBytes</name></name><argument_list>(<argument><expr><name>removed</name></expr></argument>)</argument_list></call> &lt;= <name>maxSSTableSizeInBytes</name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// special case for tiny L0 sstables; see CASSANDRA-4341</comment>
+            <expr_stmt><expr><name>newLevel</name> = 0</expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name>newLevel</name> = <name>minimumLevel</name> == <name>maximumLevel</name> ? <name>maximumLevel</name> + 1 : <name>maximumLevel</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>newLevel</name> = <call><name>skipLevels</name><argument_list>(<argument><expr><name>newLevel</name></expr></argument>, <argument><expr><name>added</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <assert>assert <expr><name>newLevel</name> &gt; 0</expr>;</assert>
+        }</block></else></if>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Adding [{}] at L{}"</expr></argument>, <argument><expr><call><name>toString</name><argument_list>(<argument><expr><name>added</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>newLevel</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><name><name>lastCompactedKeys</name><index>[<expr><name>minimumLevel</name></expr>]</index></name> = <call><name><name>SSTable</name>.<name>sstableOrdering</name>.<name>max</name></name><argument_list>(<argument><expr><name>added</name></expr></argument>)</argument_list></call>.<name>last</name></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>ssTableReader</name> <range>: <expr><name>added</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name>add</name><argument_list>(<argument><expr><name>ssTableReader</name></expr></argument>, <argument><expr><name>newLevel</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <comment type="line">// Fix overlapping sstables from CASSANDRA-4321/4411</comment>
+        <if>if <condition>(<expr><name>newLevel</name> != 0</expr>)</condition><then>
+            <expr_stmt><expr><call><name>repairOverlappingSSTables</name><argument_list>(<argument><expr><name>newLevel</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name>serialize</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>repairOverlappingSSTables</name><parameter_list>(<param><decl><type><name>int</name></type> <name>level</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>SSTableReader</name></type> <name>previous</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name></expr></argument>, <argument><expr><name><name>SSTable</name>.<name>sstableComparator</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>outOfOrderSSTables</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>current</name> <range>: <expr><name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name>previous</name> != null &amp;&amp; <call><name><name>current</name>.<name>first</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>previous</name>.<name>last</name></name></expr></argument>)</argument_list></call> &lt;= 0</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"At level %d, %s [%s, %s] overlaps %s [%s, %s].  This is caused by a bug in Cassandra 1.1.0 .. 1.1.3.  Sending back to L0.  If you have not yet run scrub, you should do so since you may also have rows out-of-order within an sstable"</expr></argument>,
+                                           <argument><expr><name>level</name></expr></argument>, <argument><expr><name>previous</name></expr></argument>, <argument><expr><name><name>previous</name>.<name>first</name></name></expr></argument>, <argument><expr><name><name>previous</name>.<name>last</name></name></expr></argument>, <argument><expr><name>current</name></expr></argument>, <argument><expr><name><name>current</name>.<name>first</name></name></expr></argument>, <argument><expr><name><name>current</name>.<name>last</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>outOfOrderSSTables</name>.<name>add</name></name><argument_list>(<argument><expr><name>current</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><name>previous</name> = <name>current</name></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></for>
+
+        <if>if <condition>(<expr>!<call><name><name>outOfOrderSSTables</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>outOfOrderSSTables</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name>sendBackToL0</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><call><name>serialize</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>replace</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>removed</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>added</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// replace is for compaction operation that operate on exactly one sstable, with no merging.</comment>
+        <comment type="line">// Thus, removed will be exactly one sstable, and added will be 0 or 1.</comment>
+        <assert>assert <expr><call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name>removed</name></expr></argument>)</argument_list></call> == 1 : <call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name>removed</name></expr></argument>)</argument_list></call></expr>;</assert>
+        <assert>assert <expr><call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name>added</name></expr></argument>)</argument_list></call> &lt;= 1 : <call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name>added</name></expr></argument>)</argument_list></call></expr>;</assert>
+        <expr_stmt><expr><call><name>logDistribution</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Replacing {} with {}"</expr></argument>, <argument><expr><name>removed</name></expr></argument>, <argument><expr><name>added</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>level</name> <init>= <expr><call><name>remove</name><argument_list>(<argument><expr><call><name><name>removed</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>!<call><name><name>Iterables</name>.<name>isEmpty</name></name><argument_list>(<argument><expr><name>added</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name>add</name><argument_list>(<argument><expr><call><name><name>added</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>level</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name>serialize</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>sendBackToL0</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>remove</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>add</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>String</name></type> <name>toString</name><parameter_list>(<param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>builder</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>builder</name>.<name>append</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>cfname</name></name></expr></argument>)</argument_list></call>
+                   .<call><name>append</name><argument_list>(<argument><expr>'-'</expr></argument>)</argument_list></call>
+                   .<call><name>append</name><argument_list>(<argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>generation</name></name></expr></argument>)</argument_list></call>
+                   .<call><name>append</name><argument_list>(<argument><expr>"(L"</expr></argument>)</argument_list></call>
+                   .<call><name>append</name><argument_list>(<argument><expr><call><name>levelOf</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>
+                   .<call><name>append</name><argument_list>(<argument><expr>"), "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><call><name><name>builder</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>VisibleForTesting</name></annotation>
+    <name>long</name></type> <name>maxBytesForLevel</name><parameter_list>(<param><decl><type><name>int</name></type> <name>level</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>level</name> == 0</expr>)</condition><then>
+            <return>return <expr>4L * <name>maxSSTableSizeInBytes</name></expr>;</return></then></if>
+        <decl_stmt><decl><type><name>double</name></type> <name>bytes</name> <init>= <expr><call><name><name>Math</name>.<name>pow</name></name><argument_list>(<argument><expr>10</expr></argument>, <argument><expr><name>level</name></expr></argument>)</argument_list></call> * <name>maxSSTableSizeInBytes</name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>bytes</name> &gt; <name><name>Long</name>.<name>MAX_VALUE</name></name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"At most " + <name><name>Long</name>.<name>MAX_VALUE</name></name> + " bytes may be in a compaction level; your maxSSTableSize must be absurdly high to compute " + <name>bytes</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr>(<name>long</name>) <name>bytes</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return highest-priority sstables to compact
+     * If no compactions are necessary, will return an empty list.  Never returns null.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>getCompactionCandidates</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// LevelDB gives each level a score of how much data it contains vs its ideal amount, and</comment>
+        <comment type="line">// compacts the level with the highest score. But this falls apart spectacularly once you</comment>
+        <comment type="line">// get behind.  Consider this set of levels:</comment>
+        <comment type="line">// L0: 988 [ideal: 4]</comment>
+        <comment type="line">// L1: 117 [ideal: 10]</comment>
+        <comment type="line">// L2: 12  [ideal: 100]</comment>
+        <comment type="line">//</comment>
+        <comment type="line">// The problem is that L0 has a much higher score (almost 250) than L1 (11), so what we'll</comment>
+        <comment type="line">// do is compact a batch of MAX_COMPACTING_L0 sstables with all 117 L1 sstables, and put the</comment>
+        <comment type="line">// result (say, 120 sstables) in L1. Then we'll compact the next batch of MAX_COMPACTING_L0,</comment>
+        <comment type="line">// and so forth.  So we spend most of our i/o rewriting the L1 data with each batch.</comment>
+        <comment type="line">//</comment>
+        <comment type="line">// If we could just do *all* L0 a single time with L1, that would be ideal.  But we can't</comment>
+        <comment type="line">// -- see the javadoc for MAX_COMPACTING_L0.</comment>
+        <comment type="line">//</comment>
+        <comment type="line">// LevelDB's way around this is to simply block writes if L0 compaction falls behind.</comment>
+        <comment type="line">// We don't have that luxury.</comment>
+        <comment type="line">//</comment>
+        <comment type="line">// So instead, we force compacting higher levels first.  This may not minimize the number</comment>
+        <comment type="line">// of reads done as quickly in the short term, but it minimizes the i/o needed to compact</comment>
+        <comment type="line">// optimially which gives us a long term win.</comment>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name><name>generations</name>.<name>length</name></name> - 1</expr></init></decl>;</init> <condition><expr><name>i</name> &gt;= 0</expr>;</condition> <incr><expr><name>i</name>--</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name> <init>= <expr><name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>sstables</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if> <comment type="line">// mostly this just avoids polluting the debug log with zero scores</comment>
+            <comment type="line">// we want to calculate score excluding compacting ones</comment>
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstablesInLevel</name> <init>= <expr><call><name><name>Sets</name>.<name>newHashSet</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>remaining</name> <init>= <expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><name>sstablesInLevel</name></expr></argument>, <argument><expr><call><name><name>cfs</name>.<name>getDataTracker</name></name><argument_list>()</argument_list></call>.<call><name>getCompacting</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>double</name></type> <name>score</name> <init>= <expr>(<name>double</name>)<call><name><name>SSTableReader</name>.<name>getTotalBytes</name></name><argument_list>(<argument><expr><name>remaining</name></expr></argument>)</argument_list></call> / (<name>double</name>)<call><name>maxBytesForLevel</name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Compaction score for level {} is {}"</expr></argument>, <argument><expr><name>i</name></expr></argument>, <argument><expr><name>score</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// L0 gets a special case that if we don't have anything more important to do,</comment>
+            <comment type="line">// we'll go ahead and compact if we have more than one sstable</comment>
+            <if>if <condition>(<expr><name>score</name> &gt; 1.001 || (<name>i</name> == 0 &amp;&amp; <call><name><name>sstables</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 1)</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>candidates</name> <init>= <expr><call><name>getCandidatesFor</name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Compaction candidates for L{} are {}"</expr></argument>, <argument><expr><name>i</name></expr></argument>, <argument><expr><call><name>toString</name><argument_list>(<argument><expr><name>candidates</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <if>if <condition>(<expr>!<call><name><name>candidates</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><name>candidates</name></expr>;</return></then></if>
+            }</block></then></if>
+        }</block></for>
+
+        <return>return <expr><call><name><name>Collections</name>.<name>emptyList</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getLevelSize</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name><name>generations</name>.<name>length</name></name> &gt; <name>i</name> ? <name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name>.<call><name>size</name><argument_list>()</argument_list></call> : 0</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name>int</name><index>[]</index></type> <name>getAllLevelSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name><index>[]</index></type> <name>counts</name> <init>= <expr>new <name><name>int</name><index>[<expr><name><name>generations</name>.<name>length</name></name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>counts</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><name><name>counts</name><index>[<expr><name>i</name></expr>]</index></name> = <name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name>.<call><name>size</name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>counts</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>logDistribution</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>generations</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <block>{
+                <if>if <condition>(<expr>!<name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"L{} contains {} SSTables ({} bytes) in {}"</expr></argument>,
+                            <argument><expr>new <name><name>Object</name><index>[]</index></name> <block>{<expr><name>i</name></expr>, <expr><name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name>.<call><name>size</name><argument_list>()</argument_list></call></expr>, <expr><call><name><name>SSTableReader</name>.<name>getTotalBytes</name></name><argument_list>(<argument><expr><name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name></expr></argument>)</argument_list></call></expr>, <expr><name>this</name></expr>}</block></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></for>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><name>int</name></type> <name>levelOf</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Integer</name></type> <name>level</name> <init>= <expr><call><name><name>sstableGenerations</name>.<name>get</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>level</name> == null</expr>)</condition><then>
+            <return>return <expr>-1</expr>;</return></then></if>
+
+        <return>return <expr><call><name><name>level</name>.<name>intValue</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>int</name></type> <name>remove</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>reader</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>level</name> <init>= <expr><call><name>levelOf</name><argument_list>(<argument><expr><name>reader</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>level</name> &gt;= 0 : <name>reader</name> + " not present in manifest"</expr>;</assert>
+        <expr_stmt><expr><name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name>.<call><name>remove</name><argument_list>(<argument><expr><name>reader</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sstableGenerations</name>.<name>remove</name></name><argument_list>(<argument><expr><name>reader</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>level</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>add</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>int</name></type> <name>level</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>level</name> &lt; <name><name>generations</name>.<name>length</name></name> : "Invalid level " + <name>level</name> + " out of " + (<name><name>generations</name>.<name>length</name></name> - 1)</expr>;</assert>
+        <expr_stmt><expr><name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name>.<call><name>add</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sstableGenerations</name>.<name>put</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><call><name><name>Integer</name>.<name>valueOf</name></name><argument_list>(<argument><expr><name>level</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>overlapping</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>candidates</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>others</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr>!<call><name><name>candidates</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+        <comment type="block">/*
+         * Picking each sstable from others that overlap one of the sstable of candidates is not enough
+         * because you could have the following situation:
+         *   candidates = [ s1(a, c), s2(m, z) ]
+         *   others = [ s3(e, g) ]
+         * In that case, s2 overlaps none of s1 or s2, but if we compact s1 with s2, the resulting sstable will
+         * overlap s3, so we must return s3.
+         *
+         * Thus, the correct approach is to pick sstables overlapping anything between the first key in all
+         * the candidate sstables, and the last.
+         */</comment>
+        <decl_stmt><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name><name>candidates</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SSTableReader</name></type> <name>sstable</name> <init>= <expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Token</name></type> <name>first</name> <init>= <expr><name><name>sstable</name>.<name>first</name>.<name>token</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Token</name></type> <name>last</name> <init>= <expr><name><name>sstable</name>.<name>last</name>.<name>token</name></name></expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <expr_stmt><expr><name>sstable</name> = <call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>first</name> = <call><name><name>first</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>first</name>.<name>token</name></name></expr></argument>)</argument_list></call> &lt;= 0 ? <name>first</name> : <name><name>sstable</name>.<name>first</name>.<name>token</name></name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>last</name> = <call><name><name>last</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>last</name>.<name>token</name></name></expr></argument>)</argument_list></call> &gt;= 0 ? <name>last</name> : <name><name>sstable</name>.<name>last</name>.<name>token</name></name></expr>;</expr_stmt>
+        }</block></while>
+        <return>return <expr><call><name>overlapping</name><argument_list>(<argument><expr><name>first</name></expr></argument>, <argument><expr><name>last</name></expr></argument>, <argument><expr><name>others</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>VisibleForTesting</name></annotation>
+    <specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>overlapping</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>others</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>overlapping</name><argument_list>(<argument><expr><name><name>sstable</name>.<name>first</name>.<name>token</name></name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>last</name>.<name>token</name></name></expr></argument>, <argument><expr><name>others</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return sstables from @param sstables that contain keys between @param start and @param end, inclusive.
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>overlapping</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>start</name></decl></param>, <param><decl><type><name>Token</name></type> <name>end</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><call><name><name>start</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name>end</name></expr></argument>)</argument_list></call> &lt;= 0</expr>;</assert>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>overlapped</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Bounds</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>promotedBounds</name> <init>= <expr>new <call><name><name>Bounds</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>start</name></expr></argument>, <argument><expr><name>end</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>candidate</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>Bounds</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>candidateBounds</name> <init>= <expr>new <call><name><name>Bounds</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>candidate</name>.<name>first</name>.<name>token</name></name></expr></argument>, <argument><expr><name><name>candidate</name>.<name>last</name>.<name>token</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>candidateBounds</name>.<name>intersects</name></name><argument_list>(<argument><expr><name>promotedBounds</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>overlapped</name>.<name>add</name></name><argument_list>(<argument><expr><name>candidate</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <return>return <expr><name>overlapped</name></expr>;</return>
+    }</block></function>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Predicate</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>suspectP</name> <init>= <expr>new <class><super><name><name>Predicate</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+    <block>{
+        <function><type><specifier>public</specifier> <name>boolean</name></type> <name>apply</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>candidate</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>candidate</name>.<name>isMarkedSuspect</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * @return highest-priority sstables to compact for the given level.
+     * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
+     * for prior failure), will return an empty list.  Never returns null.
+     */</comment>
+    <function><type><specifier>private</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>getCandidatesFor</name><parameter_list>(<param><decl><type><name>int</name></type> <name>level</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr>!<name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>;</assert>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Choosing candidates for L{}"</expr></argument>, <argument><expr><name>level</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>compacting</name> <init>= <expr><call><name><name>cfs</name>.<name>getDataTracker</name></name><argument_list>()</argument_list></call>.<call><name>getCompacting</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>level</name> == 0</expr>)</condition><then>
+        <block>{
+            <comment type="line">// L0 is the dumping ground for new sstables which thus may overlap each other.</comment>
+            <comment type="line">//</comment>
+            <comment type="line">// We treat L0 compactions specially:</comment>
+            <comment type="line">// 1a. add sstables to the candidate set until we have at least maxSSTableSizeInMB</comment>
+            <comment type="line">// 1b. prefer choosing older sstables as candidates, to newer ones</comment>
+            <comment type="line">// 1c. any L0 sstables that overlap a candidate, will also become candidates</comment>
+            <comment type="line">// 2. At most MAX_COMPACTING_L0 sstables from L0 will be compacted at once</comment>
+            <comment type="line">// 3. If total candidate size is less than maxSSTableSizeInMB, we won't bother compacting with L1,</comment>
+            <comment type="line">//    and the result of the compaction will stay in L0 instead of being promoted (see promote())</comment>
+            <comment type="line">//</comment>
+            <comment type="line">// Note that we ignore suspect-ness of L1 sstables here, since if an L1 sstable is suspect we're</comment>
+            <comment type="line">// basically screwed, since we expect all or most L0 sstables to overlap with each L1 sstable.</comment>
+            <comment type="line">// So if an L1 sstable is suspect we can't do much besides try anyway and hope for the best.</comment>
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>candidates</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>remaining</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>Iterables</name>.<name>addAll</name></name><argument_list>(<argument><expr><name>remaining</name></expr></argument>, <argument><expr><call><name><name>Iterables</name>.<name>filter</name></name><argument_list>(<argument><expr><name><name>generations</name><index>[<expr>0</expr>]</index></name></expr></argument>, <argument><expr><call><name><name>Predicates</name>.<name>not</name></name><argument_list>(<argument><expr><name>suspectP</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><call><name>ageSortedSSTables</name><argument_list>(<argument><expr><name>remaining</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><call><name><name>candidates</name>.<name>contains</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <for>for (<init><decl><type><name>SSTableReader</name></type> <name>newCandidate</name> <range>: <expr><call><name><name>Sets</name>.<name>union</name></name><argument_list>(<argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name>overlapping</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>remaining</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr>!<call><name><name>compacting</name>.<name>contains</name></name><argument_list>(<argument><expr><name>newCandidate</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>candidates</name>.<name>add</name></name><argument_list>(<argument><expr><name>newCandidate</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>remaining</name>.<name>remove</name></name><argument_list>(<argument><expr><name>newCandidate</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                }</block></for>
+
+                <if>if <condition>(<expr><call><name><name>candidates</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; <name>MAX_COMPACTING_L0</name></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// limit to only the MAX_COMPACTING_L0 oldest candidates</comment>
+                    <expr_stmt><expr><name>candidates</name> = new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name>ageSortedSSTables</name><argument_list>(<argument><expr><name>candidates</name></expr></argument>)</argument_list></call>.<call><name>subList</name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><name>MAX_COMPACTING_L0</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                }</block></then></if>
+            }</block></for>
+
+            <comment type="line">// leave everything in L0 if we didn't end up with a full sstable's worth of data</comment>
+            <if>if <condition>(<expr><call><name><name>SSTable</name>.<name>getTotalBytes</name></name><argument_list>(<argument><expr><name>candidates</name></expr></argument>)</argument_list></call> &gt; <name>maxSSTableSizeInBytes</name></expr>)</condition><then>
+            <block>{
+                <comment type="line">// add sstables from L1 that overlap candidates</comment>
+                <comment type="line">// if the overlapping ones are already busy in a compaction, leave it out.</comment>
+                <comment type="line">// TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables</comment>
+                <expr_stmt><expr><name>candidates</name> = <call><name><name>Sets</name>.<name>union</name></name><argument_list>(<argument><expr><name>candidates</name></expr></argument>, <argument><expr><call><name>overlapping</name><argument_list>(<argument><expr><name>candidates</name></expr></argument>, <argument><expr><name><name>generations</name><index>[<expr>1</expr>]</index></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <comment type="line">// check overlap with L0 compacting sstables to make sure we are not generating overlap in L1.</comment>
+                <decl_stmt><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>compactingL0</name> <init>= <expr><call><name><name>Iterables</name>.<name>filter</name></name><argument_list>(<argument><expr><name><name>generations</name><index>[<expr>0</expr>]</index></name></expr></argument>, <argument><expr><call><name><name>Predicates</name>.<name>in</name></name><argument_list>(<argument><expr><name>compacting</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr>!<call><name><name>Sets</name>.<name>intersection</name></name><argument_list>(<argument><expr><name>candidates</name></expr></argument>, <argument><expr><name>compacting</name></expr></argument>)</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call> || !<call><name>overlapping</name><argument_list>(<argument><expr><name>candidates</name></expr></argument>, <argument><expr><name>compactingL0</name></expr></argument>)</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><call><name><name>Collections</name>.<name>emptyList</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+            }</block></then></if>
+
+            <return>return <expr><call><name><name>candidates</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 1 ? <name>candidates</name> : <name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></then></if>
+
+        <comment type="line">// for non-L0 compactions, pick up where we left off last time</comment>
+        <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name></expr></argument>, <argument><expr><name><name>SSTable</name>.<name>sstableComparator</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>start</name> <init>= <expr>0</expr></init></decl>;</decl_stmt> <comment type="line">// handles case where the prior compaction touched the very last range</comment>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name>.<call><name>size</name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name>SSTableReader</name></type> <name>sstable</name> <init>= <expr><name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name>.<call><name>get</name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>sstable</name>.<name>first</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>lastCompactedKeys</name><index>[<expr><name>level</name></expr>]</index></name></expr></argument>)</argument_list></call> &gt; 0</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>start</name> = <name>i</name></expr>;</expr_stmt>
+                <break>break;</break>
+            }</block></then></if>
+        }</block></for>
+
+        <comment type="line">// look for a non-suspect table to compact with, starting with where we left off last time,</comment>
+        <comment type="line">// and wrapping back to the beginning of the generation if necessary</comment>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name>.<call><name>size</name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name>SSTableReader</name></type> <name>sstable</name> <init>= <expr><name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name>.<call><name>get</name><argument_list>(<argument><expr>(<name>start</name> + <name>i</name>) % <name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name>.<call><name>size</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>candidates</name> <init>= <expr><call><name><name>Sets</name>.<name>union</name></name><argument_list>(<argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name>overlapping</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name><name>generations</name><index>[<expr><name>level</name> + 1</expr>]</index></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>Iterables</name>.<name>any</name></name><argument_list>(<argument><expr><name>candidates</name></expr></argument>, <argument><expr><name>suspectP</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+            <if>if <condition>(<expr><call><name><name>Sets</name>.<name>intersection</name></name><argument_list>(<argument><expr><name>candidates</name></expr></argument>, <argument><expr><name>compacting</name></expr></argument>)</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr><name>candidates</name></expr>;</return></then></if>
+        }</block></for>
+
+        <comment type="line">// all the sstables were suspect or overlapped with something suspect</comment>
+        <return>return <expr><call><name><name>Collections</name>.<name>emptyList</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>ageSortedSSTables</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>candidates</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>ageSortedCandidates</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>candidates</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>ageSortedCandidates</name></expr></argument>, <argument><expr><name><name>SSTable</name>.<name>maxTimestampComparator</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>ageSortedCandidates</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>File</name></type> <name>tryGetManifest</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cfs</name>.<name>directories</name>.<name>tryGetLeveledManifest</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name>void</name></type> <name>serialize</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>File</name></type> <name>manifestFile</name> <init>= <expr><call><name><name>cfs</name>.<name>directories</name>.<name>getOrCreateLeveledManifest</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>File</name></type> <name>oldFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>manifestFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call>.<call><name>replace</name><argument_list>(<argument><expr><name>EXTENSION</name></expr></argument>, <argument><expr>"-old.json"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>File</name></type> <name>tmpFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>manifestFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call>.<call><name>replace</name><argument_list>(<argument><expr><name>EXTENSION</name></expr></argument>, <argument><expr>"-tmp.json"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>JsonFactory</name></type> <name>f</name> <init>= <expr>new <call><name>JsonFactory</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>JsonGenerator</name></type> <name>g</name> <init>= <expr><call><name><name>f</name>.<name>createJsonGenerator</name></name><argument_list>(<argument><expr><name>tmpFile</name></expr></argument>, <argument><expr><name><name>JsonEncoding</name>.<name>UTF8</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>g</name>.<name>useDefaultPrettyPrinter</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>g</name>.<name>writeStartObject</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>g</name>.<name>writeArrayFieldStart</name></name><argument_list>(<argument><expr>"generations"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name>int</name></type> <name>level</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>level</name> &lt; <name><name>generations</name>.<name>length</name></name></expr>;</condition> <incr><expr><name>level</name>++</expr></incr>)
+            <block>{
+                <expr_stmt><expr><call><name><name>g</name>.<name>writeStartObject</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>g</name>.<name>writeNumberField</name></name><argument_list>(<argument><expr>"generation"</expr></argument>, <argument><expr><name>level</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>g</name>.<name>writeArrayFieldStart</name></name><argument_list>(<argument><expr>"members"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>SSTableReader</name></type> <name>ssTableReader</name> <range>: <expr><name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>g</name>.<name>writeNumber</name></name><argument_list>(<argument><expr><name><name>ssTableReader</name>.<name>descriptor</name>.<name>generation</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                <expr_stmt><expr><call><name><name>g</name>.<name>writeEndArray</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// members</comment>
+
+                <expr_stmt><expr><call><name><name>g</name>.<name>writeEndObject</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// generation</comment>
+            }</block></for>
+            <expr_stmt><expr><call><name><name>g</name>.<name>writeEndArray</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// for field generations</comment>
+            <expr_stmt><expr><call><name><name>g</name>.<name>writeEndObject</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// write global object</comment>
+            <expr_stmt><expr><call><name><name>g</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>FSWriteError</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><name>tmpFile</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <if>if <condition>(<expr><call><name><name>oldFile</name>.<name>exists</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>manifestFile</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>deleteWithConfirm</name></name><argument_list>(<argument><expr><name>oldFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><call><name><name>manifestFile</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>renameWithConfirm</name></name><argument_list>(<argument><expr><name>manifestFile</name></expr></argument>, <argument><expr><name>oldFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <assert>assert <expr><call><name><name>tmpFile</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>;</assert>
+
+        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>renameWithConfirm</name></name><argument_list>(<argument><expr><name>tmpFile</name></expr></argument>, <argument><expr><name>manifestFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Saved manifest {}"</expr></argument>, <argument><expr><name>manifestFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>"Manifest@" + <call><name>hashCode</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getLevelCount</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name><name>generations</name>.<name>length</name></name> - 1</expr></init></decl>;</init> <condition><expr><name>i</name> &gt;= 0</expr>;</condition> <incr><expr><name>i</name>--</expr></incr>)
+        <block>{
+            <if>if <condition>(<expr><name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name>.<call><name>size</name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+                <return>return <expr><name>i</name></expr>;</return></then></if>
+        }</block></for>
+        <return>return <expr>0</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name><name>SortedSet</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>getLevelSorted</name><parameter_list>(<param><decl><type><name>int</name></type> <name>level</name></decl></param>, <param><decl><type><name><name>Comparator</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ImmutableSortedSet</name>.<name>copyOf</name></name><argument_list>(<argument><expr><name>comparator</name></expr></argument>, <argument><expr><name><name>generations</name><index>[<expr><name>level</name></expr>]</index></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>getLevel</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>synchronized</specifier> <name>int</name></type> <name>getEstimatedTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>tasks</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name><index>[]</index></type> <name>estimated</name> <init>= <expr>new <name><name>long</name><index>[<expr><name><name>generations</name>.<name>length</name></name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr><name><name>generations</name>.<name>length</name></name> - 1</expr></init></decl>;</init> <condition><expr><name>i</name> &gt;= 0</expr>;</condition> <incr><expr><name>i</name>--</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name> <init>= <expr><name><name>generations</name><index>[<expr><name>i</name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name><name>estimated</name><index>[<expr><name>i</name></expr>]</index></name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>0L</expr></argument>, <argument><expr><call><name><name>SSTableReader</name>.<name>getTotalBytes</name></name><argument_list>(<argument><expr><name>sstables</name></expr></argument>)</argument_list></call> - <call><name>maxBytesForLevel</name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call> / <name>maxSSTableSizeInBytes</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>tasks</name> += <name><name>estimated</name><index>[<expr><name>i</name></expr>]</index></name></expr>;</expr_stmt>
+        }</block></for>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Estimating {} compactions to do for {}.{}"</expr></argument>,
+                     <argument><expr>new <name><name>Object</name><index>[]</index></name> <block>{<expr><call><name><name>Arrays</name>.<name>toString</name></name><argument_list>(<argument><expr><name>estimated</name></expr></argument>)</argument_list></call></expr>, <expr><name><name>cfs</name>.<name>table</name>.<name>name</name></name></expr>, <expr><name><name>cfs</name>.<name>columnFamily</name></name></expr>}</block></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>Ints</name>.<name>checkedCast</name></name><argument_list>(<argument><expr><name>tasks</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

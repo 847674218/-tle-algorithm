@@ -1,0 +1,41 @@
+EndpointState getStateForVersionBiggerThan(InetAddress forEndpoint, int version)
+    {
+        EndpointState epState = endpointStateMap.get(forEndpoint);
+        EndpointState reqdEndpointState = null;
+
+        if ( epState != null )
+        {
+            /*
+             * Here we try to include the Heart Beat state only if it is
+             * greater than the version passed in. It might happen that
+             * the heart beat version maybe lesser than the version passed
+             * in and some application state has a version that is greater
+             * than the version passed in. In this case we also send the old
+             * heart beat and throw it away on the receiver if it is redundant.
+            */
+            int localHbVersion = epState.getHeartBeatState().getHeartBeatVersion();
+            if ( localHbVersion > version )
+            {
+                reqdEndpointState = new EndpointState(epState.getHeartBeatState());
+                if (logger.isTraceEnabled())
+                    logger.trace("local heartbeat version " + localHbVersion + " greater than " + version + " for " + forEndpoint);
+            }
+            /* Accumulate all application states whose versions are greater than "version" variable */
+            for (Entry<ApplicationState, VersionedValue> entry : epState.getApplicationStateMap().entrySet())
+            {
+                VersionedValue value = entry.getValue();
+                if ( value.version > version )
+                {
+                    if ( reqdEndpointState == null )
+                    {
+                        reqdEndpointState = new EndpointState(epState.getHeartBeatState());
+                    }
+                    final ApplicationState key = entry.getKey();
+                    if (logger.isTraceEnabled())
+                        logger.trace("Adding state " + key + ": " + value.value);
+                    reqdEndpointState.addApplicationState(key, value);
+                }
+            }
+        }
+        return reqdEndpointState;
+    }

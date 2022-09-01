@@ -1,0 +1,70 @@
+public void runMayThrow() throws Exception
+        {
+            logger.info(String.format("[repair #%s] new session: will sync %s on range %s for %s.%s", getName(), repairedNodes(), range, tablename, Arrays.toString(cfnames)));
+
+            if (endpoints.isEmpty())
+            {
+                differencingDone.signalAll();
+                logger.info(String.format("[repair #%s] No neighbors to repair with on range %s: session completed", getName(), range));
+                return;
+            }
+
+            // Checking all nodes are live
+            for (InetAddress endpoint : endpoints)
+            {
+                if (!FailureDetector.instance.isAlive(endpoint))
+                {
+                    String message = String.format("Cannot proceed on repair because a neighbor (%s) is dead: session failed", endpoint);
+                    differencingDone.signalAll();
+                    logger.error(String.format("[repair #%s] ", getName()) + message);
+                    throw new IOException(message);
+                }
+
+                if (Gossiper.instance.getVersion(endpoint) < MessagingService.VERSION_11 && isSequential)
+                {
+                    logger.info(String.format("[repair #%s] Cannot repair using snapshots as node %s is pre-1.1", getName(), endpoint));
+                    return;
+                }
+            }
+
+            AntiEntropyService.instance.sessions.put(getName(), this);
+            Gossiper.instance.register(this);
+            FailureDetector.instance.registerFailureDetectionEventListener(this);
+            try
+            {
+                // Create and queue a RepairJob for each column family
+                for (String cfname : cfnames)
+                {
+                    RepairJob job = new RepairJob(cfname);
+                    jobs.offer(job);
+                    activeJobs.put(cfname, job);
+                }
+
+                jobs.peek().sendTreeRequests();
+
+                // block whatever thread started this session until all requests have been returned:
+                // if this thread dies, the session will still complete in the background
+                completed.await();
+                if (exception == null)
+                {
+                    logger.info(String.format("[repair #%s] session completed successfully", getName()));
+                }
+                else
+                {
+                    logger.error(String.format("[repair #%s] session completed with the following error", getName()), exception);
+                    throw exception;
+                }
+            }
+            catch (InterruptedException e)
+            {
+                throw new RuntimeException("Interrupted while waiting for repair.");
+            }
+            finally
+            {
+                // mark this session as terminated
+                terminate();
+                FailureDetector.instance.unregisterFailureDetectionEventListener(this);
+                Gossiper.instance.unregister(this);
+                AntiEntropyService.instance.sessions.remove(getName());
+            }
+        }

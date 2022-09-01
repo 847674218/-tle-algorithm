@@ -1,0 +1,39 @@
+protected void flushInternal()
+    {
+        if (isDirty)
+        {
+            flushData();
+
+            if (trickleFsync)
+            {
+                bytesSinceTrickleFsync += validBufferBytes;
+                if (bytesSinceTrickleFsync >= trickleFsyncByteInterval)
+                {
+                    syncDataOnlyInternal();
+                    bytesSinceTrickleFsync = 0;
+                }
+            }
+
+            if (skipIOCache)
+            {
+                // we don't know when the data reaches disk since we aren't
+                // calling flush
+                // so we continue to clear pages we don't need from the first
+                // offset we see
+                // periodically we update this starting offset
+                bytesSinceCacheFlush += validBufferBytes;
+
+                if (bytesSinceCacheFlush >= RandomAccessReader.CACHE_FLUSH_INTERVAL_IN_BYTES)
+                {
+                    CLibrary.trySkipCache(this.fd, ioCacheStartOffset, 0);
+                    ioCacheStartOffset = bufferOffset;
+                    bytesSinceCacheFlush = 0;
+                }
+            }
+
+            // Remember that we wrote, so we don't write it again on next flush().
+            resetBuffer();
+
+            isDirty = false;
+        }
+    }

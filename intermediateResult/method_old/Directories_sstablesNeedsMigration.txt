@@ -1,0 +1,61 @@
+public static boolean sstablesNeedsMigration()
+    {
+        if (StorageService.instance.isClientMode())
+            return false;
+
+        boolean hasSystemKeyspace = false;
+        for (File location : dataFileLocations)
+        {
+            File systemDir = new File(location, Table.SYSTEM_TABLE);
+            hasSystemKeyspace |= (systemDir.exists() && systemDir.isDirectory());
+            File statusCFDir = new File(systemDir, SystemTable.STATUS_CF);
+            if (statusCFDir.exists())
+                return false;
+        }
+        if (!hasSystemKeyspace)
+            // This is a brand new node.
+            return false;
+
+        // Check whether the migration might create too long a filename
+        int longestLocation = -1;
+        try
+        {
+            for (File loc : dataFileLocations)
+                longestLocation = Math.max(longestLocation, loc.getCanonicalPath().length());
+        }
+        catch (IOException e)
+        {
+            throw new IOError(e);
+        }
+
+        // Check that migration won't error out halfway through from too-long paths.  For Windows, we need to check
+        // total path length <= 255 (see http://msdn.microsoft.com/en-us/library/aa365247.aspx and discussion on CASSANDRA-2749);
+        // elsewhere, we just need to make sure filename is <= 255.
+        for (KSMetaData ksm : Schema.instance.getTableDefinitions())
+        {
+            String ksname = ksm.name;
+            for (Map.Entry<String, CFMetaData> entry : ksm.cfMetaData().entrySet())
+            {
+                String cfname = entry.getKey();
+
+                // max path is roughly (guess-estimate) <location>/ksname/cfname/snapshots/1324314347102-somename/ksname-cfname-tmp-hb-65536-Statistics.db
+                if (System.getProperty("os.name").startsWith("Windows")
+                    && longestLocation + (ksname.length() + cfname.length()) * 2 + 63 > 255)
+                {
+                    throw new RuntimeException(String.format("Starting with 1.1, keyspace names and column family " +
+                                                             "names must be less than %s characters long. %s/%s doesn't" +
+                                                             " respect that restriction. Please rename your " +
+                                                             "keyspace/column families to respect that restriction " +
+                                                             "before updating.", Schema.NAME_LENGTH, ksname, cfname));
+                }
+
+                if (ksm.name.length() + cfname.length() + 28 > 255)
+                {
+                    throw new RuntimeException("Starting with 1.1, the keyspace name is included in data filenames.  For "
+                                               + ksm.name + "/" + cfname + ", this puts you over the largest possible filename of 255 characters");
+                }
+            }
+        }
+
+        return true;
+    }

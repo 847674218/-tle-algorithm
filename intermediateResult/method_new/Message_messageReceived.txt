@@ -1,0 +1,33 @@
+@Override
+        public void messageReceived(ChannelHandlerContext ctx, MessageEvent e)
+        {
+            assert e.getMessage() instanceof Message : "Expecting message, got " + e.getMessage();
+
+            if (e.getMessage() instanceof Response)
+                throw new ProtocolException("Invalid response message received, expecting requests");
+
+            Request request = (Request)e.getMessage();
+
+            try
+            {
+                assert request.connection() instanceof ServerConnection;
+                ServerConnection connection = (ServerConnection)request.connection();
+                connection.validateNewMessage(request.type);
+
+                logger.debug("Received: " + request);
+
+                Response response = request.execute(connection.getQueryState(request.getStreamId()));
+                response.setStreamId(request.getStreamId());
+                response.attach(connection);
+                connection.applyStateTransition(request.type, response.type);
+
+                logger.debug("Responding: " + response);
+
+                ctx.getChannel().write(response);
+            }
+            catch (Exception ex)
+            {
+                // Don't let the exception propagate to exceptionCaught() if we can help it so that we can assign the right streamID.
+                ctx.getChannel().write(ErrorMessage.fromException(ex).setStreamId(request.getStreamId()));
+            }
+        }

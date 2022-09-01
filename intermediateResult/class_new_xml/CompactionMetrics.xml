@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\metrics\CompactionMetrics.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>metrics</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>yammer</name>.<name>metrics</name>.<name>Metrics</name></name>;</import>
+<import>import <name><name>com</name>.<name>yammer</name>.<name>metrics</name>.<name>core</name>.<name>Counter</name></name>;</import>
+<import>import <name><name>com</name>.<name>yammer</name>.<name>metrics</name>.<name>core</name>.<name>Gauge</name></name>;</import>
+<import>import <name><name>com</name>.<name>yammer</name>.<name>metrics</name>.<name>core</name>.<name>Meter</name></name>;</import>
+<import>import <name><name>com</name>.<name>yammer</name>.<name>metrics</name>.<name>core</name>.<name>MetricName</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionInfo</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManager</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Metrics for compaction.
+ */</comment>
+<class><specifier>public</specifier> class <name>CompactionMetrics</name> <super><implements>implements <name><name>CompactionManager</name>.<name>CompactionExecutorStatsCollector</name></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>GROUP_NAME</name> <init>= <expr>"org.apache.cassandra.metrics"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>TYPE_NAME</name> <init>= <expr>"Compaction"</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// a synchronized identity set of running tasks to their compaction info</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name><name>CompactionInfo</name>.<name>Holder</name></name></argument>&gt;</argument_list></name></type> <name>compactions</name> <init>= <expr><call><name><name>Collections</name>.<name>synchronizedSet</name></name><argument_list>(<argument><expr><call><name><name>Collections</name>.<name>newSetFromMap</name></name><argument_list>(<argument><expr>new <call><name><name>IdentityHashMap</name><argument_list>&lt;<argument><name><name>CompactionInfo</name>.<name>Holder</name></name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/** Estimated number of compactions remaining to perform */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Gauge</name><argument_list>&lt;<argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>pendingTasks</name></decl>;</decl_stmt>
+    <comment type="block" format="javadoc">/** Number of completed compactions since server [re]start */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>Gauge</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>completedTasks</name></decl>;</decl_stmt>
+    <comment type="block" format="javadoc">/** Total number of compactions since server [re]start */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Meter</name></type> <name>totalCompactionsCompleted</name></decl>;</decl_stmt>
+    <comment type="block" format="javadoc">/** Total number of bytes compacted since server [re]start */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Counter</name></type> <name>bytesCompacted</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CompactionMetrics</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>ThreadPoolExecutor</name>...</type> <name>collectors</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>pendingTasks</name> = <call><name><name>Metrics</name>.<name>newGauge</name></name><argument_list>(<argument><expr>new <call><name>MetricName</name><argument_list>(<argument><expr><name>GROUP_NAME</name></expr></argument>, <argument><expr><name>TYPE_NAME</name></expr></argument>, <argument><expr>"PendingTasks"</expr></argument>)</argument_list></call></expr></argument>, <argument><expr>new <class><super><name><name>Gauge</name><argument_list>&lt;<argument><name>Integer</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>Integer</name></type> <name>value</name><parameter_list>()</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>String</name></type> <name>tableName</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTables</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStores</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                        <expr_stmt><expr><name>n</name> += <call><name><name>cfs</name>.<name>getCompactionStrategy</name></name><argument_list>()</argument_list></call>.<call><name>getEstimatedRemainingTasks</name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+                }</block></for>
+                <for>for (<init><decl><type><name>ThreadPoolExecutor</name></type> <name>collector</name> <range>: <expr><name>collectors</name></expr></range></decl></init>)
+                    <expr_stmt><expr><name>n</name> += <call><name><name>collector</name>.<name>getTaskCount</name></name><argument_list>()</argument_list></call> - <call><name><name>collector</name>.<name>getCompletedTaskCount</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+                <return>return <expr><name>n</name></expr>;</return>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>completedTasks</name> = <call><name><name>Metrics</name>.<name>newGauge</name></name><argument_list>(<argument><expr>new <call><name>MetricName</name><argument_list>(<argument><expr><name>GROUP_NAME</name></expr></argument>, <argument><expr><name>TYPE_NAME</name></expr></argument>, <argument><expr>"CompletedTasks"</expr></argument>)</argument_list></call></expr></argument>, <argument><expr>new <class><super><name><name>Gauge</name><argument_list>&lt;<argument><name>Long</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>Long</name></type> <name>value</name><parameter_list>()</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>completedTasks</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>ThreadPoolExecutor</name></type> <name>collector</name> <range>: <expr><name>collectors</name></expr></range></decl></init>)
+                    <expr_stmt><expr><name>completedTasks</name> += <call><name><name>collector</name>.<name>getCompletedTaskCount</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+                <return>return <expr><name>completedTasks</name></expr>;</return>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>totalCompactionsCompleted</name> = <call><name><name>Metrics</name>.<name>newMeter</name></name><argument_list>(<argument><expr>new <call><name>MetricName</name><argument_list>(<argument><expr><name>GROUP_NAME</name></expr></argument>, <argument><expr><name>TYPE_NAME</name></expr></argument>, <argument><expr>"TotalCompactionsCompleted"</expr></argument>)</argument_list></call></expr></argument>, <argument><expr>"compaction completed"</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>SECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>bytesCompacted</name> = <call><name><name>Metrics</name>.<name>newCounter</name></name><argument_list>(<argument><expr>new <call><name>MetricName</name><argument_list>(<argument><expr><name>GROUP_NAME</name></expr></argument>, <argument><expr><name>TYPE_NAME</name></expr></argument>, <argument><expr>"BytesCompacted"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>beginCompaction</name><parameter_list>(<param><decl><type><name><name>CompactionInfo</name>.<name>Holder</name></name></type> <name>ci</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// notify</comment>
+        <expr_stmt><expr><call><name><name>ci</name>.<name>started</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>compactions</name>.<name>add</name></name><argument_list>(<argument><expr><name>ci</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>finishCompaction</name><parameter_list>(<param><decl><type><name><name>CompactionInfo</name>.<name>Holder</name></name></type> <name>ci</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// notify</comment>
+        <expr_stmt><expr><call><name><name>ci</name>.<name>finished</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>compactions</name>.<name>remove</name></name><argument_list>(<argument><expr><name>ci</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bytesCompacted</name>.<name>inc</name></name><argument_list>(<argument><expr><call><name><name>ci</name>.<name>getCompactionInfo</name></name><argument_list>()</argument_list></call>.<call><name>getTotal</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>totalCompactionsCompleted</name>.<name>mark</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>CompactionInfo</name>.<name>Holder</name></name></argument>&gt;</argument_list></name></type> <name>getCompactions</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>CompactionInfo</name>.<name>Holder</name></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>compactions</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

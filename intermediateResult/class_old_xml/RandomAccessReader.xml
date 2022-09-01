@@ -1,0 +1,354 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\io\util\RandomAccessReader.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>EOFException</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>RandomAccessFile</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>ClosedChannelException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>FileChannel</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>CLibrary</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>RandomAccessReader</name> <super><extends>extends <name>RandomAccessFile</name></extends> <implements>implements <name>FileDataInput</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>CACHE_FLUSH_INTERVAL_IN_BYTES</name> <init>= <expr>(<name>long</name>) <call><name><name>Math</name>.<name>pow</name></name><argument_list>(<argument><expr>2</expr></argument>, <argument><expr>27</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// 128mb</comment>
+
+    <comment type="line">// default buffer size, 64Kb</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>DEFAULT_BUFFER_SIZE</name> <init>= <expr>65536</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// absolute filesystem path to the file</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>filePath</name></decl>;</decl_stmt>
+
+    <comment type="line">// buffer which will cache file blocks</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>byte</name><index>[]</index></type> <name>buffer</name></decl>;</decl_stmt>
+
+    <comment type="line">// `current` as current position in file</comment>
+    <comment type="line">// `bufferOffset` is the offset of the beginning of the buffer</comment>
+    <comment type="line">// `markedPointer` folds the offset of the last file mark</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>long</name></type> <name>bufferOffset</name></decl>, <decl><type ref="prev"/><name>current</name> <init>= <expr>0</expr></init>, <name>markedPointer</name></decl>;</decl_stmt>
+    <comment type="line">// `validBufferBytes` is the number of bytes in the buffer that are actually valid;</comment>
+    <comment type="line">//  this will be LESS than buffer capacity if buffer is not full!</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>int</name></type> <name>validBufferBytes</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// channel liked with the file, used to retrieve data and force updates.</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>FileChannel</name></type> <name>channel</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>skipIOCache</name></decl>;</decl_stmt>
+
+    <comment type="line">// file descriptor</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>int</name></type> <name>fd</name></decl>;</decl_stmt>
+
+    <comment type="line">// used if skip I/O cache was enabled</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>bytesSinceCacheFlush</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>fileLength</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>RandomAccessReader</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>, <param><decl><type><name>int</name></type> <name>bufferSize</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr>"r"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name>channel</name> = <call><name><name>super</name>.<name>getChannel</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>filePath</name> = <call><name><name>file</name>.<name>getAbsolutePath</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// allocating required size of the buffer</comment>
+        <if>if <condition>(<expr><name>bufferSize</name> &lt;= 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"bufferSize must be positive"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <expr_stmt><expr><name>buffer</name> = new <name><name>byte</name><index>[<expr><name>bufferSize</name></expr>]</index></name></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name><name>this</name>.<name>skipIOCache</name></name> = <name>skipIOCache</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>fd</name> = <call><name><name>CLibrary</name>.<name>getfd</name></name><argument_list>(<argument><expr><call><name>getFD</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// we can cache file length in read-only mode</comment>
+        <expr_stmt><expr><name>fileLength</name> = <call><name><name>channel</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>validBufferBytes</name> = -1</expr>;</expr_stmt> <comment type="line">// that will trigger reBuffer() on demand by read/seek operations</comment>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>RandomAccessReader</name></type> <name>open</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>open</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name>DEFAULT_BUFFER_SIZE</name></expr></argument>, <argument><expr><name>skipIOCache</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>RandomAccessReader</name></type> <name>open</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>open</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name>DEFAULT_BUFFER_SIZE</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>RandomAccessReader</name></type> <name>open</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>, <param><decl><type><name>int</name></type> <name>bufferSize</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>open</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name>bufferSize</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>RandomAccessReader</name></type> <name>open</name><parameter_list>(<param><decl><type><name>File</name></type> <name>file</name></decl></param>, <param><decl><type><name>int</name></type> <name>bufferSize</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>skipIOCache</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr>new <call><name>RandomAccessReader</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name>bufferSize</name></expr></argument>, <argument><expr><name>skipIOCache</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// convert open into open</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>RandomAccessReader</name></type> <name>open</name><parameter_list>(<param><decl><type><name>SequentialWriter</name></type> <name>writer</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>open</name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>writer</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>DEFAULT_BUFFER_SIZE</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Read data from file starting from current currentOffset to populate buffer.
+     * @throws IOException on any I/O error.
+     */</comment>
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>reBuffer</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>resetBuffer</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>bufferOffset</name> &gt;= <call><name><name>channel</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <expr_stmt><expr><call><name><name>channel</name>.<name>position</name></name><argument_list>(<argument><expr><name>bufferOffset</name></expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// setting channel position</comment>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>read</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <while>while <condition>(<expr><name>read</name> &lt; <name><name>buffer</name>.<name>length</name></name></expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr><call><name><name>super</name>.<name>read</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr><name>read</name></expr></argument>, <argument><expr><name><name>buffer</name>.<name>length</name></name> - <name>read</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>n</name> &lt; 0</expr>)</condition><then>
+                <break>break;</break></then></if>
+            <expr_stmt><expr><name>read</name> += <name>n</name></expr>;</expr_stmt>
+        }</block></while>
+
+        <expr_stmt><expr><name>validBufferBytes</name> = <name>read</name></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name>bytesSinceCacheFlush</name> += <name>read</name></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>skipIOCache</name> &amp;&amp; <name>bytesSinceCacheFlush</name> &gt;= <name>CACHE_FLUSH_INTERVAL_IN_BYTES</name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// with random I/O we can't control what we are skipping so</comment>
+            <comment type="line">// it will be more appropriate to just skip a whole file after</comment>
+            <comment type="line">// we reach threshold</comment>
+            <expr_stmt><expr><call><name><name>CLibrary</name>.<name>trySkipCache</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>fd</name></name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>bytesSinceCacheFlush</name> = 0</expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>long</name></type> <name>getFilePointer</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>current</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getPath</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>filePath</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>reset</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>seek</name><argument_list>(<argument><expr><name>markedPointer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>bytesPastMark</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>bytes</name> <init>= <expr><name>current</name> - <name>markedPointer</name></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>bytes</name> &gt;= 0</expr>;</assert>
+        <return>return <expr><name>bytes</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>FileMark</name></type> <name>mark</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>markedPointer</name> = <name>current</name></expr>;</expr_stmt>
+        <return>return <expr>new <call><name>BufferedRandomAccessFileMark</name><argument_list>(<argument><expr><name>markedPointer</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>reset</name><parameter_list>(<param><decl><type><name>FileMark</name></type> <name>mark</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><name>mark</name> instanceof <name>BufferedRandomAccessFileMark</name></expr>;</assert>
+        <expr_stmt><expr><call><name>seek</name><argument_list>(<argument><expr>((<name>BufferedRandomAccessFileMark</name>) <name>mark</name>).<name>pointer</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>bytesPastMark</name><parameter_list>(<param><decl><type><name>FileMark</name></type> <name>mark</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>mark</name> instanceof <name>BufferedRandomAccessFileMark</name></expr>;</assert>
+        <decl_stmt><decl><type><name>long</name></type> <name>bytes</name> <init>= <expr><name>current</name> - ((<name>BufferedRandomAccessFileMark</name>) <name>mark</name>).<name>pointer</name></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>bytes</name> &gt;= 0</expr>;</assert>
+        <return>return <expr><name>bytes</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if there is no more data to read
+     * @throws IOException on any I/O error.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isEOF</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>getFilePointer</name><argument_list>()</argument_list></call> == <call><name>length</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>bytesRemaining</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>length</name><argument_list>()</argument_list></call> - <call><name>getFilePointer</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>int</name></type> <name>bufferCursor</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call>(<name>int</name>) <argument_list>(<argument><expr><name>current</name> - <name>bufferOffset</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>resetBuffer</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>bufferOffset</name> = <name>current</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>validBufferBytes</name> = 0</expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name>buffer</name> = null</expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>skipIOCache</name> &amp;&amp; <name>bytesSinceCacheFlush</name> &gt; 0</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>CLibrary</name>.<name>trySkipCache</name></name><argument_list>(<argument><expr><name>fd</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><call><name><name>super</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call> + "(" + "filePath='" + <name>filePath</name> + "'" + ", skipIOCache=" + <name>skipIOCache</name> + ")"</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Class to hold a mark to the position of the file
+     */</comment>
+    <class><specifier>protected</specifier> <specifier>static</specifier> class <name>BufferedRandomAccessFileMark</name> <super><implements>implements <name>FileMark</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>pointer</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>BufferedRandomAccessFileMark</name><parameter_list>(<param><decl><type><name>long</name></type> <name>pointer</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>pointer</name></name> = <name>pointer</name></expr>;</expr_stmt>
+        }</block></constructor>
+    }</block></class>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>seek</name><parameter_list>(<param><decl><type><name>long</name></type> <name>newPosition</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>newPosition</name> &lt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"new position should not be negative"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr><name>newPosition</name> &gt; <call><name>length</name><argument_list>()</argument_list></call></expr>)</condition><then> <comment type="line">// it is save to call length() in read-only mode</comment>
+            <throw>throw <expr>new <call><name>EOFException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"unable to seek to position %d in %s (%d bytes) in read-only mode"</expr></argument>,
+                                                 <argument><expr><name>newPosition</name></expr></argument>, <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>length</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><name>current</name> = <name>newPosition</name></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>newPosition</name> &gt; (<name>bufferOffset</name> + <name>validBufferBytes</name>) || <name>newPosition</name> &lt; <name>bufferOffset</name></expr>)</condition><then>
+            <expr_stmt><expr><call><name>reBuffer</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <comment type="line">// -1 will be returned if there is nothing to read; higher-level methods like readInt</comment>
+    <comment type="line">// or readFully (from RandomAccessFile) will throw EOFException but this should not</comment>
+    <specifier>public</specifier> <name>int</name></type> <name>read</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>buffer</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ClosedChannelException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr><call><name>isEOF</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>-1</expr>;</return></then></if> <comment type="line">// required by RandomAccessFile</comment>
+
+        <if>if <condition>(<expr><name>current</name> &gt;= <name>bufferOffset</name> + <name><name>buffer</name>.<name>length</name></name> || <name>validBufferBytes</name> == -1</expr>)</condition><then>
+            <expr_stmt><expr><call><name>reBuffer</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <assert>assert <expr><name>current</name> &gt;= <name>bufferOffset</name> &amp;&amp; <name>current</name> &lt; <name>bufferOffset</name> + <name>validBufferBytes</name></expr>;</assert>
+
+        <return>return <expr>((<name>int</name>) <name><name>buffer</name><index>[<expr><call>(<name>int</name>) <argument_list>(<argument><expr><name>current</name>++ - <name>bufferOffset</name></expr></argument>)</argument_list></call></expr>]</index></name>) &amp; 0xff</expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>int</name></type> <name>read</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>buffer</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>read</name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name><name>buffer</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <comment type="line">// -1 will be returned if there is nothing to read; higher-level methods like readInt</comment>
+    <comment type="line">// or readFully (from RandomAccessFile) will throw EOFException but this should not</comment>
+    <specifier>public</specifier> <name>int</name></type> <name>read</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>buff</name></decl></param>, <param><decl><type><name>int</name></type> <name>offset</name></decl></param>, <param><decl><type><name>int</name></type> <name>length</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>buffer</name> == null</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>ClosedChannelException</name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr><name>length</name> == 0</expr>)</condition><then>
+            <return>return <expr>0</expr>;</return></then></if>
+
+        <if>if <condition>(<expr><call><name>isEOF</name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>-1</expr>;</return></then></if>
+
+        <if>if <condition>(<expr><name>current</name> &gt;= <name>bufferOffset</name> + <name><name>buffer</name>.<name>length</name></name> || <name>validBufferBytes</name> == -1</expr>)</condition><then>
+            <expr_stmt><expr><call><name>reBuffer</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <assert>assert <expr><name>current</name> &gt;= <name>bufferOffset</name> &amp;&amp; <name>current</name> &lt; <name>bufferOffset</name> + <name>validBufferBytes</name>
+                : <call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"File (%s), current offset %d, buffer offset %d, buffer limit %d"</expr></argument>,
+                                <argument><expr><call><name>getPath</name><argument_list>()</argument_list></call></expr></argument>,
+                                <argument><expr><name>current</name></expr></argument>,
+                                <argument><expr><name>bufferOffset</name></expr></argument>,
+                                <argument><expr><name>validBufferBytes</name></expr></argument>)</argument_list></call></expr>;</assert>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>toCopy</name> <init>= <expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>length</name></expr></argument>, <argument><expr><name>validBufferBytes</name> - <call><name>bufferCursor</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>System</name>.<name>arraycopy</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr><call><name>bufferCursor</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>buff</name></expr></argument>, <argument><expr><name>offset</name></expr></argument>, <argument><expr><name>toCopy</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>current</name> += <name>toCopy</name></expr>;</expr_stmt>
+
+        <return>return <expr><name>toCopy</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>readBytes</name><parameter_list>(<param><decl><type><name>int</name></type> <name>length</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><name>length</name> &gt;= 0 : "buffer length should not be negative: " + <name>length</name></expr>;</assert>
+
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>buff</name> <init>= <expr>new <name><name>byte</name><index>[<expr><name>length</name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>readFully</name><argument_list>(<argument><expr><name>buff</name></expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// reading data buffer</comment>
+
+        <return>return <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><name>buff</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>long</name></type> <name>length</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><name>fileLength</name></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>write</name><parameter_list>(<param><decl><type><name>int</name></type> <name>value</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>write</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>buffer</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>write</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>buffer</name></decl></param>, <param><decl><type><name>int</name></type> <name>offset</name></decl></param>, <param><decl><type><name>int</name></type> <name>length</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+}</block></class>
+</unit>

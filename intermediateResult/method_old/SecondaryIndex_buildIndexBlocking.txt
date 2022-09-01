@@ -1,0 +1,45 @@
+protected void buildIndexBlocking() throws IOException
+    {
+        logger.info(String.format("Submitting index build of %s for data in %s",
+                getIndexName(), StringUtils.join(baseCfs.getSSTables(), ", ")));
+
+        SortedSet<ByteBuffer> columnNames = new TreeSet<ByteBuffer>();
+
+        for (ColumnDefinition cdef : columnDefs)
+            columnNames.add(cdef.name);
+
+        Collection<SSTableReader> sstables = baseCfs.markCurrentSSTablesReferenced();
+        SecondaryIndexBuilder builder = new SecondaryIndexBuilder(baseCfs,
+                                                                  columnNames,
+                                                                  new ReducingKeyIterator(sstables));
+        Future<?> future = CompactionManager.instance.submitIndexBuild(builder);
+        try
+        {
+            future.get();
+            forceBlockingFlush();
+
+            // Mark all indexed columns as built
+            if (this instanceof PerRowSecondaryIndex)
+            {
+                for (ByteBuffer columnName : columnNames)
+                    SystemTable.setIndexBuilt(baseCfs.table.name, getIndexName()+ByteBufferUtil.string(columnName));
+            }
+            else
+            {
+                SystemTable.setIndexBuilt(baseCfs.table.name, getIndexName());
+            }
+        }
+        catch (InterruptedException e)
+        {
+            throw new AssertionError(e);
+        }
+        catch (ExecutionException e)
+        {
+            throw new IOException(e);
+        }
+        finally
+        {
+            SSTableReader.releaseReferences(sstables);
+        }
+        logger.info("Index build of " + getIndexName() + " complete");
+    }

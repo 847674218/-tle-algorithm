@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\service\ReadCallback.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeoutException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicInteger</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>Stage</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>StageManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ReadCommand</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ReadResponse</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>IEndpointSnitch</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>IAsyncCallback</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>Message</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>ConsistencyLevel</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>UnavailableException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>SimpleCondition</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>WrappedRunnable</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Lists</name></name>;</import>
+
+<class><specifier>public</specifier> class <name><name>ReadCallback</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name> <super><implements>implements <name>IAsyncCallback</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>( <argument><expr><name><name>ReadCallback</name>.<name>class</name></name></expr></argument> )</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>IEndpointSnitch</name></type> <name>snitch</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getEndpointSnitch</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>localdc</name> <init>= <expr><call><name><name>snitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>IResponseResolver</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>resolver</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>SimpleCondition</name></type> <name>condition</name> <init>= <expr>new <call><name>SimpleCondition</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>startTime</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>int</name></type> <name>blockfor</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>IReadCommand</name></type> <name>command</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>AtomicInteger</name></type> <name>received</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Constructor when response count has to be calculated and blocked for.
+     */</comment>
+    <constructor><specifier>public</specifier> <name>ReadCallback</name><parameter_list>(<param><decl><type><name><name>IResponseResolver</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>resolver</name></decl></param>, <param><decl><type><name>ConsistencyLevel</name></type> <name>consistencyLevel</name></decl></param>, <param><decl><type><name>IReadCommand</name></type> <name>command</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>command</name></name> = <name>command</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>blockfor</name></name> = <call><name>determineBlockFor</name><argument_list>(<argument><expr><name>consistencyLevel</name></expr></argument>, <argument><expr><call><name><name>command</name>.<name>getKeyspace</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>resolver</name></name> = <name>resolver</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>startTime</name></name> = <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>sortForConsistencyLevel</name><argument_list>(<argument><expr><name>endpoints</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>endpoints</name></name> = <name>resolver</name> instanceof <name>RowRepairResolver</name> ? <name>endpoints</name> : <call><name>filterEndpoints</name><argument_list>(<argument><expr><name>endpoints</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Blockfor is %s; setting up requests to %s"</expr></argument>, <argument><expr><name>blockfor</name></expr></argument>, <argument><expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><name><name>this</name>.<name>endpoints</name></name></expr></argument>, <argument><expr>","</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Endpoints is already restricted to live replicas, sorted by snitch preference.  This is a hook for
+     * DatacenterReadCallback to move local-DC replicas to the front of the list.  We need this both
+     * when doing read repair (because the first replica gets the data read) and otherwise (because
+     * only the first 1..blockfor replicas will get digest reads).
+     */</comment>
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>sortForConsistencyLevel</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// no-op except in DRC</comment>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>filterEndpoints</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>resolver</name> instanceof <name>RowDigestResolver</name></expr>)</condition><then>
+        <block>{
+            <assert>assert <expr><name>command</name> instanceof <name>ReadCommand</name> : <name>command</name></expr>;</assert>
+            <decl_stmt><decl><type><name>String</name></type> <name>table</name> <init>= <expr>((<name>RowDigestResolver</name>) <name>resolver</name>).<name>table</name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>columnFamily</name> <init>= <expr>((<name>ReadCommand</name>) <name>command</name>).<call><name>getColumnFamilyName</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>CFMetaData</name></type> <name>cfmd</name> <init>= <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableMetaData</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>columnFamily</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>double</name></type> <name>chance</name> <init>= <expr><call><name><name>FBUtilities</name>.<name>threadLocalRandom</name></name><argument_list>()</argument_list></call>.<call><name>nextDouble</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// if global repair then just return all the ep's</comment>
+            <if>if <condition>(<expr><call><name><name>cfmd</name>.<name>getReadRepairChance</name></name><argument_list>()</argument_list></call> &gt; <name>chance</name></expr>)</condition><then>
+                <return>return <expr><name>ep</name></expr>;</return></then></if>
+
+            <comment type="line">// if local repair then just return localDC ep's</comment>
+            <if>if <condition>(<expr><call><name><name>cfmd</name>.<name>getDcLocalReadRepair</name></name><argument_list>()</argument_list></call> &gt; <name>chance</name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>local</name> <init>= <expr><call><name><name>Lists</name>.<name>newArrayList</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>other</name> <init>= <expr><call><name><name>Lists</name>.<name>newArrayList</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>InetAddress</name></type> <name>add</name> <range>: <expr><name>ep</name></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>snitch</name>.<name>getDatacenter</name></name><argument_list>(<argument><expr><name>add</name></expr></argument>)</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>localdc</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>local</name>.<name>add</name></name><argument_list>(<argument><expr><name>add</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                    <else>else
+                        <expr_stmt><expr><call><name><name>other</name>.<name>add</name></name><argument_list>(<argument><expr><name>add</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+                }</block></for>
+                <comment type="line">// check if blockfor more than we have localep's</comment>
+                <if>if <condition>(<expr><call><name><name>local</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; <name>blockfor</name></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>local</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>other</name>.<name>subList</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>blockfor</name> - <call><name><name>local</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>other</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <return>return <expr><name>local</name></expr>;</return>
+            }</block></then></if>
+        }</block></then></if>
+        <comment type="line">// we don't read repair on range scans</comment>
+        <return>return <expr><call><name><name>ep</name>.<name>subList</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><call><name><name>ep</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>blockfor</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>T</name></type> <name>get</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>TimeoutException</name></expr></argument>, <argument><expr><name>DigestMismatchException</name></expr></argument>, <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>timeout</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getRpcTimeout</name></name><argument_list>()</argument_list></call> - (<call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>startTime</name>)</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>success</name></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>success</name> = <call><name><name>condition</name>.<name>await</name></name><argument_list>(<argument><expr><name>timeout</name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>ex</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>ex</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <if>if <condition>(<expr>!<name>success</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>(<argument><expr>""</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>Message</name></type> <name>message</name> <range>: <expr><call><name><name>resolver</name>.<name>getMessages</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>message</name>.<name>getFrom</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>", "</expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <throw>throw <expr>new <call><name>TimeoutException</name><argument_list>(<argument><expr>"Operation timed out - received only " + <call><name><name>received</name>.<name>get</name></name><argument_list>()</argument_list></call> + " responses from " + <call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call> + " ."</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></then></if>
+
+        <return>return <expr><name>blockfor</name> == 1 ? <call><name><name>resolver</name>.<name>getData</name></name><argument_list>()</argument_list></call> : <call><name><name>resolver</name>.<name>resolve</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>response</name><parameter_list>(<param><decl><type><name>Message</name></type> <name>message</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>resolver</name>.<name>preprocess</name></name><argument_list>(<argument><expr><name>message</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr><call><name>waitingFor</name><argument_list>(<argument><expr><name>message</name></expr></argument>)</argument_list></call>
+              ? <call><name><name>received</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call>
+              : <call><name><name>received</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>n</name> &gt;= <name>blockfor</name> &amp;&amp; <call><name><name>resolver</name>.<name>isDataPresent</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>condition</name>.<name>signal</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>maybeResolveForRepair</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if the message counts towards the blockfor threshold
+     * TODO turn the Message into a response so we don't need two versions of this method
+     */</comment>
+    <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>waitingFor</name><parameter_list>(<param><decl><type><name>Message</name></type> <name>message</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if the response counts towards the blockfor threshold
+     */</comment>
+    <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>waitingFor</name><parameter_list>(<param><decl><type><name>ReadResponse</name></type> <name>response</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>response</name><parameter_list>(<param><decl><type><name>ReadResponse</name></type> <name>result</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr>((<name>RowDigestResolver</name>) <name>resolver</name>).<call><name>injectPreProcessed</name><argument_list>(<argument><expr><name>result</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr><call><name>waitingFor</name><argument_list>(<argument><expr><name>result</name></expr></argument>)</argument_list></call>
+              ? <call><name><name>received</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call>
+              : <call><name><name>received</name>.<name>get</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>n</name> &gt;= <name>blockfor</name> &amp;&amp; <call><name><name>resolver</name>.<name>isDataPresent</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>condition</name>.<name>signal</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>maybeResolveForRepair</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Check digests in the background on the Repair stage if we've received replies
+     * too all the requests we sent.
+     */</comment>
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>maybeResolveForRepair</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>blockfor</name> &lt; <call><name><name>endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>received</name>.<name>get</name></name><argument_list>()</argument_list></call> == <call><name><name>endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <assert>assert <expr><call><name><name>resolver</name>.<name>isDataPresent</name></name><argument_list>()</argument_list></call></expr>;</assert>
+            <expr_stmt><expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>READ_REPAIR</name></name></expr></argument>)</argument_list></call>.<call><name>execute</name><argument_list>(<argument><expr>new <call><name>AsyncRepairRunner</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>determineBlockFor</name><parameter_list>(<param><decl><type><name>ConsistencyLevel</name></type> <name>consistencyLevel</name></decl></param>, <param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list>
+    <block>{
+        <switch>switch <condition>(<expr><name>consistencyLevel</name></expr>)</condition>
+        <block>{
+            <case>case <expr><name>ONE</name></expr>:
+                <return>return <expr>1</expr>;</return>
+            </case><case>case <expr><name>TWO</name></expr>:
+                <return>return <expr>2</expr>;</return>
+            </case><case>case <expr><name>THREE</name></expr>:
+                <return>return <expr>3</expr>;</return>
+            </case><case>case <expr><name>QUORUM</name></expr>:
+                <return>return <expr>(<call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>getReplicationStrategy</name><argument_list>()</argument_list></call>.<call><name>getReplicationFactor</name><argument_list>()</argument_list></call> / 2) + 1</expr>;</return>
+            </case><case>case <expr><name>ALL</name></expr>:
+                <return>return <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>getReplicationStrategy</name><argument_list>()</argument_list></call>.<call><name>getReplicationFactor</name><argument_list>()</argument_list></call></expr>;</return>
+            </case><default>default:
+                <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>(<argument><expr>"invalid consistency level: " + <name>consistencyLevel</name></expr></argument>)</argument_list></call></expr>;</throw>
+        </default>}</block></switch>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>assureSufficientLiveNodes</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>UnavailableException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; <name>blockfor</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Live nodes {} do not satisfy ConsistencyLevel ({} required)"</expr></argument>,
+                         <argument><expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><name>endpoints</name></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>blockfor</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <throw>throw <expr>new <call><name>UnavailableException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isLatencyForSnitch</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> class <name>AsyncRepairRunner</name> <super><extends>extends <name>WrappedRunnable</name></extends></super>
+    <block>{
+        <function><type><specifier>protected</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>resolver</name>.<name>resolve</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>DigestMismatchException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Digest mismatch:"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <decl_stmt><decl><type><name>ReadCommand</name></type> <name>readCommand</name> <init>= <expr>(<name>ReadCommand</name>) <name>command</name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><specifier>final</specifier> <name>RowRepairResolver</name></type> <name>repairResolver</name> <init>= <expr>new <call><name>RowRepairResolver</name><argument_list>(<argument><expr><name><name>readCommand</name>.<name>table</name></name></expr></argument>, <argument><expr><name><name>readCommand</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>IAsyncCallback</name></type> <name>repairHandler</name> <init>= <expr>new <call><name>AsyncRepairCallback</name><argument_list>(<argument><expr><name>repairResolver</name></expr></argument>, <argument><expr><call><name><name>endpoints</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>endpoints</name></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendRR</name><argument_list>(<argument><expr><name>readCommand</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>repairHandler</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></catch></try>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

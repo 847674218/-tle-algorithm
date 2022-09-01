@@ -1,0 +1,33 @@
+private static Collection<InetAddress> getBatchlogEndpoints(String localDataCenter) throws UnavailableException
+    {
+        // will include every known node in the DC, including localhost.
+        TokenMetadata.Topology topology = StorageService.instance.getTokenMetadata().cloneOnlyTokenMap().getTopology();
+        Collection<InetAddress> localMembers = topology.getDatacenterEndpoints().get(localDataCenter);
+
+        // special case for single-node datacenters
+        if (localMembers.size() == 1)
+            return localMembers;
+
+        // not a single-node cluster - don't count the local node.
+        localMembers.remove(FBUtilities.getBroadcastAddress());
+
+        // include only alive nodes
+        List<InetAddress> candidates = new ArrayList<InetAddress>(localMembers.size());
+        for (InetAddress member : localMembers)
+        {
+            if (FailureDetector.instance.isAlive(member))
+                candidates.add(member);
+        }
+
+        if (candidates.isEmpty())
+            throw new UnavailableException(ConsistencyLevel.ONE, 1, 0);
+
+        if (candidates.size() > 2)
+        {
+            IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
+            snitch.sortByProximity(FBUtilities.getBroadcastAddress(), candidates);
+            candidates = candidates.subList(0, 2);
+        }
+
+        return candidates;
+    }

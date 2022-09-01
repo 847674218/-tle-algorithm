@@ -1,0 +1,944 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\utils\MerkleTree.java"><comment type="block">/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*    http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>AbstractIterator</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>PeekingIterator</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>IPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IVersionedSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * A MerkleTree implemented as a binary tree.
+ *
+ * A MerkleTree is a full binary tree that represents a perfect binary tree of
+ * depth 'hashdepth'. In a perfect binary tree, each leaf contains a
+ * sequentially hashed range, and each inner node contains the binary hash of
+ * its two children. In the MerkleTree, many ranges will not be split to the
+ * full depth of the perfect binary tree: the leaves of this tree are Leaf objects,
+ * which contain the computed values of the nodes that would be below them if
+ * the tree were perfect.
+ *
+ * The hash values of the inner nodes of the MerkleTree are calculated lazily based
+ * on their children when the hash of a range is requested with hash(range).
+ *
+ * Inputs passed to TreeRange.validate should be calculated using a very secure hash,
+ * because all hashing internal to the tree is accomplished using XOR.
+ *
+ * If two MerkleTrees have the same hashdepth, they represent a perfect tree
+ * of the same depth, and can always be compared, regardless of size or splits.
+ */</comment>
+<class><specifier>public</specifier> class <name>MerkleTree</name> <super><implements>implements <name>Serializable</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>MerkleTreeSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>MerkleTreeSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>serialVersionUID</name> <init>= <expr>2L</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>byte</name></type> <name>RECOMMENDED_DEPTH</name> <init>= <expr><name><name>Byte</name>.<name>MAX_VALUE</name></name> - 1</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>CONSISTENT</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>FULLY_INCONSISTENT</name> <init>= <expr>1</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>PARTIALLY_INCONSISTENT</name> <init>= <expr>2</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>byte</name></type> <name>hashdepth</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * The top level range that this MerkleTree covers.
+     * In a perfect world, this should be final and *not* transient. However
+     * this would break serialization with version &amp;gte; 0.7 because it uses
+     * java serialization. We are moreover always shipping the fullRange will
+     * the request so we can add it back post-deserialization (as for the
+     * partitioner).
+     */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>transient</specifier> <name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>fullRange</name></decl>;</decl_stmt>
+
+    <comment type="line">// TODO This is broken; Token serialization assumes system partitioner, so if this doesn't match all hell breaks loose</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>transient</specifier> <name>IPartitioner</name></type> <name>partitioner</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>maxsize</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>size</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>Hashable</name></type> <name>root</name></decl>;</decl_stmt>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>MerkleTreeSerializer</name>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>MerkleTree</name></type> <name>mt</name></decl></param>, <param><decl><type><name>DataOutputStream</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <if>if <condition>(<expr><name>version</name> == <name><name>MessagingService</name>.<name>VERSION_07</name></name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>ObjectOutputStream</name></type> <name>out</name> <init>= <expr>new <call><name>ObjectOutputStream</name><argument_list>(<argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>out</name>.<name>writeObject</name></name><argument_list>(<argument><expr><name>mt</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeByte</name></name><argument_list>(<argument><expr><name><name>mt</name>.<name>hashdepth</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name><name>mt</name>.<name>maxsize</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name><name>mt</name>.<name>size</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>Hashable</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>mt</name>.<name>root</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>MerkleTree</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInputStream</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <if>if <condition>(<expr><name>version</name> == <name><name>MessagingService</name>.<name>VERSION_07</name></name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>ObjectInputStream</name></type> <name>in</name> <init>= <expr>new <call><name>ObjectInputStream</name><argument_list>(<argument><expr><name>dis</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <return>return <expr>(<name>MerkleTree</name>)<call><name><name>in</name>.<name>readObject</name></name><argument_list>()</argument_list></call></expr>;</return>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>ClassNotFoundException</name></type> <name>ex</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr><name>ex</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name>byte</name></type> <name>hashdepth</name> <init>= <expr><call><name><name>dis</name>.<name>readByte</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>maxsize</name> <init>= <expr><call><name><name>dis</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><call><name><name>dis</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>MerkleTree</name></type> <name>mt</name> <init>= <expr>new <call><name>MerkleTree</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr>null</expr></argument>, <argument><expr><name>hashdepth</name></expr></argument>, <argument><expr><name>maxsize</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name><name>mt</name>.<name>size</name></name> = <name>size</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>mt</name>.<name>root</name></name> = <call><name><name>Hashable</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr><name>mt</name></expr>;</return>
+            }</block></else></if>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * @param partitioner The partitioner in use.
+     * @param range the range this tree covers
+     * @param hashdepth The maximum depth of the tree. 100/(2^depth) is the %
+     *        of the key space covered by each subrange of a fully populated tree.
+     * @param maxsize The maximum number of subranges in the tree.
+     */</comment>
+    <constructor><specifier>public</specifier> <name>MerkleTree</name><parameter_list>(<param><decl><type><name>IPartitioner</name></type> <name>partitioner</name></decl></param>, <param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>, <param><decl><type><name>byte</name></type> <name>hashdepth</name></decl></param>, <param><decl><type><name>long</name></type> <name>maxsize</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>hashdepth</name> &lt; <name><name>Byte</name>.<name>MAX_VALUE</name></name></expr>;</assert>
+        <expr_stmt><expr><name><name>this</name>.<name>fullRange</name></name> = <name>range</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>partitioner</name></name> = <name>partitioner</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>hashdepth</name></name> = <name>hashdepth</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>maxsize</name></name> = <name>maxsize</name></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name>size</name> = 1</expr>;</expr_stmt>
+        <expr_stmt><expr><name>root</name> = new <call><name>Leaf</name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+
+    <function><type><specifier>static</specifier> <name>byte</name></type> <name>inc</name><parameter_list>(<param><decl><type><name>byte</name></type> <name>in</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>in</name> &lt; <name><name>Byte</name>.<name>MAX_VALUE</name></name></expr>;</assert>
+        <return>return <expr><call>(<name>byte</name>)<argument_list>(<argument><expr><name>in</name> + 1</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Initializes this tree by splitting it until hashdepth is reached,
+     * or until an additional level of splits would violate maxsize.
+     *
+     * NB: Replaces all nodes in the tree.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>init</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// determine the depth to which we can safely split the tree</comment>
+        <decl_stmt><decl><type><name>byte</name></type> <name>sizedepth</name> <init>= <expr><call>(<name>byte</name>)<argument_list>(<argument><expr><call><name><name>Math</name>.<name>log10</name></name><argument_list>(<argument><expr><name>maxsize</name></expr></argument>)</argument_list></call> / <call><name><name>Math</name>.<name>log10</name></name><argument_list>(<argument><expr>2</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>byte</name></type> <name>depth</name> <init>= <expr>(<name>byte</name>)<call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>sizedepth</name></expr></argument>, <argument><expr><name>hashdepth</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><name>root</name> = <call><name>initHelper</name><argument_list>(<argument><expr><name><name>fullRange</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>fullRange</name>.<name>right</name></name></expr></argument>, <argument><expr>(<name>byte</name>)0</expr></argument>, <argument><expr><name>depth</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>size</name> = (<name>long</name>)<call><name><name>Math</name>.<name>pow</name></name><argument_list>(<argument><expr>2</expr></argument>, <argument><expr><name>depth</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>Hashable</name></type> <name>initHelper</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>left</name></decl></param>, <param><decl><type><name>Token</name></type> <name>right</name></decl></param>, <param><decl><type><name>byte</name></type> <name>depth</name></decl></param>, <param><decl><type><name>byte</name></type> <name>max</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>depth</name> == <name>max</name></expr>)</condition><then>
+            <comment type="line">// we've reached the leaves</comment>
+            <return>return <expr>new <call><name>Leaf</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+        <decl_stmt><decl><type><name>Token</name></type> <name>midpoint</name> <init>= <expr><call><name><name>partitioner</name>.<name>midpoint</name></name><argument_list>(<argument><expr><name>left</name></expr></argument>, <argument><expr><name>right</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>midpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><name>left</name></expr></argument>)</argument_list></call> || <call><name><name>midpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><name>right</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return <expr>new <call><name>Leaf</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name>Hashable</name></type> <name>lchild</name> <init>=  <expr><call><name>initHelper</name><argument_list>(<argument><expr><name>left</name></expr></argument>, <argument><expr><name>midpoint</name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name>depth</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>max</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Hashable</name></type> <name>rchild</name> <init>=  <expr><call><name>initHelper</name><argument_list>(<argument><expr><name>midpoint</name></expr></argument>, <argument><expr><name>right</name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name>depth</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>max</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name>Inner</name><argument_list>(<argument><expr><name>midpoint</name></expr></argument>, <argument><expr><name>lchild</name></expr></argument>, <argument><expr><name>rchild</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><name>Hashable</name></type> <name>root</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>root</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>IPartitioner</name></type> <name>partitioner</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>partitioner</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * The number of distinct ranges contained in this tree. This is a reasonable
+     * measure of the memory usage of the tree (assuming 'this.order' is significant).
+     */</comment>
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>size</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>size</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>maxsize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>maxsize</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>maxsize</name><parameter_list>(<param><decl><type><name>long</name></type> <name>maxsize</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>maxsize</name></name> = <name>maxsize</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * TODO: Find another way to use the local partitioner after serialization.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>partitioner</name><parameter_list>(<param><decl><type><name>IPartitioner</name></type> <name>partitioner</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>partitioner</name></name> = <name>partitioner</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @param ltree First tree.
+     * @param rtree Second tree.
+     * @return A list of the largest contiguous ranges where the given trees disagree.
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>List</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name></type> <name>difference</name><parameter_list>(<param><decl><type><name>MerkleTree</name></type> <name>ltree</name></decl></param>, <param><decl><type><name>MerkleTree</name></type> <name>rtree</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>ltree</name>.<name>fullRange</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>rtree</name>.<name>fullRange</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"Difference only make sense on tree covering the same range (but " + <name><name>ltree</name>.<name>fullRange</name></name> + " != " + <name><name>rtree</name>.<name>fullRange</name></name> + ")"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name></type> <name>diff</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>TreeRange</name></type> <name>active</name> <init>= <expr>new <call><name>TreeRange</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name><name>ltree</name>.<name>fullRange</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>ltree</name>.<name>fullRange</name>.<name>right</name></name></expr></argument>, <argument><expr>(<name>byte</name>)0</expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>lhash</name> <init>= <expr><call><name><name>ltree</name>.<name>hash</name></name><argument_list>(<argument><expr><name>active</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>rhash</name> <init>= <expr><call><name><name>rtree</name>.<name>hash</name></name><argument_list>(<argument><expr><name>active</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>lhash</name> != null &amp;&amp; <name>rhash</name> != null &amp;&amp; !<call><name><name>Arrays</name>.<name>equals</name></name><argument_list>(<argument><expr><name>lhash</name></expr></argument>, <argument><expr><name>rhash</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><name>FULLY_INCONSISTENT</name> == <call><name>differenceHelper</name><argument_list>(<argument><expr><name>ltree</name></expr></argument>, <argument><expr><name>rtree</name></expr></argument>, <argument><expr><name>diff</name></expr></argument>, <argument><expr><name>active</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>diff</name>.<name>add</name></name><argument_list>(<argument><expr><name>active</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></then>
+        <else>else <if>if <condition>(<expr><name>lhash</name> == null || <name>rhash</name> == null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>diff</name>.<name>add</name></name><argument_list>(<argument><expr><name>active</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if></else></if>
+        <return>return <expr><name>diff</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * TODO: This function could be optimized into a depth first traversal of
+     * the two trees in parallel.
+     *
+     * Takes two trees and a range for which they have hashes, but are inconsistent.
+     * @return FULLY_INCONSISTENT if active is inconsistent, PARTIALLY_INCONSISTENT if only a subrange is inconsistent.
+     */</comment>
+    <function><type><specifier>static</specifier> <name>int</name></type> <name>differenceHelper</name><parameter_list>(<param><decl><type><name>MerkleTree</name></type> <name>ltree</name></decl></param>, <param><decl><type><name>MerkleTree</name></type> <name>rtree</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name></type> <name>diff</name></decl></param>, <param><decl><type><name>TreeRange</name></type> <name>active</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Token</name></type> <name>midpoint</name> <init>= <expr><call><name><name>ltree</name>.<name>partitioner</name></name><argument_list>()</argument_list></call>.<call><name>midpoint</name><argument_list>(<argument><expr><name><name>active</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>active</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>TreeRange</name></type> <name>left</name> <init>= <expr>new <call><name>TreeRange</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name><name>active</name>.<name>left</name></name></expr></argument>, <argument><expr><name>midpoint</name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name><name>active</name>.<name>depth</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>TreeRange</name></type> <name>right</name> <init>= <expr>new <call><name>TreeRange</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>midpoint</name></expr></argument>, <argument><expr><name><name>active</name>.<name>right</name></name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name><name>active</name>.<name>depth</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>lhash</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>rhash</name></decl>;</decl_stmt>
+
+        <comment type="line">// see if we should recurse left</comment>
+        <expr_stmt><expr><name>lhash</name> = <call><name><name>ltree</name>.<name>hash</name></name><argument_list>(<argument><expr><name>left</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>rhash</name> = <call><name><name>rtree</name>.<name>hash</name></name><argument_list>(<argument><expr><name>left</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>ldiff</name> <init>= <expr><name>CONSISTENT</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>lreso</name> <init>= <expr><name>lhash</name> != null &amp;&amp; <name>rhash</name> != null</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>lreso</name> &amp;&amp; !<call><name><name>Arrays</name>.<name>equals</name></name><argument_list>(<argument><expr><name>lhash</name></expr></argument>, <argument><expr><name>rhash</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><name>ldiff</name> = <call><name>differenceHelper</name><argument_list>(<argument><expr><name>ltree</name></expr></argument>, <argument><expr><name>rtree</name></expr></argument>, <argument><expr><name>diff</name></expr></argument>, <argument><expr><name>left</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else <if>if <condition>(<expr>!<name>lreso</name></expr>)</condition><then>
+            <expr_stmt><expr><name>ldiff</name> = <name>FULLY_INCONSISTENT</name></expr>;</expr_stmt></then></if></else></if>
+
+
+        <comment type="line">// see if we should recurse right</comment>
+        <expr_stmt><expr><name>lhash</name> = <call><name><name>ltree</name>.<name>hash</name></name><argument_list>(<argument><expr><name>right</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>rhash</name> = <call><name><name>rtree</name>.<name>hash</name></name><argument_list>(<argument><expr><name>right</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>rdiff</name> <init>= <expr><name>CONSISTENT</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>rreso</name> <init>= <expr><name>lhash</name> != null &amp;&amp; <name>rhash</name> != null</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>rreso</name> &amp;&amp; !<call><name><name>Arrays</name>.<name>equals</name></name><argument_list>(<argument><expr><name>lhash</name></expr></argument>, <argument><expr><name>rhash</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><name>rdiff</name> = <call><name>differenceHelper</name><argument_list>(<argument><expr><name>ltree</name></expr></argument>, <argument><expr><name>rtree</name></expr></argument>, <argument><expr><name>diff</name></expr></argument>, <argument><expr><name>right</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else <if>if <condition>(<expr>!<name>rreso</name></expr>)</condition><then>
+            <expr_stmt><expr><name>rdiff</name> = <name>FULLY_INCONSISTENT</name></expr>;</expr_stmt></then></if></else></if>
+
+        <if>if <condition>(<expr><name>ldiff</name> == <name>FULLY_INCONSISTENT</name> &amp;&amp; <name>rdiff</name> == <name>FULLY_INCONSISTENT</name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// both children are fully inconsistent</comment>
+            <return>return <expr><name>FULLY_INCONSISTENT</name></expr>;</return>
+        }</block></then>
+        <else>else <if>if <condition>(<expr><name>ldiff</name> == <name>FULLY_INCONSISTENT</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>diff</name>.<name>add</name></name><argument_list>(<argument><expr><name>left</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>PARTIALLY_INCONSISTENT</name></expr>;</return>
+        }</block></then>
+        <else>else <if>if <condition>(<expr><name>rdiff</name> == <name>FULLY_INCONSISTENT</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>diff</name>.<name>add</name></name><argument_list>(<argument><expr><name>right</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>PARTIALLY_INCONSISTENT</name></expr>;</return>
+        }</block></then></if></else></if></else></if>
+        <return>return <expr><name>PARTIALLY_INCONSISTENT</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * For testing purposes.
+     * Gets the smallest range containing the token.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>TreeRange</name></type> <name>get</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>t</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getHelper</name><argument_list>(<argument><expr><name>root</name></expr></argument>, <argument><expr><name><name>fullRange</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>fullRange</name>.<name>right</name></name></expr></argument>, <argument><expr>(<name>byte</name>)0</expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><name>TreeRange</name></type> <name>getHelper</name><parameter_list>(<param><decl><type><name>Hashable</name></type> <name>hashable</name></decl></param>, <param><decl><type><name>Token</name></type> <name>pleft</name></decl></param>, <param><decl><type><name>Token</name></type> <name>pright</name></decl></param>, <param><decl><type><name>byte</name></type> <name>depth</name></decl></param>, <param><decl><type><name>Token</name></type> <name>t</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>hashable</name> instanceof <name>Leaf</name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// we've reached a hash: wrap it up and deliver it</comment>
+            <return>return <expr>new <call><name>TreeRange</name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr><name>pleft</name></expr></argument>, <argument><expr><name>pright</name></expr></argument>, <argument><expr><name>depth</name></expr></argument>, <argument><expr><name>hashable</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then></if>
+        <comment type="line">// else: node.</comment>
+
+        <decl_stmt><decl><type><name>Inner</name></type> <name>node</name> <init>= <expr>(<name>Inner</name>)<name>hashable</name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>Range</name>.<name>contains</name></name><argument_list>(<argument><expr><name>pleft</name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <comment type="line">// left child contains token</comment>
+            <return>return <expr><call><name>getHelper</name><argument_list>(<argument><expr><name><name>node</name>.<name>lchild</name></name></expr></argument>, <argument><expr><name>pleft</name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name>depth</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</return></then></if>
+        <comment type="line">// else: right child contains token</comment>
+        <return>return <expr><call><name>getHelper</name><argument_list>(<argument><expr><name><name>node</name>.<name>rchild</name></name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><name>pright</name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name>depth</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Invalidates the ranges containing the given token.
+     * Useful for testing.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>invalidate</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>t</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>invalidateHelper</name><argument_list>(<argument><expr><name>root</name></expr></argument>, <argument><expr><name><name>fullRange</name>.<name>left</name></name></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>invalidateHelper</name><parameter_list>(<param><decl><type><name>Hashable</name></type> <name>hashable</name></decl></param>, <param><decl><type><name>Token</name></type> <name>pleft</name></decl></param>, <param><decl><type><name>Token</name></type> <name>t</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>hashable</name>.<name>hash</name></name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>hashable</name> instanceof <name>Leaf</name></expr>)</condition><then>
+            <return>return;</return></then></if>
+        <comment type="line">// else: node.</comment>
+
+        <decl_stmt><decl><type><name>Inner</name></type> <name>node</name> <init>= <expr>(<name>Inner</name>)<name>hashable</name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>Range</name>.<name>contains</name></name><argument_list>(<argument><expr><name>pleft</name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <comment type="line">// left child contains token</comment>
+            <expr_stmt><expr><call><name>invalidateHelper</name><argument_list>(<argument><expr><name><name>node</name>.<name>lchild</name></name></expr></argument>, <argument><expr><name>pleft</name></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <comment type="line">// right child contains token</comment>
+            <expr_stmt><expr><call><name>invalidateHelper</name><argument_list>(<argument><expr><name><name>node</name>.<name>rchild</name></name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Hash the given range in the tree. The range must have been generated
+     * with recursive applications of partitioner.midpoint().
+     *
+     * NB: Currently does not support wrapping ranges that do not end with
+     * partitioner.getMinimumToken().
+     *
+     * @return Null if any subrange of the range is invalid, or if the exact
+     *         range cannot be calculated using this tree.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>byte</name><index>[]</index></type> <name>hash</name><parameter_list>(<param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name>hashHelper</name><argument_list>(<argument><expr><name>root</name></expr></argument>, <argument><expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>fullRange</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>fullRange</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>StopRecursion</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>null</expr>;</return>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @throws StopRecursion If no match could be found for the range.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>byte</name><index>[]</index></type> <name>hashHelper</name><parameter_list>(<param><decl><type><name>Hashable</name></type> <name>hashable</name></decl></param>, <param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>active</name></decl></param>, <param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>StopRecursion</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>hashable</name> instanceof <name>Leaf</name></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>range</name>.<name>contains</name></name><argument_list>(<argument><expr><name>active</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <comment type="line">// we are not fully contained in this range!</comment>
+                <throw>throw <expr>new <call><name><name>StopRecursion</name>.<name>BadRange</name></name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+            <return>return <expr><call><name><name>hashable</name>.<name>hash</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></then></if>
+        <comment type="line">// else: node.</comment>
+
+        <decl_stmt><decl><type><name>Inner</name></type> <name>node</name> <init>= <expr>(<name>Inner</name>)<name>hashable</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>leftactive</name> <init>= <expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>active</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>rightactive</name> <init>= <expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><name><name>active</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>range</name>.<name>contains</name></name><argument_list>(<argument><expr><name>active</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <comment type="line">// this node is fully contained in the range</comment>
+            <if>if <condition>(<expr><call><name><name>node</name>.<name>hash</name></name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+                <comment type="line">// we had a cached value</comment>
+                <return>return <expr><call><name><name>node</name>.<name>hash</name></name><argument_list>()</argument_list></call></expr>;</return></then></if>
+            <comment type="line">// continue recursing to hash our children</comment>
+            <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>lhash</name> <init>= <expr><call><name>hashHelper</name><argument_list>(<argument><expr><call><name><name>node</name>.<name>lchild</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>leftactive</name></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>rhash</name> <init>= <expr><call><name>hashHelper</name><argument_list>(<argument><expr><call><name><name>node</name>.<name>rchild</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>rightactive</name></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// cache the computed value (even if it is null)</comment>
+            <expr_stmt><expr><call><name><name>node</name>.<name>hash</name></name><argument_list>(<argument><expr><name>lhash</name></expr></argument>, <argument><expr><name>rhash</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><call><name><name>node</name>.<name>hash</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></then></if> <comment type="line">// else: one of our children contains the range</comment>
+
+        <if>if <condition>(<expr><call><name><name>leftactive</name>.<name>contains</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <comment type="line">// left child contains/matches the range</comment>
+            <return>return <expr><call><name>hashHelper</name><argument_list>(<argument><expr><name><name>node</name>.<name>lchild</name></name></expr></argument>, <argument><expr><name>leftactive</name></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>;</return></then>
+        <else>else <if>if <condition>(<expr><call><name><name>rightactive</name>.<name>contains</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <comment type="line">// right child contains/matches the range</comment>
+            <return>return <expr><call><name>hashHelper</name><argument_list>(<argument><expr><name><name>node</name>.<name>rchild</name></name></expr></argument>, <argument><expr><name>rightactive</name></expr></argument>, <argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>;</return></then>
+        <else>else
+            <throw>throw <expr>new <call><name><name>StopRecursion</name>.<name>BadRange</name></name><argument_list>()</argument_list></call></expr>;</throw></else></if></else></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Splits the range containing the given token, if no tree limits would be
+     * violated. If the range would be split to a depth below hashdepth, or if
+     * the tree already contains maxsize subranges, this operation will fail.
+     *
+     * @return True if the range was successfully split.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>split</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>t</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!(<name>size</name> &lt; <name>maxsize</name>)</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>root</name> = <call><name>splitHelper</name><argument_list>(<argument><expr><name>root</name></expr></argument>, <argument><expr><name><name>fullRange</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>fullRange</name>.<name>right</name></name></expr></argument>, <argument><expr>(<name>byte</name>)0</expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name><name>StopRecursion</name>.<name>TooDeep</name></name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>false</expr>;</return>
+        }</block></catch></try>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>Hashable</name></type> <name>splitHelper</name><parameter_list>(<param><decl><type><name>Hashable</name></type> <name>hashable</name></decl></param>, <param><decl><type><name>Token</name></type> <name>pleft</name></decl></param>, <param><decl><type><name>Token</name></type> <name>pright</name></decl></param>, <param><decl><type><name>byte</name></type> <name>depth</name></decl></param>, <param><decl><type><name>Token</name></type> <name>t</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name><name>StopRecursion</name>.<name>TooDeep</name></name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>depth</name> &gt;= <name>hashdepth</name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name><name>StopRecursion</name>.<name>TooDeep</name></name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+        <if>if <condition>(<expr><name>hashable</name> instanceof <name>Leaf</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>Token</name></type> <name>midpoint</name> <init>= <expr><call><name><name>partitioner</name>.<name>midpoint</name></name><argument_list>(<argument><expr><name>pleft</name></expr></argument>, <argument><expr><name>pright</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// We should not create a non-sensical range where start and end are the same token (this is non-sensical because range are</comment>
+            <comment type="line">// start exclusive). Note that we shouldn't hit that unless the full range is very small or we are fairly deep</comment>
+            <if>if <condition>(<expr><call><name><name>midpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><name>pleft</name></expr></argument>)</argument_list></call> || <call><name><name>midpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><name>pright</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name><name>StopRecursion</name>.<name>TooDeep</name></name><argument_list>()</argument_list></call></expr>;</throw></then></if>
+
+            <comment type="line">// split</comment>
+            <expr_stmt><expr><name>size</name>++</expr>;</expr_stmt>
+            <return>return <expr>new <call><name>Inner</name><argument_list>(<argument><expr><name>midpoint</name></expr></argument>, <argument><expr>new <call><name>Leaf</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>new <call><name>Leaf</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></then></if>
+        <comment type="line">// else: node.</comment>
+
+        <comment type="line">// recurse on the matching child</comment>
+        <decl_stmt><decl><type><name>Inner</name></type> <name>node</name> <init>= <expr>(<name>Inner</name>)<name>hashable</name></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><call><name><name>Range</name>.<name>contains</name></name><argument_list>(<argument><expr><name>pleft</name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <comment type="line">// left child contains token</comment>
+            <expr_stmt><expr><call><name><name>node</name>.<name>lchild</name></name><argument_list>(<argument><expr><call><name>splitHelper</name><argument_list>(<argument><expr><name><name>node</name>.<name>lchild</name></name></expr></argument>, <argument><expr><name>pleft</name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name>depth</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <comment type="line">// else: right child contains token</comment>
+            <expr_stmt><expr><call><name><name>node</name>.<name>rchild</name></name><argument_list>(<argument><expr><call><name>splitHelper</name><argument_list>(<argument><expr><name><name>node</name>.<name>rchild</name></name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><name>pright</name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name>depth</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        <return>return <expr><name>node</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns a lazy iterator of invalid TreeRanges that need to be filled
+     * in order to make the given Range valid.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>TreeRangeIterator</name></type> <name>invalids</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>TreeRangeIterator</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>buff</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>"#&lt;MerkleTree root="</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>root</name>.<name>toString</name></name><argument_list>(<argument><expr><name>buff</name></expr></argument>, <argument><expr>8</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>"&gt;"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>buff</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * The public interface to a range in the tree.
+     *
+     * NB: A TreeRange should not be returned by a public method unless the
+     * parents of the range it represents are already invalidated, since it
+     * will allow someone to modify the hash. Alternatively, a TreeRange
+     * may be created with a null tree, indicating that it is read only.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>TreeRange</name> <super><extends>extends <name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>serialVersionUID</name> <init>= <expr>1L</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>MerkleTree</name></type> <name>tree</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>byte</name></type> <name>depth</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Hashable</name></type> <name>hashable</name></decl>;</decl_stmt>
+
+        <constructor><name>TreeRange</name><parameter_list>(<param><decl><type><name>MerkleTree</name></type> <name>tree</name></decl></param>, <param><decl><type><name>Token</name></type> <name>left</name></decl></param>, <param><decl><type><name>Token</name></type> <name>right</name></decl></param>, <param><decl><type><name>byte</name></type> <name>depth</name></decl></param>, <param><decl><type><name>Hashable</name></type> <name>hashable</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>left</name></expr></argument>, <argument><expr><name>right</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>tree</name></name> = <name>tree</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>depth</name></name> = <name>depth</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>hashable</name></name> = <name>hashable</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>hash</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>hash</name></decl></param>)</parameter_list>
+        <block>{
+            <assert>assert <expr><name>tree</name> != null : "Not intended for modification!"</expr>;</assert>
+            <expr_stmt><expr><call><name><name>hashable</name>.<name>hash</name></name><argument_list>(<argument><expr><name>hash</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>byte</name><index>[]</index></type> <name>hash</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>hashable</name>.<name>hash</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * @param entry Row to mix into the hash for this range.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>addHash</name><parameter_list>(<param><decl><type><name>RowHash</name></type> <name>entry</name></decl></param>)</parameter_list>
+        <block>{
+            <assert>assert <expr><name>tree</name> != null : "Not intended for modification!"</expr>;</assert>
+            <assert>assert <expr><name>hashable</name> instanceof <name>Leaf</name></expr>;</assert>
+
+            <expr_stmt><expr><call><name><name>hashable</name>.<name>addHash</name></name><argument_list>(<argument><expr><name><name>entry</name>.<name>hash</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>addAll</name><parameter_list>(<param><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>RowHash</name></argument>&gt;</argument_list></name></type> <name>entries</name></decl></param>)</parameter_list>
+        <block>{
+            <while>while <condition>(<expr><call><name><name>entries</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+                <expr_stmt><expr><call><name>addHash</name><argument_list>(<argument><expr><call><name><name>entries</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></while>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>StringBuilder</name></type> <name>buff</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>(<argument><expr>"#&lt;TreeRange "</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>super</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr>" depth="</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>depth</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>"&gt;"</expr></argument>)</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Returns the leaf (range) of a given tree in increasing order.
+     * If the full range covered by the tree don't wrap, then it will return the
+     * ranges in increasing order.
+     * If the full range wrap, the first *and* last range returned by the
+     * iterator will be the wrapping range. It is the only case where the same
+     * leaf will be returned twice.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>TreeRangeIterator</name> <super><extends>extends <name><name>AbstractIterator</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name></extends> <implements>implements <name><name>Iterable</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name>, <name><name>PeekingIterator</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <comment type="line">// stack of ranges to visit</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ArrayDeque</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name></type> <name>tovisit</name></decl>;</decl_stmt>
+        <comment type="line">// interesting range</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>MerkleTree</name></type> <name>tree</name></decl>;</decl_stmt>
+
+        <constructor><name>TreeRangeIterator</name><parameter_list>(<param><decl><type><name>MerkleTree</name></type> <name>tree</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>tovisit</name> = new <call><name><name>ArrayDeque</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>tovisit</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>TreeRange</name><argument_list>(<argument><expr><name>tree</name></expr></argument>, <argument><expr><name><name>tree</name>.<name>fullRange</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>tree</name>.<name>fullRange</name>.<name>right</name></name></expr></argument>, <argument><expr>(<name>byte</name>)0</expr></argument>, <argument><expr><name><name>tree</name>.<name>root</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>tree</name></name> = <name>tree</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/**
+         * Find the next TreeRange.
+         *
+         * @return The next TreeRange.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>TreeRange</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <while>while <condition>(<expr>!<call><name><name>tovisit</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <decl_stmt><decl><type><name>TreeRange</name></type> <name>active</name> <init>= <expr><call><name><name>tovisit</name>.<name>pop</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><name><name>active</name>.<name>hashable</name></name> instanceof <name>Leaf</name></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// found a leaf invalid range</comment>
+                    <if>if <condition>(<expr><call><name><name>active</name>.<name>isWrapAround</name></name><argument_list>()</argument_list></call> &amp;&amp; !<call><name><name>tovisit</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <comment type="line">// put to be taken again last</comment>
+                        <expr_stmt><expr><call><name><name>tovisit</name>.<name>addLast</name></name><argument_list>(<argument><expr><name>active</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    <return>return <expr><name>active</name></expr>;</return>
+                }</block></then></if>
+
+                <decl_stmt><decl><type><name>Inner</name></type> <name>node</name> <init>= <expr>(<name>Inner</name>)<name><name>active</name>.<name>hashable</name></name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>TreeRange</name></type> <name>left</name> <init>= <expr>new <call><name>TreeRange</name><argument_list>(<argument><expr><name>tree</name></expr></argument>, <argument><expr><name><name>active</name>.<name>left</name></name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name><name>active</name>.<name>depth</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>node</name>.<name>lchild</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>TreeRange</name></type> <name>right</name> <init>= <expr>new <call><name>TreeRange</name><argument_list>(<argument><expr><name>tree</name></expr></argument>, <argument><expr><name><name>node</name>.<name>token</name></name></expr></argument>, <argument><expr><name><name>active</name>.<name>right</name></name></expr></argument>, <argument><expr><call><name>inc</name><argument_list>(<argument><expr><name><name>active</name>.<name>depth</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>node</name>.<name>rchild</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><call><name><name>right</name>.<name>isWrapAround</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// whatever is on the left is 'after' everything we have seen so far (it has greater tokens)</comment>
+                    <expr_stmt><expr><call><name><name>tovisit</name>.<name>addLast</name></name><argument_list>(<argument><expr><name>left</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>tovisit</name>.<name>addFirst</name></name><argument_list>(<argument><expr><name>right</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <comment type="line">// do left first then right</comment>
+                    <expr_stmt><expr><call><name><name>tovisit</name>.<name>addFirst</name></name><argument_list>(<argument><expr><name>right</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>tovisit</name>.<name>addFirst</name></name><argument_list>(<argument><expr><name>left</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></while>
+            <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>TreeRange</name></argument>&gt;</argument_list></name></type> <name>iterator</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>this</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * An inner node in the MerkleTree. Inners can contain cached hash values, which
+     * are the binary hash of their two children.
+     */</comment>
+    <class><specifier>static</specifier> class <name>Inner</name> <super><extends>extends <name>Hashable</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>serialVersionUID</name> <init>= <expr>1L</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>byte</name></type> <name>IDENT</name> <init>= <expr>2</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Token</name></type> <name>token</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>Hashable</name></type> <name>lchild</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>Hashable</name></type> <name>rchild</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>InnerSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>InnerSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="block" format="javadoc">/**
+         * Constructs an Inner with the given token and children, and a null hash.
+         */</comment>
+        <constructor><specifier>public</specifier> <name>Inner</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>, <param><decl><type><name>Hashable</name></type> <name>lchild</name></decl></param>, <param><decl><type><name>Hashable</name></type> <name>rchild</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>token</name></name> = <name>token</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>lchild</name></name> = <name>lchild</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>rchild</name></name> = <name>rchild</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>Hashable</name></type> <name>lchild</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>lchild</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>Hashable</name></type> <name>rchild</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>rchild</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>lchild</name><parameter_list>(<param><decl><type><name>Hashable</name></type> <name>child</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>lchild</name> = <name>child</name></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>rchild</name><parameter_list>(<param><decl><type><name>Hashable</name></type> <name>child</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>rchild</name> = <name>child</name></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Recursive toString.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>toString</name><parameter_list>(<param><decl><type><name>StringBuilder</name></type> <name>buff</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxdepth</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>"#&lt;"</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getSimpleName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>" "</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>" hash="</expr></argument>)</argument_list></call>.<call><name>append</name><argument_list>(<argument><expr><call><name><name>Hashable</name>.<name>toString</name></name><argument_list>(<argument><expr><call><name>hash</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>" children=["</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>maxdepth</name> &lt; 1</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>"#"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <if>if <condition>(<expr><name>lchild</name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>"null"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                <else>else
+                    <expr_stmt><expr><call><name><name>lchild</name>.<name>toString</name></name><argument_list>(<argument><expr><name>buff</name></expr></argument>, <argument><expr><name>maxdepth</name>-1</expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+                <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>" "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>rchild</name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>"null"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                <else>else
+                    <expr_stmt><expr><call><name><name>rchild</name>.<name>toString</name></name><argument_list>(<argument><expr><name>buff</name></expr></argument>, <argument><expr><name>maxdepth</name>-1</expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+            }</block></else></if>
+            <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr>"]&gt;"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>StringBuilder</name></type> <name>buff</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name>toString</name><argument_list>(<argument><expr><name>buff</name></expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><call><name><name>buff</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <class><specifier>private</specifier> <specifier>static</specifier> class <name>InnerSerializer</name>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>Inner</name></type> <name>inner</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <if>if <condition>(<expr><name><name>inner</name>.<name>hash</name></name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr>-1</expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>inner</name>.<name>hash</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>write</name></name><argument_list>(<argument><expr><name><name>inner</name>.<name>hash</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+                <expr_stmt><expr><call><name><name>Token</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><name><name>inner</name>.<name>token</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>Hashable</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>inner</name>.<name>lchild</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>Hashable</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>inner</name>.<name>rchild</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>Inner</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>hashLen</name> <init>= <expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>hash</name> <init>= <expr><name>hashLen</name> &gt;= 0 ? new <name><name>byte</name><index>[<expr><name>hashLen</name></expr>]</index></name> : null</expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>hash</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>dis</name>.<name>readFully</name></name><argument_list>(<argument><expr><name>hash</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <decl_stmt><decl><type><name>Token</name></type> <name>token</name> <init>= <expr><call><name><name>Token</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr><name>dis</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>Hashable</name></type> <name>lchild</name> <init>= <expr><call><name><name>Hashable</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>Hashable</name></type> <name>rchild</name> <init>= <expr><call><name><name>Hashable</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <return>return <expr>new <call><name>Inner</name><argument_list>(<argument><expr><name>token</name></expr></argument>, <argument><expr><name>lchild</name></expr></argument>, <argument><expr><name>rchild</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * A leaf node in the MerkleTree. Because the MerkleTree represents a much
+     * larger perfect binary tree of depth hashdepth, a Leaf object contains
+     * the value that would be contained in the perfect tree at its position.
+     *
+     * When rows are added to the MerkleTree using TreeRange.validate(), the
+     * tree extending below the Leaf is generated in memory, but only the root
+     * is stored in the Leaf.
+     */</comment>
+    <class><specifier>static</specifier> class <name>Leaf</name> <super><extends>extends <name>Hashable</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>serialVersionUID</name> <init>= <expr>1L</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>byte</name></type> <name>IDENT</name> <init>= <expr>1</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>LeafSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>LeafSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="block" format="javadoc">/**
+         * Constructs a null hash.
+         */</comment>
+        <constructor><specifier>public</specifier> <name>Leaf</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <constructor><specifier>public</specifier> <name>Leaf</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>hash</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>hash</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <constructor><specifier>public</specifier> <name>Leaf</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>lefthash</name></decl></param>, <param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>righthash</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><call><name><name>Hashable</name>.<name>binaryHash</name></name><argument_list>(<argument><expr><name>lefthash</name></expr></argument>, <argument><expr><name>righthash</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>toString</name><parameter_list>(<param><decl><type><name>StringBuilder</name></type> <name>buff</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxdepth</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>buff</name>.<name>append</name></name><argument_list>(<argument><expr><call><name>toString</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>"#&lt;Leaf " + <call><name><name>Hashable</name>.<name>toString</name></name><argument_list>(<argument><expr><call><name>hash</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> + "&gt;"</expr>;</return>
+        }</block></function>
+
+        <class><specifier>private</specifier> <specifier>static</specifier> class <name>LeafSerializer</name>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>Leaf</name></type> <name>leaf</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <if>if <condition>(<expr><name><name>leaf</name>.<name>hash</name></name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr>-1</expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>leaf</name>.<name>hash</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>write</name></name><argument_list>(<argument><expr><name><name>leaf</name>.<name>hash</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>Leaf</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>hashLen</name> <init>= <expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>hash</name> <init>= <expr><name>hashLen</name> &lt; 0 ? null : new <name><name>byte</name><index>[<expr><name>hashLen</name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>hash</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>dis</name>.<name>readFully</name></name><argument_list>(<argument><expr><name>hash</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <return>return <expr>new <call><name>Leaf</name><argument_list>(<argument><expr><name>hash</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Hash value representing a row, to be used to pass hashes to the MerkleTree.
+     * The byte[] hash value should contain a digest of the key and value of the row
+     * created using a very strong hash function.
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>RowHash</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>Token</name></type> <name>token</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>byte</name><index>[]</index></type> <name>hash</name></decl>;</decl_stmt>
+        <constructor><specifier>public</specifier> <name>RowHash</name><parameter_list>(<param><decl><type><name>Token</name></type> <name>token</name></decl></param>, <param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>hash</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>token</name></name> = <name>token</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>hash</name></name>  = <name>hash</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>"#&lt;RowHash " + <name>token</name> + " " + <call><name><name>Hashable</name>.<name>toString</name></name><argument_list>(<argument><expr><name>hash</name></expr></argument>)</argument_list></call> + "&gt;"</expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Abstract class containing hashing logic, and containing a single hash field.
+     */</comment>
+    <class><specifier>static</specifier> <specifier>abstract</specifier> class <name>Hashable</name> <super><implements>implements <name>Serializable</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>serialVersionUID</name> <init>= <expr>1L</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>Hashable</name></argument>&gt;</argument_list></name></type> <name>serializer</name> <init>= <expr>new <call><name>HashableSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>protected</specifier> <name>byte</name><index>[]</index></type> <name>hash</name></decl>;</decl_stmt>
+
+        <constructor><specifier>protected</specifier> <name>Hashable</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>hash</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>hash</name></name> = <name>hash</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>byte</name><index>[]</index></type> <name>hash</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>hash</name></expr>;</return>
+        }</block></function>
+
+        <function><type><name>void</name></type> <name>hash</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>hash</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>hash</name></name> = <name>hash</name></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Sets the value of this hash to binaryHash of its children.
+         * @param lefthash Hash of left child.
+         * @param righthash Hash of right child.
+         */</comment>
+        <function><type><name>void</name></type> <name>hash</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>lefthash</name></decl></param>, <param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>righthash</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>hash</name> = <call><name>binaryHash</name><argument_list>(<argument><expr><name>lefthash</name></expr></argument>, <argument><expr><name>righthash</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Mixes the given value into our hash. If our hash is null,
+         * our hash will become the given value.
+         */</comment>
+        <function><type><name>void</name></type> <name>addHash</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>righthash</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>hash</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>hash</name> = <name>righthash</name></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><name>hash</name> = <call><name>binaryHash</name><argument_list>(<argument><expr><name>hash</name></expr></argument>, <argument><expr><name>righthash</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * The primitive with which all hashing should be accomplished: hashes
+         * a left and right value together.
+         */</comment>
+        <function><type><specifier>static</specifier> <name>byte</name><index>[]</index></type> <name>binaryHash</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name><name>byte</name><index>[]</index></name></type> <name>left</name></decl></param>, <param><decl><type><specifier>final</specifier> <name><name>byte</name><index>[]</index></name></type> <name>right</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>FBUtilities</name>.<name>xor</name></name><argument_list>(<argument><expr><name>left</name></expr></argument>, <argument><expr><name>right</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>void</name></type> <name>toString</name><parameter_list>(<param><decl><type><name>StringBuilder</name></type> <name>buff</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxdepth</name></decl></param>)</parameter_list>;</function_decl>
+
+        <function><type><specifier>public</specifier> <specifier>static</specifier> <name>String</name></type> <name>toString</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>hash</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>hash</name> == null</expr>)</condition><then>
+                <return>return <expr>"null"</expr>;</return></then></if>
+            <return>return <expr>"[" + <call><name><name>Hex</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name>hash</name></expr></argument>)</argument_list></call> + "]"</expr>;</return>
+        }</block></function>
+
+        <class><specifier>private</specifier> <specifier>static</specifier> class <name>HashableSerializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>Hashable</name></argument>&gt;</argument_list></name></implements></super>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>Hashable</name></type> <name>h</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <if>if <condition>(<expr><name>h</name> instanceof <name>Inner</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>writeByte</name></name><argument_list>(<argument><expr><name><name>Inner</name>.<name>IDENT</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>Inner</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr>(<name>Inner</name>)<name>h</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else <if>if <condition>(<expr><name>h</name> instanceof <name>Leaf</name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>writeByte</name></name><argument_list>(<argument><expr><name><name>Leaf</name>.<name>IDENT</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>Leaf</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr>(<name>Leaf</name>)<name>h</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                    <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Unexpected Hashable: " + <call><name><name>h</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getCanonicalName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></else></if></else></if>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>Hashable</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+            <block>{
+                <decl_stmt><decl><type><name>byte</name></type> <name>ident</name> <init>= <expr><call><name><name>dis</name>.<name>readByte</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name><name>Inner</name>.<name>IDENT</name></name> == <name>ident</name></expr>)</condition><then>
+                    <return>return <expr><call><name><name>Inner</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return></then>
+                <else>else <if>if <condition>(<expr><name><name>Leaf</name>.<name>IDENT</name></name> == <name>ident</name></expr>)</condition><then>
+                    <return>return <expr><call><name><name>Leaf</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>)</argument_list></call></expr>;</return></then>
+                <else>else
+                    <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"Unexpected Hashable: " + <name>ident</name></expr></argument>)</argument_list></call></expr>;</throw></else></if></else></if>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>Hashable</name></type> <name>hashable</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+            }</block></function>
+        }</block></class>
+    }</block></class>
+
+    <comment type="block" format="javadoc">/**
+     * Exceptions that stop recursion early when we are sure that no answer
+     * can be found.
+     */</comment>
+    <class><specifier>static</specifier> <specifier>abstract</specifier> class <name>StopRecursion</name> <super><extends>extends <name>Exception</name></extends></super>
+    <block>{
+        <class><specifier>static</specifier> class <name>BadRange</name> <super><extends>extends <name>StopRecursion</name></extends></super>
+        <block>{
+            <constructor><specifier>public</specifier> <name>BadRange</name><parameter_list>()</parameter_list><block>{ <expr_stmt><expr><call><name>super</name><argument_list>()</argument_list></call></expr>;</expr_stmt> }</block></constructor>
+        }</block></class>
+
+        <class><specifier>static</specifier> class <name>InvalidHash</name> <super><extends>extends <name>StopRecursion</name></extends></super>
+        <block>{
+            <constructor><specifier>public</specifier> <name>InvalidHash</name><parameter_list>()</parameter_list><block>{ <expr_stmt><expr><call><name>super</name><argument_list>()</argument_list></call></expr>;</expr_stmt> }</block></constructor>
+        }</block></class>
+
+        <class><specifier>static</specifier> class <name>TooDeep</name> <super><extends>extends <name>StopRecursion</name></extends></super>
+        <block>{
+            <constructor><specifier>public</specifier> <name>TooDeep</name><parameter_list>()</parameter_list><block>{ <expr_stmt><expr><call><name>super</name><argument_list>()</argument_list></call></expr>;</expr_stmt> }</block></constructor>
+        }</block></class>
+    }</block></class>
+}</block></class>
+</unit>

@@ -1,0 +1,372 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\net\OutboundTcpConnection.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>BufferedOutputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>DataInputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>Socket</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>UUID</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>BlockingQueue</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>LinkedBlockingQueue</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicLong</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tracing</name>.<name>TraceState</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tracing</name>.<name>Tracing</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>UUIDGen</name></name>;</import>
+<import>import <name><name>org</name>.<name>xerial</name>.<name>snappy</name>.<name>SnappyOutputStream</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Config</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>OutboundTcpConnection</name> <super><extends>extends <name>Thread</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>OutboundTcpConnection</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>MessageOut</name></type> <name>CLOSE_SENTINEL</name> <init>= <expr>new <call><name>MessageOut</name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>INTERNAL_RESPONSE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>boolean</name></type> <name>isStopped</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>OPEN_RETRY_DELAY</name> <init>= <expr>100</expr></init></decl>;</decl_stmt> <comment type="line">// ms between retries</comment>
+
+    <comment type="line">// sending thread reads from "active" (one of queue1, queue2) until it is empty.</comment>
+    <comment type="line">// then it swaps it with "backlog."</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name><name>BlockingQueue</name><argument_list>&lt;<argument><name>QueuedMessage</name></argument>&gt;</argument_list></name></type> <name>backlog</name> <init>= <expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>QueuedMessage</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name><name>BlockingQueue</name><argument_list>&lt;<argument><name>QueuedMessage</name></argument>&gt;</argument_list></name></type> <name>active</name> <init>= <expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name>QueuedMessage</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>OutboundTcpConnectionPool</name></type> <name>poolReference</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>DataOutputStream</name></type> <name>out</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>Socket</name></type> <name>socket</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>long</name></type> <name>completed</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>AtomicLong</name></type> <name>dropped</name> <init>= <expr>new <call><name>AtomicLong</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>targetVersion</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>OutboundTcpConnection</name><parameter_list>(<param><decl><type><name>OutboundTcpConnectionPool</name></type> <name>pool</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr>"WRITE-" + <call><name><name>pool</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>poolReference</name></name> = <name>pool</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>isLocalDC</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>targetHost</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>remoteDC</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getEndpointSnitch</name></name><argument_list>()</argument_list></call>.<call><name>getDatacenter</name><argument_list>(<argument><expr><name>targetHost</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>localDC</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getEndpointSnitch</name></name><argument_list>()</argument_list></call>.<call><name>getDatacenter</name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getRpcAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name><name>remoteDC</name>.<name>equals</name></name><argument_list>(<argument><expr><name>localDC</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>enqueue</name><parameter_list>(<param><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>expireMessages</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>backlog</name>.<name>put</name></name><argument_list>(<argument><expr>new <call><name>QueuedMessage</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>closeSocket</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>destroyThread</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>active</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>backlog</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>isStopped</name> = <name>destroyThread</name></expr>;</expr_stmt> <comment type="line">// Exit loop to stop the thread</comment>
+        <expr_stmt><expr><call><name>enqueue</name><argument_list>(<argument><expr><name>CLOSE_SENTINEL</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>softCloseSocket</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>enqueue</name><argument_list>(<argument><expr><name>CLOSE_SENTINEL</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getTargetVersion</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>targetVersion</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+    <block>{
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>QueuedMessage</name></type> <name>qm</name> <init>= <expr><call><name><name>active</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>qm</name> == null</expr>)</condition><then>
+            <block>{
+                <comment type="line">// exhausted the active queue.  switch to backlog, once there's something to process there</comment>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>qm</name> = <call><name><name>backlog</name>.<name>take</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+
+                <decl_stmt><decl><type><name><name>BlockingQueue</name><argument_list>&lt;<argument><name>QueuedMessage</name></argument>&gt;</argument_list></name></type> <name>tmp</name> <init>= <expr><name>backlog</name></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>backlog</name> = <name>active</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name>active</name> = <name>tmp</name></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <decl_stmt><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>m</name> <init>= <expr><name><name>qm</name>.<name>message</name></name></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>m</name> == <name>CLOSE_SENTINEL</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name>disconnect</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>isStopped</name></expr>)</condition><then>
+                    <break>break;</break></then></if>
+                <continue>continue;</continue>
+            }</block></then></if>
+            <if>if <condition>(<expr><name><name>qm</name>.<name>timestamp</name></name> &lt; <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <call><name><name>m</name>.<name>getTimeout</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>dropped</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then>
+            <else>else <if>if <condition>(<expr><name>socket</name> != null || <call><name>connect</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name>writeConnected</name><argument_list>(<argument><expr><name>qm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <comment type="line">// clear out the queue, else gossip messages back up.</comment>
+                <expr_stmt><expr><call><name><name>active</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></else></if></else></if>
+        }</block></while>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getPendingMessages</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>active</name>.<name>size</name></name><argument_list>()</argument_list></call> + <call><name><name>backlog</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getCompletedMesssages</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>completed</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getDroppedMessages</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>dropped</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>shouldCompressConnection</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// assumes version &gt;= 1.2</comment>
+        <return>return <expr><call><name><name>DatabaseDescriptor</name>.<name>internodeCompression</name></name><argument_list>()</argument_list></call> == <name><name>Config</name>.<name>InternodeCompression</name>.<name>all</name></name>
+               || (<call><name><name>DatabaseDescriptor</name>.<name>internodeCompression</name></name><argument_list>()</argument_list></call> == <name><name>Config</name>.<name>InternodeCompression</name>.<name>dc</name></name> &amp;&amp; !<call><name>isLocalDC</name><argument_list>(<argument><expr><call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>)</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>writeConnected</name><parameter_list>(<param><decl><type><name>QueuedMessage</name></type> <name>qm</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>sessionBytes</name> <init>= <expr><call><name><name>qm</name>.<name>message</name>.<name>parameters</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>Tracing</name>.<name>TRACE_HEADER</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>sessionBytes</name> != null</expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>UUID</name></type> <name>sessionId</name> <init>= <expr><call><name><name>UUIDGen</name>.<name>getUUID</name></name><argument_list>(<argument><expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><name>sessionBytes</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>TraceState</name></type> <name>state</name> <init>= <expr><call><name><name>Tracing</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>(<argument><expr><name>sessionId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>state</name>.<name>trace</name></name><argument_list>(<argument><expr>"Sending message to {}"</expr></argument>, <argument><expr><call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>Tracing</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>stopIfNonLocal</name><argument_list>(<argument><expr><name>state</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name>write</name><argument_list>(<argument><expr><name><name>qm</name>.<name>message</name></name></expr></argument>, <argument><expr><name><name>qm</name>.<name>id</name></name></expr></argument>, <argument><expr><name><name>qm</name>.<name>timestamp</name></name></expr></argument>, <argument><expr><name>out</name></expr></argument>, <argument><expr><name>targetVersion</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>completed</name>++</expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>active</name>.<name>peek</name></name><argument_list>()</argument_list></call> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>out</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <comment type="line">// Non IO exceptions is likely a programming error so let's not silence it</comment>
+            <if>if <condition>(<expr>!(<name>e</name> instanceof <name>IOException</name>)</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"error writing to " + <call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"error writing to " + <call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if></else></if>
+            <expr_stmt><expr><call><name>disconnect</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>write</name><parameter_list>(<param><decl><type><name>MessageOut</name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>, <param><decl><type><name>DataOutputStream</name></type> <name>out</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>PROTOCOL_MAGIC</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>writeHeader</name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr><name>version</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// 0.8 included a total message size int.  1.0 doesn't need it but expects it to be there.</comment>
+            <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr>-1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>out</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>version</name> &gt;= <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// int cast cuts off the high-order half of the timestamp, which we can assume remains</comment>
+            <comment type="line">// the same between now and when the recipient reconstructs it.</comment>
+            <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr>(<name>int</name>) <name>timestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <expr_stmt><expr><call><name><name>message</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>writeHeader</name><parameter_list>(<param><decl><type><name>DataOutputStream</name></type> <name>out</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>compressionEnabled</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// 2 bits: unused.  used to be "serializer type," which was always Binary</comment>
+        <comment type="line">// 1 bit: compression</comment>
+        <comment type="line">// 1 bit: streaming mode</comment>
+        <comment type="line">// 3 bits: unused</comment>
+        <comment type="line">// 8 bits: version</comment>
+        <comment type="line">// 15 bits: unused</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>header</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>compressionEnabled</name></expr>)</condition><then>
+            <expr_stmt><expr><name>header</name> |= 4</expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><name>header</name> |= (<name>version</name> &lt;&lt; 8)</expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name>header</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>disconnect</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>socket</name> != null</expr>)</condition><then>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>socket</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"exception closing connection to " + <call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></catch></try>
+            <expr_stmt><expr><name>out</name> = null</expr>;</expr_stmt>
+            <expr_stmt><expr><name>socket</name> = null</expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>connect</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"attempting to connect to " + <call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><name>targetVersion</name> = <call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getVersion</name><argument_list>(<argument><expr><call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>start</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> &lt; <name>start</name> + <call><name><name>DatabaseDescriptor</name>.<name>getRpcTimeout</name></name><argument_list>()</argument_list></call></expr>)</condition>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>socket</name> = <call><name><name>poolReference</name>.<name>newSocket</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>socket</name>.<name>setKeepAlive</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name>isLocalDC</name><argument_list>(<argument><expr><call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>socket</name>.<name>setTcpNoDelay</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><call><name><name>socket</name>.<name>setTcpNoDelay</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getInterDCTcpNoDelay</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+                <expr_stmt><expr><name>out</name> = new <call><name>DataOutputStream</name><argument_list>(<argument><expr>new <call><name>BufferedOutputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getOutputStream</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>4096</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <if>if <condition>(<expr><name>targetVersion</name> &gt;= <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>PROTOCOL_MAGIC</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>writeHeader</name><argument_list>(<argument><expr><name>out</name></expr></argument>, <argument><expr><name>targetVersion</name></expr></argument>, <argument><expr><call><name>shouldCompressConnection</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>out</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+                    <decl_stmt><decl><type><name>DataInputStream</name></type> <name>in</name> <init>= <expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getInputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>int</name></type> <name>maxTargetVersion</name> <init>= <expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>targetVersion</name> &gt; <name>maxTargetVersion</name></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Target max version is {}; will reconnect with that version"</expr></argument>, <argument><expr><name>maxTargetVersion</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>setVersion</name><argument_list>(<argument><expr><call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>maxTargetVersion</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name>disconnect</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <return>return <expr>false</expr>;</return>
+                    }</block></then></if>
+
+                    <if>if <condition>(<expr><name>targetVersion</name> &lt; <name>maxTargetVersion</name> &amp;&amp; <name>targetVersion</name> &lt; <name><name>MessagingService</name>.<name>current_version</name></name></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Detected higher max version {} (using {}); will reconnect when queued messages are done"</expr></argument>,
+                                     <argument><expr><name>maxTargetVersion</name></expr></argument>, <argument><expr><name>targetVersion</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>setVersion</name><argument_list>(<argument><expr><call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>current_version</name></name></expr></argument>, <argument><expr><name>maxTargetVersion</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name>softCloseSocket</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+
+                    <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>current_version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>serialize</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>out</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><call><name>shouldCompressConnection</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>out</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Upgrading OutputStream to be compressed"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>out</name> = new <call><name>DataOutputStream</name><argument_list>(<argument><expr>new <call><name>SnappyOutputStream</name><argument_list>(<argument><expr>new <call><name>BufferedOutputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getOutputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                }</block></then></if>
+
+                <return>return <expr>true</expr>;</return>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><name>socket</name> = null</expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"unable to connect to " + <call><name><name>poolReference</name>.<name>endPoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr><name>OPEN_RETRY_DELAY</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e1</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e1</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></catch></try>
+        }</block></while>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>expireMessages</name><parameter_list>()</parameter_list>
+    <block>{
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>QueuedMessage</name></type> <name>qm</name> <init>= <expr><call><name><name>backlog</name>.<name>peek</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>qm</name> == null || <name><name>qm</name>.<name>timestamp</name></name> &gt;= <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <call><name><name>qm</name>.<name>message</name>.<name>getTimeout</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <break>break;</break></then></if>
+
+            <decl_stmt><decl><type><name>QueuedMessage</name></type> <name>qm2</name> <init>= <expr><call><name><name>backlog</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>qm2</name> != <name>qm</name></expr>)</condition><then>
+            <block>{
+                <comment type="line">// sending thread switched queues.  add this entry (from the "new" backlog)</comment>
+                <comment type="line">// at the end of the active queue, which keeps it in the same position relative to the other entries</comment>
+                <comment type="line">// without having to contend with other clients for the head-of-backlog lock.</comment>
+                <if>if <condition>(<expr><name>qm2</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>active</name>.<name>add</name></name><argument_list>(<argument><expr><name>qm2</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <break>break;</break>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name><name>dropped</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></while>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>QueuedMessage</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>MessageOut</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>message</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>id</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>long</name></type> <name>timestamp</name></decl>;</decl_stmt>
+
+        <constructor><name>QueuedMessage</name><parameter_list>(<param><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>message</name></name> = <name>message</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>id</name></name> = <name>id</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>timestamp</name></name> = <name>timestamp</name></expr>;</expr_stmt>
+        }</block></constructor>
+    }</block></class>
+}</block></class>
+</unit>

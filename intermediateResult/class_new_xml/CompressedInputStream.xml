@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\streaming\compress\CompressedInputStream.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>compress</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Iterator</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>zip</name>.<name>CRC32</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>zip</name>.<name>Checksum</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterators</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>primitives</name>.<name>Ints</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>compress</name>.<name>CompressionMetadata</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>WrappedRunnable</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * InputStream which reads data from underlining source with given {@link CompressionInfo}.
+ */</comment>
+<class><specifier>public</specifier> class <name>CompressedInputStream</name> <super><extends>extends <name>InputStream</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>CompressionInfo</name></type> <name>info</name></decl>;</decl_stmt>
+    <comment type="line">// chunk buffer</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>BlockingQueue</name><argument_list>&lt;<argument><name>byte</name><index>[]</index></argument>&gt;</argument_list></name></type> <name>dataBuffer</name></decl>;</decl_stmt>
+
+    <comment type="line">// uncompressed bytes</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>byte</name><index>[]</index></type> <name>buffer</name></decl>;</decl_stmt>
+
+    <comment type="line">// offset from the beginning of the buffer</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>long</name></type> <name>bufferOffset</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+    <comment type="line">// current position in stream</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>current</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+    <comment type="line">// number of bytes in the buffer that are actually valid</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>int</name></type> <name>validBufferBytes</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Checksum</name></type> <name>checksum</name> <init>= <expr>new <call><name>CRC32</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// raw checksum bytes</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>byte</name><index>[]</index></type> <name>checksumBytes</name> <init>= <expr>new <name><name>byte</name><index>[<expr>4</expr>]</index></name></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>totalCompressedBytesRead</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * @param source Input source to read compressed data from
+     * @param info Compression info
+     */</comment>
+    <constructor><specifier>public</specifier> <name>CompressedInputStream</name><parameter_list>(<param><decl><type><name>InputStream</name></type> <name>source</name></decl></param>, <param><decl><type><name>CompressionInfo</name></type> <name>info</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>info</name></name> = <name>info</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>buffer</name></name> = new <name><name>byte</name><index>[<expr><call><name><name>info</name>.<name>parameters</name>.<name>chunkLength</name></name><argument_list>()</argument_list></call></expr>]</index></name></expr>;</expr_stmt>
+        <comment type="line">// buffer is limited to store up to 1024 chunks</comment>
+        <expr_stmt><expr><name><name>this</name>.<name>dataBuffer</name></name> = new <call><name><name>ArrayBlockingQueue</name><argument_list>&lt;<argument><name><name>byte</name><index>[]</index></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name><name>info</name>.<name>chunks</name>.<name>length</name></name></expr></argument>, <argument><expr>1024</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr>new <call><name>Thread</name><argument_list>(<argument><expr>new <call><name>Reader</name><argument_list>(<argument><expr><name>source</name></expr></argument>, <argument><expr><name>info</name></expr></argument>, <argument><expr><name>dataBuffer</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call>.<call><name>start</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>read</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>current</name> &gt;= <name>bufferOffset</name> + <name><name>buffer</name>.<name>length</name></name> || <name>validBufferBytes</name> == -1</expr>)</condition><then>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name>decompress</name><argument_list>(<argument><expr><call><name><name>dataBuffer</name>.<name>take</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>EOFException</name><argument_list>(<argument><expr>"No chunk available"</expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></then></if>
+
+        <assert>assert <expr><name>current</name> &gt;= <name>bufferOffset</name> &amp;&amp; <name>current</name> &lt; <name>bufferOffset</name> + <name>validBufferBytes</name></expr>;</assert>
+
+        <return>return <expr>((<name>int</name>) <name><name>buffer</name><index>[<expr><call>(<name>int</name>) <argument_list>(<argument><expr><name>current</name>++ - <name>bufferOffset</name></expr></argument>)</argument_list></call></expr>]</index></name>) &amp; 0xff</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>position</name><parameter_list>(<param><decl><type><name>long</name></type> <name>position</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>position</name> &gt;= <name>current</name> : "stream can only read forward."</expr>;</assert>
+        <expr_stmt><expr><name>current</name> = <name>position</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>decompress</name><parameter_list>(<param><decl><type><name><name>byte</name><index>[]</index></name></type> <name>compressed</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// uncompress</comment>
+        <expr_stmt><expr><name>validBufferBytes</name> = <call><name><name>info</name>.<name>parameters</name>.<name>sstableCompressor</name>.<name>uncompress</name></name><argument_list>(<argument><expr><name>compressed</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name><name>compressed</name>.<name>length</name></name> - <name><name>checksumBytes</name>.<name>length</name></name></expr></argument>, <argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>totalCompressedBytesRead</name> += <name><name>compressed</name>.<name>length</name></name></expr>;</expr_stmt>
+
+        <comment type="line">// validate crc randomly</comment>
+        <if>if <condition>(<expr><call><name><name>info</name>.<name>parameters</name>.<name>getCrcCheckChance</name></name><argument_list>()</argument_list></call> &gt; <call><name><name>FBUtilities</name>.<name>threadLocalRandom</name></name><argument_list>()</argument_list></call>.<call><name>nextDouble</name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>checksum</name>.<name>update</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name>validBufferBytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>System</name>.<name>arraycopy</name></name><argument_list>(<argument><expr><name>compressed</name></expr></argument>, <argument><expr><name><name>compressed</name>.<name>length</name></name> - <name><name>checksumBytes</name>.<name>length</name></name></expr></argument>, <argument><expr><name>checksumBytes</name></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><name><name>checksumBytes</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>Ints</name>.<name>fromByteArray</name></name><argument_list>(<argument><expr><name>checksumBytes</name></expr></argument>)</argument_list></call> != (<name>int</name>) <call><name><name>checksum</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"CRC unmatched"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <comment type="line">// reset checksum object back to the original (blank) state</comment>
+            <expr_stmt><expr><call><name><name>checksum</name>.<name>reset</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <comment type="line">// buffer offset is always aligned</comment>
+        <expr_stmt><expr><name>bufferOffset</name> = <name>current</name> &amp; ~(<name><name>buffer</name>.<name>length</name></name> - 1)</expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getTotalCompressedBytesRead</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>totalCompressedBytesRead</name></expr>;</return>
+    }</block></function>
+
+    <class><specifier>static</specifier> class <name>Reader</name> <super><extends>extends <name>WrappedRunnable</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>InputStream</name></type> <name>source</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name><name>CompressionMetadata</name>.<name>Chunk</name></name></argument>&gt;</argument_list></name></type> <name>chunks</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>BlockingQueue</name><argument_list>&lt;<argument><name>byte</name><index>[]</index></argument>&gt;</argument_list></name></type> <name>dataBuffer</name></decl>;</decl_stmt>
+
+        <constructor><name>Reader</name><parameter_list>(<param><decl><type><name>InputStream</name></type> <name>source</name></decl></param>, <param><decl><type><name>CompressionInfo</name></type> <name>info</name></decl></param>, <param><decl><type><name><name>BlockingQueue</name><argument_list>&lt;<argument><name><name>byte</name><index>[]</index></name></argument>&gt;</argument_list></name></type> <name>dataBuffer</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>source</name></name> = <name>source</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>chunks</name></name> = <call><name><name>Iterators</name>.<name>forArray</name></name><argument_list>(<argument><expr><name><name>info</name>.<name>chunks</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>dataBuffer</name></name> = <name>dataBuffer</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>protected</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>compressedWithCRC</name></decl>;</decl_stmt>
+            <while>while <condition>(<expr><call><name><name>chunks</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <block>{
+                <decl_stmt><decl><type><name><name>CompressionMetadata</name>.<name>Chunk</name></name></type> <name>chunk</name> <init>= <expr><call><name><name>chunks</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <decl_stmt><decl><type><name>int</name></type> <name>readLength</name> <init>= <expr><name><name>chunk</name>.<name>length</name></name> + 4</expr></init></decl>;</decl_stmt> <comment type="line">// read with CRC</comment>
+                <expr_stmt><expr><name>compressedWithCRC</name> = new <name><name>byte</name><index>[<expr><name>readLength</name></expr>]</index></name></expr>;</expr_stmt>
+
+                <decl_stmt><decl><type><name>int</name></type> <name>bufferRead</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <while>while <condition>(<expr><name>bufferRead</name> &lt; <name>readLength</name></expr>)</condition>
+                    <expr_stmt><expr><name>bufferRead</name> += <call><name><name>source</name>.<name>read</name></name><argument_list>(<argument><expr><name>compressedWithCRC</name></expr></argument>, <argument><expr><name>bufferRead</name></expr></argument>, <argument><expr><name>readLength</name> - <name>bufferRead</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></while>
+                <expr_stmt><expr><call><name><name>dataBuffer</name>.<name>put</name></name><argument_list>(<argument><expr><name>compressedWithCRC</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></while>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

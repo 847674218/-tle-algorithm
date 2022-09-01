@@ -1,0 +1,59 @@
+private void describeKeySpace(String keySpaceName, KsDef metadata) throws TException
+    {
+        NodeProbe probe = sessionState.getNodeProbe();
+
+        // getting compaction manager MBean to displaying index building information
+        CompactionManagerMBean compactionManagerMBean = (probe == null) ? null : probe.getCompactionManagerProxy();
+
+        // Describe and display
+        sessionState.out.println("Keyspace: " + keySpaceName + ":");
+        try
+        {
+            KsDef ks_def;
+            ks_def = metadata == null ? thriftClient.describe_keyspace(keySpaceName) : metadata;
+            sessionState.out.println("  Replication Strategy: " + ks_def.strategy_class);
+
+            sessionState.out.println("  Durable Writes: " + ks_def.durable_writes);
+
+            Map<String, String> options = ks_def.strategy_options;
+            sessionState.out.println("    Options: [" + ((options == null) ? "" : FBUtilities.toString(options)) + "]");
+
+            sessionState.out.println("  Column Families:");
+
+            Collections.sort(ks_def.cf_defs, new CfDefNamesComparator());
+
+            for (CfDef cf_def : ks_def.cf_defs)
+                describeColumnFamily(ks_def, cf_def, probe);
+
+            // compaction manager information
+            if (compactionManagerMBean != null)
+            {
+                for (Map<String, String> info : compactionManagerMBean.getCompactions())
+                {
+                    // if ongoing compaction type is index build
+                    if (info.get("taskType").equals(OperationType.INDEX_BUILD.toString()))
+                        continue;
+                    sessionState.out.printf("%nCurrently building index %s, completed %d of %d bytes.%n",
+                                            info.get("columnfamily"),
+                                            info.get("bytesComplete"),
+                                            info.get("totalBytes"));
+                }
+            }
+
+            // closing JMX connection
+            if (probe != null)
+                probe.close();
+        }
+        catch (InvalidRequestException e)
+        {
+            sessionState.out.println("Invalid request: " + e);
+        }
+        catch (NotFoundException e)
+        {
+            sessionState.out.println("Keyspace " + keySpaceName + " could not be found.");
+        }
+        catch (IOException e)
+        {
+            sessionState.out.println("Error while closing JMX connection: " + e.getMessage());
+        }
+    }

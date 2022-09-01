@@ -1,0 +1,36 @@
+private Token getTokenBound(Bound b, List<ByteBuffer> variables, IPartitioner<?> p) throws InvalidRequestException
+    {
+        assert onToken;
+
+        Restriction keyRestriction = keyRestrictions[0];
+        Term t = keyRestriction.isEquality()
+               ? keyRestriction.eqValues.get(0)
+               : keyRestriction.bound(b);
+
+        if (t == null)
+            return p.getMinimumToken();
+
+        if (t.getType() == Term.Type.STRING && !t.isToken)
+        {
+            try
+            {
+                String text = t.getText();
+                p.getTokenFactory().validate(text);
+                return p.getTokenFactory().fromString(text);
+            }
+            catch (ConfigurationException e)
+            {
+                throw new InvalidRequestException(e.getMessage());
+            }
+        }
+
+        assert t.isToken;
+        ColumnNameBuilder builder = cfDef.getKeyNameBuilder();
+        // We know all keyRestriction must be set
+        for (CFDefinition.Name name : cfDef.keys.values())
+        {
+            Restriction r = keyRestrictions[name.position];
+            builder.add(r.isEquality() ? r.eqValues.get(0) : r.bound(b), Relation.Type.EQ, variables);
+        }
+        return p.getToken(builder.build());
+    }

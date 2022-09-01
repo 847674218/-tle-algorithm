@@ -1,0 +1,103 @@
+public ParsedStatement.Prepared prepare() throws InvalidRequestException
+        {
+            try
+            {
+                // Column family name
+                if (!columnFamily().matches("\\w+"))
+                    throw new InvalidRequestException(String.format("\"%s\" is not a valid column family name (must be alphanumeric character only: [0-9A-Za-z]+)", columnFamily()));
+                if (columnFamily().length() > Schema.NAME_LENGTH)
+                    throw new InvalidRequestException(String.format("Column family names shouldn't be more than %s characters long (got \"%s\")", Schema.NAME_LENGTH, columnFamily()));
+
+                for (Multiset.Entry<ColumnIdentifier> entry : definedNames.entrySet())
+                    if (entry.getCount() > 1)
+                        throw new InvalidRequestException(String.format("Multiple definition of identifier %s", entry.getElement()));
+
+                properties.validate();
+
+                CreateColumnFamilyStatement stmt = new CreateColumnFamilyStatement(cfName, properties);
+                stmt.setBoundTerms(getBoundsTerms());
+                for (Map.Entry<ColumnIdentifier, String> entry : definitions.entrySet())
+                {
+                    AbstractType<?> type = CFPropDefs.parseType(entry.getValue());
+                    stmt.columns.put(entry.getKey(), type); // we'll remove what is not a column below
+                }
+
+                // Ensure that exactly one key has been specified.
+                if (keyAliases.size() == 0)
+                    throw new InvalidRequestException("You must specify a PRIMARY KEY");
+                else if (keyAliases.size() > 1)
+                    throw new InvalidRequestException("You may only specify one PRIMARY KEY");
+
+                stmt.keyAlias = keyAliases.get(0).key;
+                stmt.keyValidator = getTypeAndRemove(stmt.columns, keyAliases.get(0));
+                if (stmt.keyValidator instanceof CounterColumnType)
+                    throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", stmt.keyAlias));
+
+                // Handle column aliases
+                if (columnAliases != null && !columnAliases.isEmpty())
+                {
+                    // If we use compact storage and have only one alias, it is a
+                    // standard "dynamic" CF, otherwise it's a composite
+                    if (useCompactStorage && columnAliases.size() == 1)
+                    {
+                        stmt.columnAliases.add(columnAliases.get(0).key);
+                        stmt.comparator = getTypeAndRemove(stmt.columns, columnAliases.get(0));
+                        if (stmt.comparator instanceof CounterColumnType)
+                            throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", stmt.columnAliases.get(0)));
+                    }
+                    else
+                    {
+                        List<AbstractType<?>> types = new ArrayList<AbstractType<?>>(columnAliases.size() + 1);
+                        for (ColumnIdentifier t : columnAliases)
+                        {
+                            stmt.columnAliases.add(t.key);
+
+                            AbstractType<?> type = getTypeAndRemove(stmt.columns, t);
+                            if (type instanceof CounterColumnType)
+                                throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", t.key));
+                            types.add(type);
+                        }
+                        // For sparse, we must add the last UTF8 component
+                        if (!useCompactStorage)
+                            types.add(CFDefinition.definitionType);
+
+                        if (types.isEmpty())
+                            throw new IllegalStateException("Nonsensical empty parameter list for CompositeType");
+                        stmt.comparator = CompositeType.getInstance(types);
+                    }
+                }
+                else
+                {
+                    stmt.comparator = CFDefinition.definitionType;
+                }
+
+                if (useCompactStorage && !stmt.columnAliases.isEmpty())
+                {
+                    // There should be only one column definition remaining, which gives us the default validator.
+                    if (stmt.columns.isEmpty())
+                        throw new InvalidRequestException("COMPACT STORAGE requires one definition not part of the PRIMARY KEY, none found");
+                    if (stmt.columns.size() > 1)
+                        throw new InvalidRequestException(String.format("COMPACT STORAGE allows only one column not part of the PRIMARY KEY (got: %s)", StringUtils.join(stmt.columns.keySet(), ", ")));
+
+                    Map.Entry<ColumnIdentifier, AbstractType> lastEntry = stmt.columns.entrySet().iterator().next();
+                    stmt.defaultValidator = lastEntry.getValue();
+                    stmt.valueAlias = lastEntry.getKey().key;
+                    stmt.columns.remove(lastEntry.getKey());
+                }
+                else
+                {
+                    if (stmt.columns.isEmpty())
+                        throw new InvalidRequestException("No definition found that is not part of the PRIMARY KEY");
+
+                    // There is no way to insert/access a column that is not defined for non-compact
+                    // storage, so the actual validator don't matter much (except that we want to recognize counter CF as limitation apply to them).
+                    stmt.defaultValidator = (stmt.columns.values().iterator().next() instanceof CounterColumnType) ? CounterColumnType.instance : CFDefinition.definitionType;
+                }
+
+                return new ParsedStatement.Prepared(stmt);
+            }
+            catch (ConfigurationException e)
+            {
+                throw new InvalidRequestException(e.getMessage());
+            }
+        }

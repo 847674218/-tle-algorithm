@@ -1,0 +1,491 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\columniterator\IndexedSliceReader.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>columniterator</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayDeque</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Deque</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>AbstractIterator</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamily</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DecoratedKey</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DeletionInfo</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>OnDiskAtom</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowIndexEntry</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>ColumnSlice</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>CorruptSSTableException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>IndexHelper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>IndexHelper</name>.<name>IndexInfo</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileDataInput</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileMark</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * This is a reader that finds the block for a starting column and returns blocks before/after it for each next call.
+ * This function assumes that the CF is sorted by name and exploits the name index.
+ */</comment>
+<class>class <name>IndexedSliceReader</name> <super><extends>extends <name><name>AbstractIterator</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name></extends> <implements>implements <name>OnDiskAtomIterator</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ColumnFamily</name></type> <name>emptyColumnFamily</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>SSTableReader</name></type> <name>sstable</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>IndexHelper</name>.<name>IndexInfo</name></name></argument>&gt;</argument_list></name></type> <name>indexes</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>FileDataInput</name></type> <name>originalInput</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>FileDataInput</name></type> <name>file</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>boolean</name></type> <name>reversed</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ColumnSlice</name><index>[]</index></type> <name>slices</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>BlockFetcher</name></type> <name>fetcher</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Deque</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name></type> <name>blockColumns</name> <init>= <expr>new <call><name><name>ArrayDeque</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * This slice reader assumes that slices are sorted correctly, e.g. that for forward lookup slices are in
+     * lexicographic order of start elements and that for reverse lookup they are in reverse lexicographic order of
+     * finish (reverse start) elements. i.e. forward: [a,b],[d,e],[g,h] reverse: [h,g],[e,d],[b,a]. This reader also
+     * assumes that validation has been performed in terms of intervals (no overlapping intervals).
+     */</comment>
+    <constructor><specifier>public</specifier> <name>IndexedSliceReader</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>sstable</name></decl></param>, <param><decl><type><name>RowIndexEntry</name></type> <name>indexEntry</name></decl></param>, <param><decl><type><name>FileDataInput</name></type> <name>input</name></decl></param>, <param><decl><type><name><name>ColumnSlice</name><index>[]</index></name></type> <name>slices</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>reversed</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>sstable</name></name> = <name>sstable</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>originalInput</name></name> = <name>input</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>reversed</name></name> = <name>reversed</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>slices</name></name> = <name>slices</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>comparator</name></name> = <name><name>sstable</name>.<name>metadata</name>.<name>comparator</name></name></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <if>if <condition>(<expr><name><name>sstable</name>.<name>descriptor</name>.<name>version</name>.<name>hasPromotedIndexes</name></name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name><name>this</name>.<name>indexes</name></name> = <call><name><name>indexEntry</name>.<name>columnsIndex</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>indexes</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name>setToRowStart</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>indexEntry</name></expr></argument>, <argument><expr><name>input</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name><name>this</name>.<name>emptyColumnFamily</name></name> = <call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>metadata</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>emptyColumnFamily</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>DeletionInfo</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserializeFromSSTable</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>fetcher</name> = new <call><name>SimpleBlockFetcher</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><name><name>this</name>.<name>emptyColumnFamily</name></name> = <call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>metadata</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>emptyColumnFamily</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>indexEntry</name>.<name>deletionInfo</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>fetcher</name> = new <call><name>IndexedBlockFetcher</name><argument_list>(<argument><expr><name><name>indexEntry</name>.<name>position</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name>setToRowStart</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>indexEntry</name></expr></argument>, <argument><expr><name>input</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>IndexHelper</name>.<name>skipBloomFilter</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>indexes</name></name> = <call><name><name>IndexHelper</name>.<name>deserializeIndex</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>this</name>.<name>emptyColumnFamily</name></name> = <call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>metadata</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>emptyColumnFamily</name>.<name>delete</name></name><argument_list>(<argument><expr><call><name><name>DeletionInfo</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserializeFromSSTable</name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>fetcher</name> = <call><name><name>indexes</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call>
+                        ? new <call><name>SimpleBlockFetcher</name><argument_list>()</argument_list></call>
+                        : new <call><name>IndexedBlockFetcher</name><argument_list>(<argument><expr><call><name><name>file</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> + 4</expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// We still have the column count to</comment>
+                                                                              <comment type="line">// skip to get the basePosition</comment>
+            }</block></else></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>sstable</name>.<name>markSuspect</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name><name>file</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Sets the seek position to the start of the row for column scanning.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>setToRowStart</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>reader</name></decl></param>, <param><decl><type><name>RowIndexEntry</name></type> <name>indexEntry</name></decl></param>, <param><decl><type><name>FileDataInput</name></type> <name>input</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>input</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>file</name></name> = <call><name><name>sstable</name>.<name>getFileDataInput</name></name><argument_list>(<argument><expr><name><name>indexEntry</name>.<name>position</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>file</name></name> = <name>input</name></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>input</name>.<name>seek</name></name><argument_list>(<argument><expr><name><name>indexEntry</name>.<name>position</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <expr_stmt><expr><call><name><name>sstable</name>.<name>decodeKey</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>readWithShortLength</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>SSTableReader</name>.<name>readRowSize</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ColumnFamily</name></type> <name>getColumnFamily</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>emptyColumnFamily</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>DecoratedKey</name></type> <name>getKey</name><parameter_list>()</parameter_list>
+    <block>{
+        <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>OnDiskAtom</name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+    <block>{
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>OnDiskAtom</name></type> <name>column</name> <init>= <expr><call><name><name>blockColumns</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>column</name> == null</expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr>!<call><name><name>fetcher</name>.<name>fetchMoreData</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <return>return <expr><call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return></then></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <return>return <expr><name>column</name></expr>;</return>
+            }</block></else></if>
+        }</block></while>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>originalInput</name> == null &amp;&amp; <name>file</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>file</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>addColumn</name><parameter_list>(<param><decl><type><name>OnDiskAtom</name></type> <name>col</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>reversed</name></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>blockColumns</name>.<name>addFirst</name></name><argument_list>(<argument><expr><name>col</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><call><name><name>blockColumns</name>.<name>addLast</name></name><argument_list>(<argument><expr><name>col</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>abstract</specifier> class <name>BlockFetcher</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>protected</specifier> <name>int</name></type> <name>currentSliceIdx</name></decl>;</decl_stmt>
+
+        <constructor><specifier>protected</specifier> <name>BlockFetcher</name><parameter_list>(<param><decl><type><name>int</name></type> <name>sliceIdx</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>currentSliceIdx</name></name> = <name>sliceIdx</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block">/*
+         * Return the smallest key selected by the current ColumnSlice.
+         */</comment>
+        <function><type><specifier>protected</specifier> <name>ByteBuffer</name></type> <name>currentStart</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>reversed</name> ? <name><name>slices</name><index>[<expr><name>currentSliceIdx</name></expr>]</index></name>.<name>finish</name> : <name><name>slices</name><index>[<expr><name>currentSliceIdx</name></expr>]</index></name>.<name>start</name></expr>;</return>
+        }</block></function>
+
+        <comment type="block">/*
+         * Return the biggest key selected by the current ColumnSlice.
+         */</comment>
+        <function><type><specifier>protected</specifier> <name>ByteBuffer</name></type> <name>currentFinish</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>reversed</name> ? <name><name>slices</name><index>[<expr><name>currentSliceIdx</name></expr>]</index></name>.<name>start</name> : <name><name>slices</name><index>[<expr><name>currentSliceIdx</name></expr>]</index></name>.<name>finish</name></expr>;</return>
+        }</block></function>
+
+        <function_decl><type><specifier>protected</specifier> <specifier>abstract</specifier> <name>boolean</name></type> <name>setNextSlice</name><parameter_list>()</parameter_list>;</function_decl>
+
+        <function_decl><type><specifier>protected</specifier> <specifier>abstract</specifier> <name>boolean</name></type> <name>fetchMoreData</name><parameter_list>()</parameter_list>;</function_decl>
+
+        <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>isColumnBeforeSliceStart</name><parameter_list>(<param><decl><type><name>OnDiskAtom</name></type> <name>column</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name>isBeforeSliceStart</name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>isBeforeSliceStart</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>start</name> <init>= <expr><call><name>currentStart</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>start</name>.<name>remaining</name></name><argument_list>()</argument_list></call> != 0 &amp;&amp; <call><name><name>comparator</name>.<name>compare</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>start</name></expr></argument>)</argument_list></call> &lt; 0</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>isColumnBeforeSliceFinish</name><parameter_list>(<param><decl><type><name>OnDiskAtom</name></type> <name>column</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>finish</name> <init>= <expr><call><name>currentFinish</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>finish</name>.<name>remaining</name></name><argument_list>()</argument_list></call> == 0 || <call><name><name>comparator</name>.<name>compare</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>finish</name></expr></argument>)</argument_list></call> &lt;= 0</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>isAfterSliceFinish</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>name</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>finish</name> <init>= <expr><call><name>currentFinish</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>finish</name>.<name>remaining</name></name><argument_list>()</argument_list></call> != 0 &amp;&amp; <call><name><name>comparator</name>.<name>compare</name></name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>finish</name></expr></argument>)</argument_list></call> &gt; 0</expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> class <name>IndexedBlockFetcher</name> <super><extends>extends <name>BlockFetcher</name></extends></super>
+    <block>{
+        <comment type="line">// where this row starts</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>long</name></type> <name>basePosition</name></decl>;</decl_stmt>
+
+        <comment type="line">// the index entry for the next block to deserialize</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>nextIndexIdx</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// index of the last block we've read from disk;</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>lastDeserializedBlock</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// For reversed, keep columns at the beginning of the last deserialized block that</comment>
+        <comment type="line">// may still match a slice</comment>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Deque</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name></type> <name>prefetched</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>IndexedBlockFetcher</name><parameter_list>(<param><decl><type><name>long</name></type> <name>basePosition</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr>-1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>basePosition</name></name> = <name>basePosition</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>prefetched</name></name> = <name>reversed</name> ? new <call><name><name>ArrayDeque</name><argument_list>&lt;<argument><name>OnDiskAtom</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call> : null</expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>setNextSlice</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>setNextSlice</name><parameter_list>()</parameter_list>
+        <block>{
+            <while>while <condition>(<expr>++<name>currentSliceIdx</name> &lt; <name><name>slices</name>.<name>length</name></name></expr>)</condition>
+            <block>{
+                <expr_stmt><expr><name>nextIndexIdx</name> = <call><name><name>IndexHelper</name>.<name>indexFor</name></name><argument_list>(<argument><expr><name><name>slices</name><index>[<expr><name>currentSliceIdx</name></expr>]</index></name>.<name>start</name></expr></argument>, <argument><expr><name>indexes</name></expr></argument>, <argument><expr><name>comparator</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>, <argument><expr><name>nextIndexIdx</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name><name>nextIndexIdx</name> <argument_list>&lt; <argument>0 || <name>nextIndexIdx</name></argument> &gt;</argument_list></name>= <call><name><name>indexes</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <comment type="line">// no index block for that slice</comment>
+                    <continue>continue;</continue></then></if>
+
+                <comment type="line">// Check if we can exclude this slice entirely from the index</comment>
+                <decl_stmt><decl><type><name>IndexInfo</name></type> <name>info</name> <init>= <expr><call><name><name>indexes</name>.<name>get</name></name><argument_list>(<argument><expr><name>nextIndexIdx</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>reversed</name></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr>!<call><name>isBeforeSliceStart</name><argument_list>(<argument><expr><name><name>info</name>.<name>lastName</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <return>return <expr>true</expr>;</return></then></if>
+                }</block></then>
+                <else>else
+                <block>{
+                    <if>if <condition>(<expr>!<call><name>isAfterSliceFinish</name><argument_list>(<argument><expr><name><name>info</name>.<name>firstName</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <return>return <expr>true</expr>;</return></then></if>
+                }</block></else></if>
+            }</block></while>
+            <expr_stmt><expr><name>nextIndexIdx</name> = -1</expr>;</expr_stmt>
+            <return>return <expr>false</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>hasMoreSlice</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>currentSliceIdx</name> &lt; <name><name>slices</name>.<name>length</name></name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>fetchMoreData</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr>!<call><name>hasMoreSlice</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+
+            <comment type="line">// If we read blocks in reversed disk order, we may have columns from the previous block to handle.</comment>
+            <comment type="line">// Note that prefetched keeps columns in reversed disk order.</comment>
+            <if>if <condition>(<expr><name>reversed</name> &amp;&amp; !<call><name><name>prefetched</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>boolean</name></type> <name>gotSome</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+                <comment type="line">// Avoids some comparison when we know it's not useful</comment>
+                <decl_stmt><decl><type><name>boolean</name></type> <name>inSlice</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+                <decl_stmt><decl><type><name>OnDiskAtom</name></type> <name>prefetchedCol</name></decl>;</decl_stmt>
+                <while>while <condition>(<expr>(<name>prefetchedCol</name> = <call><name><name>prefetched</name>.<name>peek</name></name><argument_list>()</argument_list></call> ) != null</expr>)</condition>
+                <block>{
+                    <comment type="line">// col is before slice, we update the slice</comment>
+                    <if>if <condition>(<expr><call><name>isColumnBeforeSliceStart</name><argument_list>(<argument><expr><name>prefetchedCol</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><name>inSlice</name> = false</expr>;</expr_stmt>
+                        <if>if <condition>(<expr>!<call><name>setNextSlice</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                            <return>return <expr>false</expr>;</return></then></if>
+                    }</block></then>
+                    <comment type="line">// col is within slice, all columns</comment>
+                    <comment type="line">// (we go in reverse, so as soon as we are in a slice, no need to check</comment>
+                    <comment type="line">// we're after the slice until we change slice)</comment>
+                    <else>else <if>if <condition>(<expr><name>inSlice</name> || <call><name>isColumnBeforeSliceFinish</name><argument_list>(<argument><expr><name>prefetchedCol</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>blockColumns</name>.<name>addLast</name></name><argument_list>(<argument><expr><call><name><name>prefetched</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>gotSome</name> = true</expr>;</expr_stmt>
+                        <expr_stmt><expr><name>inSlice</name> = true</expr>;</expr_stmt>
+                    }</block></then>
+                    <comment type="line">// if col is after slice, ignore</comment>
+                    <else>else
+                    <block>{
+                        <expr_stmt><expr><call><name><name>prefetched</name>.<name>poll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    }</block></else></if></else></if>
+                }</block></while>
+                <if>if <condition>(<expr><name>gotSome</name></expr>)</condition><then>
+                    <return>return <expr>true</expr>;</return></then></if>
+            }</block></then></if>
+            <try>try
+            <block>{
+                <return>return <expr><call><name>getNextBlock</name><argument_list>()</argument_list></call></expr>;</return>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>CorruptSSTableException</name><argument_list>(<argument><expr><name>e</name></expr></argument>, <argument><expr><call><name><name>file</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>boolean</name></type> <name>getNextBlock</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <if>if <condition>(<expr><name>lastDeserializedBlock</name> == <name>nextIndexIdx</name></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name>reversed</name></expr>)</condition><then>
+                    <expr_stmt><expr><name>nextIndexIdx</name>--</expr>;</expr_stmt></then>
+                <else>else
+                    <expr_stmt><expr><name>nextIndexIdx</name>++</expr>;</expr_stmt></else></if>
+            }</block></then></if>
+            <expr_stmt><expr><name>lastDeserializedBlock</name> = <name>nextIndexIdx</name></expr>;</expr_stmt>
+
+            <comment type="line">// Are we done?</comment>
+            <if>if <condition>(<expr><name><name>lastDeserializedBlock</name> <argument_list>&lt; <argument>0 || <name>lastDeserializedBlock</name></argument> &gt;</argument_list></name>= <call><name><name>indexes</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+
+            <decl_stmt><decl><type><name>IndexInfo</name></type> <name>currentIndex</name> <init>= <expr><call><name><name>indexes</name>.<name>get</name></name><argument_list>(<argument><expr><name>lastDeserializedBlock</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="block">/* seek to the correct offset to the data, and calculate the data size */</comment>
+            <decl_stmt><decl><type><name>long</name></type> <name>positionToSeek</name> <init>= <expr><name>basePosition</name> + <name><name>currentIndex</name>.<name>offset</name></name></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// With new promoted indexes, our first seek in the data file will happen at that point.</comment>
+            <if>if <condition>(<expr><name>file</name> == null</expr>)</condition><then>
+                <expr_stmt><expr><name>file</name> = <name>originalInput</name> == null ? <call><name><name>sstable</name>.<name>getFileDataInput</name></name><argument_list>(<argument><expr><name>positionToSeek</name></expr></argument>)</argument_list></call> : <name>originalInput</name></expr>;</expr_stmt></then></if>
+
+            <decl_stmt><decl><type><name><name>OnDiskAtom</name>.<name>Serializer</name></name></type> <name>atomSerializer</name> <init>= <expr><call><name><name>emptyColumnFamily</name>.<name>getOnDiskSerializer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>file</name>.<name>seek</name></name><argument_list>(<argument><expr><name>positionToSeek</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>FileMark</name></type> <name>mark</name> <init>= <expr><call><name><name>file</name>.<name>mark</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// We remenber when we are whithin a slice to avoid some comparison</comment>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>inSlice</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// scan from index start</comment>
+            <decl_stmt><decl><type><name>OnDiskAtom</name></type> <name>column</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <while>while <condition>(<expr><call><name><name>file</name>.<name>bytesPastMark</name></name><argument_list>(<argument><expr><name>mark</name></expr></argument>)</argument_list></call> &lt; <name><name>currentIndex</name>.<name>width</name></name></expr>)</condition>
+            <block>{
+                <comment type="line">// Only fetch a new column if we haven't dealt with the previous one.</comment>
+                <if>if <condition>(<expr><name>column</name> == null</expr>)</condition><then>
+                    <expr_stmt><expr><name>column</name> = <call><name><name>atomSerializer</name>.<name>deserializeFromSSTable</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <comment type="line">// col is before slice</comment>
+                <comment type="line">// (If in slice, don't bother checking that until we change slice)</comment>
+                <if>if <condition>(<expr>!<name>inSlice</name> &amp;&amp; <call><name>isColumnBeforeSliceStart</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><name>reversed</name></expr>)</condition><then>
+                    <block>{
+                        <comment type="line">// the next slice select columns that are before the current one, so it may</comment>
+                        <comment type="line">// match this column, so keep it around.</comment>
+                        <expr_stmt><expr><call><name><name>prefetched</name>.<name>addFirst</name></name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                    <expr_stmt><expr><name>column</name> = null</expr>;</expr_stmt>
+                }</block></then>
+                <comment type="line">// col is within slice</comment>
+                <else>else <if>if <condition>(<expr><call><name>isColumnBeforeSliceFinish</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>inSlice</name> = true</expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>addColumn</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>column</name> = null</expr>;</expr_stmt>
+                }</block></then>
+                <comment type="line">// col is after slice.</comment>
+                <else>else
+                <block>{
+                    <comment type="line">// When reading forward, if we hit a column that sorts after the current slice, it means we're done with this slice.</comment>
+                    <comment type="line">// For reversed, this may either mean that we're done with the current slice, or that we need to read the previous</comment>
+                    <comment type="line">// index block. However, we can be sure that we are in the first case though (the current slice is done) if the first</comment>
+                    <comment type="line">// columns of the block were not part of the current slice, i.e. if we have columns in prefetched.</comment>
+                    <if>if <condition>(<expr><name>reversed</name> &amp;&amp; <call><name><name>prefetched</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <break>break;</break></then></if>
+
+                    <if>if <condition>(<expr>!<call><name>setNextSlice</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <break>break;</break></then></if>
+
+                    <expr_stmt><expr><name>inSlice</name> = false</expr>;</expr_stmt>
+
+                    <comment type="line">// The next index block now corresponds to the first block that may have columns for the newly set slice.</comment>
+                    <comment type="line">// So if it's different from the current block, we're done with this block. And in that case, we know</comment>
+                    <comment type="line">// that our prefetched columns won't match.</comment>
+                    <if>if <condition>(<expr><name>nextIndexIdx</name> != <name>lastDeserializedBlock</name></expr>)</condition><then>
+                    <block>{
+                        <if>if <condition>(<expr><name>reversed</name></expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>prefetched</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+                        <break>break;</break>
+                    }</block></then></if>
+
+                    <comment type="line">// Even if the next slice may have column in this blocks, if we're reversed, those columns have been</comment>
+                    <comment type="line">// prefetched and we're done with that block</comment>
+                    <if>if <condition>(<expr><name>reversed</name></expr>)</condition><then>
+                        <break>break;</break></then></if>
+
+                    <comment type="line">// otherwise, we will deal with that column at the next iteration</comment>
+                }</block></else></if></else></if>
+            }</block></while>
+            <return>return <expr>true</expr>;</return>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> class <name>SimpleBlockFetcher</name> <super><extends>extends <name>BlockFetcher</name></extends></super>
+    <block>{
+        <constructor><specifier>public</specifier> <name>SimpleBlockFetcher</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <comment type="line">// Since we have to deserialize in order and will read all slices might as well reverse the slices and</comment>
+            <comment type="line">// behave as if it was not reversed</comment>
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>reversed</name> ? <name><name>slices</name>.<name>length</name></name> - 1 : 0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// We remenber when we are whithin a slice to avoid some comparison</comment>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>inSlice</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><name><name>OnDiskAtom</name>.<name>Serializer</name></name></type> <name>atomSerializer</name> <init>= <expr><call><name><name>emptyColumnFamily</name>.<name>getOnDiskSerializer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>columns</name> <init>= <expr><call><name><name>file</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>columns</name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <block>{
+                <decl_stmt><decl><type><name>OnDiskAtom</name></type> <name>column</name> <init>= <expr><call><name><name>atomSerializer</name>.<name>deserializeFromSSTable</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>, <argument><expr><name><name>sstable</name>.<name>descriptor</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <comment type="line">// col is before slice</comment>
+                <comment type="line">// (If in slice, don't bother checking that until we change slice)</comment>
+                <if>if <condition>(<expr>!<name>inSlice</name> &amp;&amp; <call><name>isColumnBeforeSliceStart</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <comment type="line">// col is within slice</comment>
+                <if>if <condition>(<expr><call><name>isColumnBeforeSliceFinish</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><name>inSlice</name> = true</expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>addColumn</name><argument_list>(<argument><expr><name>column</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <comment type="line">// col is after slice. more slices?</comment>
+                <else>else
+                <block>{
+                    <expr_stmt><expr><name>inSlice</name> = false</expr>;</expr_stmt>
+                    <if>if <condition>(<expr>!<call><name>setNextSlice</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <break>break;</break></then></if>
+                }</block></else></if>
+            }</block></for>
+        }</block></constructor>
+
+        <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>setNextSlice</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>reversed</name></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name>currentSliceIdx</name> &lt;= 0</expr>)</condition><then>
+                    <return>return <expr>false</expr>;</return></then></if>
+
+                <expr_stmt><expr><name>currentSliceIdx</name>--</expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <if>if <condition>(<expr><name>currentSliceIdx</name> &gt;= <name><name>slices</name>.<name>length</name></name> - 1</expr>)</condition><then>
+                    <return>return <expr>false</expr>;</return></then></if>
+
+                <expr_stmt><expr><name>currentSliceIdx</name>++</expr>;</expr_stmt>
+            }</block></else></if>
+            <return>return <expr>true</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>boolean</name></type> <name>fetchMoreData</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>false</expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

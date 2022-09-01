@@ -1,0 +1,66 @@
+private List<ColumnDef> getCFColumnMetaFromTree(CfDef cfDef, Tree meta)
+    {
+        // this list will be returned
+        List<ColumnDef> columnDefinitions = new ArrayList<ColumnDef>();
+
+        // each child node is a ^(HASH ...)
+        for (int i = 0; i < meta.getChildCount(); i++)
+        {
+            Tree metaHash = meta.getChild(i);
+
+            ColumnDef columnDefinition = new ColumnDef();
+
+            // each child node is ^(PAIR $key $value)
+            for (int j = 0; j < metaHash.getChildCount(); j++)
+            {
+                Tree metaPair = metaHash.getChild(j);
+
+                // current $key
+                String metaKey = CliUtils.unescapeSQLString(metaPair.getChild(0).getText());
+                // current $value
+                String metaVal = CliUtils.unescapeSQLString(metaPair.getChild(1).getText());
+
+                if (metaKey.equals("column_name"))
+                {
+                    if (cfDef.column_type.equals("Super"))
+                        columnDefinition.setName(subColumnNameAsByteArray(metaVal, cfDef));
+                    else
+                        columnDefinition.setName(columnNameAsByteArray(metaVal, cfDef));
+                }
+                else if (metaKey.equals("validation_class"))
+                {
+                    columnDefinition.setValidation_class(metaVal);
+                }
+                else if (metaKey.equals("index_type"))
+                {
+                    columnDefinition.setIndex_type(getIndexTypeFromString(metaVal));
+                }
+                else if (metaKey.equals("index_options"))
+                {
+                    columnDefinition.setIndex_options(getStrategyOptionsFromTree(metaPair.getChild(1)));
+                }
+                else if (metaKey.equals("index_name"))
+                {
+                    columnDefinition.setIndex_name(metaVal);
+                }
+                else
+                {
+                    throw new RuntimeException("Unsupported column_metadata pair given => " + metaKey + ": " + metaVal);
+                }
+            }
+
+            // validating columnDef structure, 'name' and 'validation_class' must be set
+            try
+            {
+                columnDefinition.validate();
+            }
+            catch (TException e)
+            {
+                throw new RuntimeException(e);
+            }
+
+            columnDefinitions.add(columnDefinition);
+        }
+
+        return columnDefinitions;
+    }

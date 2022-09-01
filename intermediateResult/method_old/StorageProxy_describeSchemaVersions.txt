@@ -1,0 +1,77 @@
+public static Map<String, List<String>> describeSchemaVersions()
+    {
+        final String myVersion = Schema.instance.getVersion().toString();
+        final Map<InetAddress, UUID> versions = new ConcurrentHashMap<InetAddress, UUID>();
+        final Set<InetAddress> liveHosts = Gossiper.instance.getLiveMembers();
+        final CountDownLatch latch = new CountDownLatch(liveHosts.size());
+
+        IAsyncCallback cb = new IAsyncCallback()
+        {
+            public void response(Message message)
+            {
+                // record the response from the remote node.
+                logger.debug("Received schema check response from {}", message.getFrom().getHostAddress());
+                UUID theirVersion = UUID.fromString(new String(message.getMessageBody()));
+                versions.put(message.getFrom(), theirVersion);
+                latch.countDown();
+            }
+
+            public boolean isLatencyForSnitch()
+            {
+                return false;
+            }
+        };
+        // an empty message acts as a request to the SchemaCheckVerbHandler.
+        for (InetAddress endpoint : liveHosts)
+        {
+            Message message = new Message(FBUtilities.getBroadcastAddress(),
+                                          StorageService.Verb.SCHEMA_CHECK,
+                                          ArrayUtils.EMPTY_BYTE_ARRAY,
+                                          Gossiper.instance.getVersion(endpoint));
+            MessagingService.instance().sendRR(message, endpoint, cb);
+        }
+
+        try
+        {
+            // wait for as long as possible. timeout-1s if possible.
+            latch.await(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
+        }
+        catch (InterruptedException ex)
+        {
+            throw new AssertionError("This latch shouldn't have been interrupted.");
+        }
+
+        logger.debug("My version is {}", myVersion);
+
+        // maps versions to hosts that are on that version.
+        Map<String, List<String>> results = new HashMap<String, List<String>>();
+        Iterable<InetAddress> allHosts = Iterables.concat(Gossiper.instance.getLiveMembers(), Gossiper.instance.getUnreachableMembers());
+        for (InetAddress host : allHosts)
+        {
+            UUID version = versions.get(host);
+            String stringVersion = version == null ? UNREACHABLE : version.toString();
+            List<String> hosts = results.get(stringVersion);
+            if (hosts == null)
+            {
+                hosts = new ArrayList<String>();
+                results.put(stringVersion, hosts);
+            }
+            hosts.add(host.getHostAddress());
+        }
+
+        // we're done: the results map is ready to return to the client.  the rest is just debug logging:
+        if (results.get(UNREACHABLE) != null)
+            logger.debug("Hosts not in agreement. Didn't get a response from everybody: {}", StringUtils.join(results.get(UNREACHABLE), ","));
+        for (Map.Entry<String, List<String>> entry : results.entrySet())
+        {
+            // check for version disagreement. log the hosts that don't agree.
+            if (entry.getKey().equals(UNREACHABLE) || entry.getKey().equals(myVersion))
+                continue;
+            for (String host : entry.getValue())
+                logger.debug("{} disagrees ({})", host, entry.getKey());
+        }
+        if (results.size() == 1)
+            logger.debug("Schemas are in agreement.");
+
+        return results;
+    }

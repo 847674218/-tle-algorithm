@@ -1,0 +1,28 @@
+private IDiskAtomFilter makeFilter(List<ByteBuffer> variables)
+    throws InvalidRequestException
+    {
+        if (isColumnRange())
+        {
+            // For sparse, we used to ask for 'defined columns' * 'asked limit' (where defined columns includes the row marker)
+            // to account for the grouping of columns.
+            // Since that doesn't work for maps/sets/lists, we now use the compositesToGroup option of SliceQueryFilter.
+            // But we must preserve backward compatibility too (for mixed version cluster that is).
+            int multiplier = cfDef.isCompact ? 1 : (cfDef.metadata.size() + 1);
+            int toGroup = cfDef.isCompact ? -1 : cfDef.columns.size();
+            ColumnSlice slice = new ColumnSlice(getRequestedBound(Bound.START, variables),
+                                                getRequestedBound(Bound.END, variables));
+            SliceQueryFilter filter = new SliceQueryFilter(new ColumnSlice[]{slice},
+                                                           isReversed,
+                                                           getLimit(),
+                                                           toGroup,
+                                                           multiplier);
+            QueryProcessor.validateSliceFilter(cfDef.cfm, filter);
+            return filter;
+        }
+        else
+        {
+            SortedSet<ByteBuffer> columnNames = getRequestedColumns(variables);
+            QueryProcessor.validateColumnNames(columnNames);
+            return new NamesQueryFilter(columnNames, true);
+        }
+    }

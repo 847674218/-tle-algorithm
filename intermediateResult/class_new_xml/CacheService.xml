@@ -1,0 +1,421 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\service\CacheService.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataInputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collection</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Set</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Callable</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutionException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>Future</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>MBeanServer</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>ObjectName</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>util</name>.<name>concurrent</name>.<name>Futures</name></name>;</import>
+<import>import <name><name>com</name>.<name>googlecode</name>.<name>concurrentlinkedhashmap</name>.<name>EntryWeigher</name></name>;</import>
+<import>import <name><name>org</name>.<name>github</name>.<name>jamm</name>.<name>MemoryMeter</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cache</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cache</name>.<name>AutoSavingCache</name>.<name>CacheSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>Stage</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>StageManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamily</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>DecoratedKey</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>RowIndexEntry</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryPath</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>Descriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name>.<name>Operator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>CacheService</name> <super><implements>implements <name>CacheServiceMBean</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CacheService</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>MBEAN_NAME</name> <init>= <expr>"org.apache.cassandra.db:type=Caches"</expr></init></decl>;</decl_stmt>
+
+    <enum><specifier>public</specifier> <specifier>static</specifier> enum <name>CacheType</name>
+    <block>{
+        <decl><name>KEY_CACHE</name><argument_list>(<argument><expr>"KeyCache"</expr></argument>)</argument_list></decl>,
+        <decl><name>ROW_CACHE</name><argument_list>(<argument><expr>"RowCache"</expr></argument>)</argument_list></decl>;
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>name</name></decl>;</decl_stmt>
+
+        <constructor><specifier>private</specifier> <name>CacheType</name><parameter_list>(<param><decl><type><name>String</name></type> <name>typeName</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>name</name> = <name>typeName</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>name</name></expr>;</return>
+        }</block></function>
+    }</block></enum>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>CacheService</name></type> <name>instance</name> <init>= <expr>new <call><name>CacheService</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>AutoSavingCache</name><argument_list>&lt;<argument><name>KeyCacheKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></type> <name>keyCache</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>AutoSavingCache</name><argument_list>&lt;<argument><name>RowCacheKey</name></argument>, <argument><name>IRowCacheEntry</name></argument>&gt;</argument_list></name></type> <name>rowCache</name></decl>;</decl_stmt>
+
+    <constructor><specifier>private</specifier> <name>CacheService</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>MBeanServer</name></type> <name>mbs</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>mbs</name>.<name>registerMBean</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name>MBEAN_NAME</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><name>keyCache</name> = <call><name>initKeyCache</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>rowCache</name> = <call><name>initRowCache</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * We can use Weighers.singleton() because Long can't be leaking memory
+     * @return auto saving cache object
+     */</comment>
+    <function><type><specifier>private</specifier> <name><name>AutoSavingCache</name><argument_list>&lt;<argument><name>KeyCacheKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></type> <name>initKeyCache</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Initializing key cache with capacity of {} MBs."</expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getKeyCacheSizeInMB</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>keyCacheInMemoryCapacity</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getKeyCacheSizeInMB</name></name><argument_list>()</argument_list></call> * 1024 * 1024</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// as values are constant size we can use singleton weigher</comment>
+        <comment type="line">// where 48 = 40 bytes (average size of the key) + 8 bytes (size of value)</comment>
+        <decl_stmt><decl><type><name><name>ICache</name><argument_list>&lt;<argument><name>KeyCacheKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></type> <name>kc</name></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>MemoryMeter</name>.<name>isInitialized</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>kc</name> = <call><name><name>ConcurrentLinkedHashCache</name>.<name>create</name></name><argument_list>(<argument><expr><name>keyCacheInMemoryCapacity</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"MemoryMeter uninitialized (jamm not specified as java agent); KeyCache size in JVM Heap will not be calculated accurately. " +
+                        "Usually this means cassandra-env.sh disabled jamm because you are using a buggy JRE; upgrade to the Sun JRE instead"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="block">/* We don't know the overhead size because memory meter is not enabled. */</comment>
+            <decl_stmt><decl><type><name><name>EntryWeigher</name><argument_list>&lt;<argument><name>KeyCacheKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></type> <name>weigher</name> <init>= <expr>new <class><super><name><name>EntryWeigher</name><argument_list>&lt;<argument><name>KeyCacheKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+            <block>{
+                <function><type><specifier>public</specifier> <name>int</name></type> <name>weightOf</name><parameter_list>(<param><decl><type><name>KeyCacheKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>RowIndexEntry</name></type> <name>entry</name></decl></param>)</parameter_list>
+                <block>{
+                    <return>return <expr><name><name>key</name>.<name>key</name>.<name>length</name></name> + <call><name><name>entry</name>.<name>serializedSize</name></name><argument_list>()</argument_list></call></expr>;</return>
+                }</block></function>
+            }</block></class></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>kc</name> = <call><name><name>ConcurrentLinkedHashCache</name>.<name>create</name></name><argument_list>(<argument><expr><name>keyCacheInMemoryCapacity</name></expr></argument>, <argument><expr><name>weigher</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <decl_stmt><decl><type><name><name>AutoSavingCache</name><argument_list>&lt;<argument><name>KeyCacheKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></type> <name>keyCache</name> <init>= <expr>new <call><name><name>AutoSavingCache</name><argument_list>&lt;<argument><name>KeyCacheKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>kc</name></expr></argument>, <argument><expr><name><name>CacheType</name>.<name>KEY_CACHE</name></name></expr></argument>, <argument><expr>new <call><name>KeyCacheSerializer</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>keyCacheKeysToSave</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getKeyCacheKeysToSave</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Scheduling key cache save to each {} seconds (going to save {} keys)."</expr></argument>,
+                <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getKeyCacheSavePeriod</name></name><argument_list>()</argument_list></call></expr></argument>,
+                    <argument><expr><name>keyCacheKeysToSave</name> == <name><name>Integer</name>.<name>MAX_VALUE</name></name> ? "all" : <name>keyCacheKeysToSave</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>keyCache</name>.<name>scheduleSaving</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getKeyCacheSavePeriod</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>keyCacheKeysToSave</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <return>return <expr><name>keyCache</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return initialized row cache
+     */</comment>
+    <function><type><specifier>private</specifier> <name><name>AutoSavingCache</name><argument_list>&lt;<argument><name>RowCacheKey</name></argument>, <argument><name>IRowCacheEntry</name></argument>&gt;</argument_list></name></type> <name>initRowCache</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Initializing row cache with capacity of {} MBs and provider {}"</expr></argument>,
+                    <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheSizeInMB</name></name><argument_list>()</argument_list></call></expr></argument>,
+                    <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheProvider</name></name><argument_list>()</argument_list></call>.<call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>rowCacheInMemoryCapacity</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheSizeInMB</name></name><argument_list>()</argument_list></call> * 1024 * 1024</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// cache object</comment>
+        <decl_stmt><decl><type><name><name>ICache</name><argument_list>&lt;<argument><name>RowCacheKey</name></argument>, <argument><name>IRowCacheEntry</name></argument>&gt;</argument_list></name></type> <name>rc</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheProvider</name></name><argument_list>()</argument_list></call>.<call><name>create</name><argument_list>(<argument><expr><name>rowCacheInMemoryCapacity</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>AutoSavingCache</name><argument_list>&lt;<argument><name>RowCacheKey</name></argument>, <argument><name>IRowCacheEntry</name></argument>&gt;</argument_list></name></type> <name>rowCache</name> <init>= <expr>new <call><name><name>AutoSavingCache</name><argument_list>&lt;<argument><name>RowCacheKey</name></argument>, <argument><name>IRowCacheEntry</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>rc</name></expr></argument>, <argument><expr><name><name>CacheType</name>.<name>ROW_CACHE</name></name></expr></argument>, <argument><expr>new <call><name>RowCacheSerializer</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>rowCacheKeysToSave</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheKeysToSave</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Scheduling row cache save to each {} seconds (going to save {} keys)."</expr></argument>,
+                <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheSavePeriod</name></name><argument_list>()</argument_list></call></expr></argument>,
+                    <argument><expr><name>rowCacheKeysToSave</name> == <name><name>Integer</name>.<name>MAX_VALUE</name></name> ? "all" : <name>rowCacheKeysToSave</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>rowCache</name>.<name>scheduleSaving</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheSavePeriod</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>rowCacheKeysToSave</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <return>return <expr><name>rowCache</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getKeyCacheHits</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>keyCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name><name>hits</name>.<name>count</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getRowCacheHits</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>rowCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name><name>hits</name>.<name>count</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getKeyCacheRequests</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>keyCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name><name>requests</name>.<name>count</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getRowCacheRequests</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>rowCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name><name>requests</name>.<name>count</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>double</name></type> <name>getKeyCacheRecentHitRate</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>keyCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name>getRecentHitRate</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>double</name></type> <name>getRowCacheRecentHitRate</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>rowCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name>getRecentHitRate</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getRowCacheSavePeriodInSeconds</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheSavePeriod</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setRowCacheSavePeriodInSeconds</name><parameter_list>(<param><decl><type><name>int</name></type> <name>rcspis</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>rcspis</name> &lt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"RowCacheSavePeriodInSeconds must be non-negative."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>setRowCacheSavePeriod</name></name><argument_list>(<argument><expr><name>rcspis</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>rowCache</name>.<name>scheduleSaving</name></name><argument_list>(<argument><expr><name>rcspis</name></expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheKeysToSave</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getKeyCacheSavePeriodInSeconds</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>DatabaseDescriptor</name>.<name>getKeyCacheSavePeriod</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setKeyCacheSavePeriodInSeconds</name><parameter_list>(<param><decl><type><name>int</name></type> <name>kcspis</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>kcspis</name> &lt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"KeyCacheSavePeriodInSeconds must be non-negative."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>setKeyCacheSavePeriod</name></name><argument_list>(<argument><expr><name>kcspis</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>keyCache</name>.<name>scheduleSaving</name></name><argument_list>(<argument><expr><name>kcspis</name></expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getKeyCacheKeysToSave</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>invalidateKeyCache</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>keyCache</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>invalidateRowCache</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>rowCache</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getRowCacheCapacityInBytes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>rowCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name><name>capacity</name>.<name>value</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getRowCacheCapacityInMB</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getRowCacheCapacityInBytes</name><argument_list>()</argument_list></call> / 1024 / 1024</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setRowCacheCapacityInMB</name><parameter_list>(<param><decl><type><name>long</name></type> <name>capacity</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>capacity</name> &lt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"capacity should not be negative."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <expr_stmt><expr><call><name><name>rowCache</name>.<name>setCapacity</name></name><argument_list>(<argument><expr><name>capacity</name> * 1024 * 1024</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getKeyCacheCapacityInBytes</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>keyCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name><name>capacity</name>.<name>value</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getKeyCacheCapacityInMB</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getKeyCacheCapacityInBytes</name><argument_list>()</argument_list></call> / 1024 / 1024</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setKeyCacheCapacityInMB</name><parameter_list>(<param><decl><type><name>long</name></type> <name>capacity</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>capacity</name> &lt; 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"capacity should not be negative."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>long</name></type> <name>weightedCapacity</name> <init>= <expr><name>capacity</name> * 1024 * 1024</expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>keyCache</name>.<name>setCapacity</name></name><argument_list>(<argument><expr><call><name><name>MemoryMeter</name>.<name>isInitialized</name></name><argument_list>()</argument_list></call> ? <name>weightedCapacity</name> : (<name>weightedCapacity</name> / 48)</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getRowCacheSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>rowCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name><name>size</name>.<name>value</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getRowCacheEntries</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>rowCache</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getKeyCacheSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>keyCache</name>.<name>getMetrics</name></name><argument_list>()</argument_list></call>.<call><name><name>size</name>.<name>value</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getKeyCacheEntries</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>keyCache</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>reduceCacheSizes</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>reduceRowCacheSize</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>reduceKeyCacheSize</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>reduceRowCacheSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>rowCache</name>.<name>reduceCacheSize</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>reduceKeyCacheSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>keyCache</name>.<name>reduceCacheSize</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>saveCaches</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>futures</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>2</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"submitting cache saves"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>futures</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>keyCache</name>.<name>submitWrite</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getKeyCacheKeysToSave</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>futures</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>rowCache</name>.<name>submitWrite</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getRowCacheKeysToSave</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>waitOnFutures</name></name><argument_list>(<argument><expr><name>futures</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"cache saves completed"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <class><specifier>public</specifier> class <name>RowCacheSerializer</name> <super><implements>implements <name><name>CacheSerializer</name><argument_list>&lt;<argument><name>RowCacheKey</name></argument>, <argument><name>IRowCacheEntry</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>RowCacheKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>out</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>writeWithLength</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>, <argument><expr><name>out</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>Future</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>RowCacheKey</name></argument>, <argument><name>IRowCacheEntry</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInputStream</name></type> <name>in</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><specifier>final</specifier> <name>ByteBuffer</name></type> <name>buffer</name> <init>= <expr><call><name><name>ByteBufferUtil</name>.<name>readWithLength</name></name><argument_list>(<argument><expr><name>in</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>READ</name></name></expr></argument>)</argument_list></call>.<call><name>submit</name><argument_list>(<argument><expr>new <class><super><name><name>Callable</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>RowCacheKey</name></argument>, <argument><name>IRowCacheEntry</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+            <block>{
+                <function><type><specifier>public</specifier> <name><name>Pair</name><argument_list>&lt;<argument><name>RowCacheKey</name></argument>, <argument><name>IRowCacheEntry</name></argument>&gt;</argument_list></name></type> <name>call</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+                <block>{
+                    <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>key</name> <init>= <expr><call><name><name>cfs</name>.<name>partitioner</name>.<name>decorateKey</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>data</name> <init>= <expr><call><name><name>cfs</name>.<name>getTopLevelColumns</name></name><argument_list>(<argument><expr><call><name><name>QueryFilter</name>.<name>getIdentityFilter</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name><name>cfs</name>.<name>columnFamily</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MIN_VALUE</name></name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <return>return <expr><call><name><name>Pair</name>.<name>create</name></name><argument_list>(<argument><expr>new <call><name>RowCacheKey</name><argument_list>(<argument><expr><name><name>cfs</name>.<name>metadata</name>.<name>cfId</name></name></expr></argument>, <argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>(<name>IRowCacheEntry</name>) <name>data</name></expr></argument>)</argument_list></call></expr>;</return>
+                }</block></function>
+            }</block></class></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>load</name><parameter_list>(<param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>buffers</name></decl></param>, <param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list>
+        <block>{
+            <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>key</name> <range>: <expr><name>buffers</name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>dk</name> <init>= <expr><call><name><name>cfs</name>.<name>partitioner</name>.<name>decorateKey</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>data</name> <init>= <expr><call><name><name>cfs</name>.<name>getTopLevelColumns</name></name><argument_list>(<argument><expr><call><name><name>QueryFilter</name>.<name>getIdentityFilter</name></name><argument_list>(<argument><expr><name>dk</name></expr></argument>, <argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name><name>cfs</name>.<name>columnFamily</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MIN_VALUE</name></name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>rowCache</name>.<name>put</name></name><argument_list>(<argument><expr>new <call><name>RowCacheKey</name><argument_list>(<argument><expr><name><name>cfs</name>.<name>metadata</name>.<name>cfId</name></name></expr></argument>, <argument><expr><name>dk</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>data</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>public</specifier> class <name>KeyCacheSerializer</name> <super><implements>implements <name><name>CacheSerializer</name><argument_list>&lt;<argument><name>KeyCacheKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>KeyCacheKey</name></type> <name>key</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>out</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>RowIndexEntry</name></type> <name>entry</name> <init>= <expr><call><name><name>CacheService</name>.<name>instance</name>.<name>keyCache</name>.<name>get</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>entry</name> == null</expr>)</condition><then>
+                <return>return;</return></then></if>
+            <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>writeWithLength</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>, <argument><expr><name>out</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>Descriptor</name></type> <name>desc</name> <init>= <expr><name><name>key</name>.<name>desc</name></name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>desc</name>.<name>generation</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>out</name>.<name>writeBoolean</name></name><argument_list>(<argument><expr><name><name>desc</name>.<name>version</name>.<name>hasPromotedIndexes</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr>!<name><name>desc</name>.<name>version</name>.<name>hasPromotedIndexes</name></name></expr>)</condition><then>
+                <return>return;</return></then></if>
+            <expr_stmt><expr><call><name><name>RowIndexEntry</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>entry</name></expr></argument>, <argument><expr><name>out</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name><name>Future</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>KeyCacheKey</name></argument>, <argument><name>RowIndexEntry</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInputStream</name></type> <name>input</name></decl></param>, <param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>key</name> <init>= <expr><call><name><name>ByteBufferUtil</name>.<name>readWithLength</name></name><argument_list>(<argument><expr><name>input</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>generation</name> <init>= <expr><call><name><name>input</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>SSTableReader</name></type> <name>reader</name> <init>= <expr><call><name>findDesc</name><argument_list>(<argument><expr><name>generation</name></expr></argument>, <argument><expr><call><name><name>cfs</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>reader</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>RowIndexEntry</name>.<name>serializer</name>.<name>skipPromotedIndex</name></name><argument_list>(<argument><expr><name>input</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr>null</expr>;</return>
+            }</block></then></if>
+            <decl_stmt><decl><type><name>RowIndexEntry</name></type> <name>entry</name></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>input</name>.<name>readBoolean</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><name>entry</name> = <call><name><name>RowIndexEntry</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>input</name></expr></argument>, <argument><expr><name><name>reader</name>.<name>descriptor</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><name>entry</name> = <call><name><name>reader</name>.<name>getPosition</name></name><argument_list>(<argument><expr><call><name><name>reader</name>.<name>partitioner</name>.<name>decorateKey</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Operator</name>.<name>EQ</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+            <return>return <expr><call><name><name>Futures</name>.<name>immediateFuture</name></name><argument_list>(<argument><expr><call><name><name>Pair</name>.<name>create</name></name><argument_list>(<argument><expr>new <call><name>KeyCacheKey</name><argument_list>(<argument><expr><name><name>reader</name>.<name>descriptor</name></name></expr></argument>, <argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>entry</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name>SSTableReader</name></type> <name>findDesc</name><parameter_list>(<param><decl><type><name>int</name></type> <name>generation</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>collection</name></decl></param>)</parameter_list>
+        <block>{
+            <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>collection</name></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr><name><name>sstable</name>.<name>descriptor</name>.<name>generation</name></name> == <name>generation</name></expr>)</condition><then>
+                    <return>return <expr><name>sstable</name></expr>;</return></then></if>
+            }</block></for>
+            <return>return <expr>null</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>load</name><parameter_list>(<param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>buffers</name></decl></param>, <param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>)</parameter_list>
+        <block>{
+            <for>for (<init><decl><type><name>ByteBuffer</name></type> <name>key</name> <range>: <expr><name>buffers</name></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>dk</name> <init>= <expr><call><name><name>cfs</name>.<name>partitioner</name>.<name>decorateKey</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><call><name><name>cfs</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>RowIndexEntry</name></type> <name>entry</name> <init>= <expr><call><name><name>sstable</name>.<name>getPosition</name></name><argument_list>(<argument><expr><name>dk</name></expr></argument>, <argument><expr><name><name>Operator</name>.<name>EQ</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><name>entry</name> != null</expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>keyCache</name>.<name>put</name></name><argument_list>(<argument><expr>new <call><name>KeyCacheKey</name><argument_list>(<argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>, <argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>entry</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                }</block></for>
+            }</block></for>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

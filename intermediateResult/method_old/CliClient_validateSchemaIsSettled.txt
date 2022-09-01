@@ -1,0 +1,38 @@
+private void validateSchemaIsSettled(String currentVersionId)
+    {
+        sessionState.out.println("Waiting for schema agreement...");
+        Map<String, List<String>> versions = null;
+
+        long limit = System.currentTimeMillis() + sessionState.schema_mwt;
+        boolean inAgreement = false;
+        outer:
+        while (limit - System.currentTimeMillis() >= 0 && !inAgreement)
+        {
+            try
+            {
+                versions = thriftClient.describe_schema_versions(); // getting schema version for nodes of the ring
+            }
+            catch (Exception e)
+            {
+                sessionState.err.println((e instanceof InvalidRequestException) ? ((InvalidRequestException) e).getWhy() : e.getMessage());
+                continue;
+            }
+
+            for (String version : versions.keySet())
+            {
+                if (!version.equals(currentVersionId) && !version.equals(StorageProxy.UNREACHABLE))
+                    continue outer;
+            }
+            inAgreement = true;
+        }
+
+        if (versions.containsKey(StorageProxy.UNREACHABLE))
+            sessionState.err.printf("Warning: unreachable nodes %s", Joiner.on(", ").join(versions.get(StorageProxy.UNREACHABLE)));
+        if (!inAgreement)
+        {
+            sessionState.err.printf("The schema has not settled in %d seconds; further migrations are ill-advised until it does.%nVersions are %s%n",
+                                    sessionState.schema_mwt / 1000, FBUtilities.toString(versions));
+            System.exit(-1);
+        }
+        sessionState.out.println("... schemas agree across the cluster");
+    }

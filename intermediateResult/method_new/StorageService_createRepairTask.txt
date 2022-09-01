@@ -1,0 +1,55 @@
+private FutureTask<Object> createRepairTask(final int cmd, final String keyspace, final Collection<Range<Token>> ranges, final boolean isSequential, final boolean isLocal, final String... columnFamilies)
+    {
+        FutureTask<Object> task = new FutureTask<Object>(new WrappedRunnable()
+        {
+            protected void runMayThrow() throws Exception
+            {
+                String message = String.format("Starting repair command #%d, repairing %d ranges for keyspace %s", cmd, ranges.size(), keyspace);
+                logger.info(message);
+                sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.STARTED.ordinal()});
+
+                List<AntiEntropyService.RepairFuture> futures = new ArrayList<AntiEntropyService.RepairFuture>(ranges.size());
+                for (Range<Token> range : ranges)
+                {
+                    AntiEntropyService.RepairFuture future = forceTableRepair(range, keyspace, isSequential, isLocal, columnFamilies);
+                    if (future == null)
+                        continue;
+                    futures.add(future);
+                    // wait for a session to be done with its differencing before starting the next one
+                    try
+                    {
+                        future.session.differencingDone.await();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        message = "Interrupted while waiting for the differencing of repair session " + future.session + " to be done. Repair may be imprecise.";
+                        logger.error(message, e);
+                        sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.SESSION_FAILED.ordinal()});
+                    }
+                }
+                for (AntiEntropyService.RepairFuture future : futures)
+                {
+                    try
+                    {
+                        future.get();
+                        message = String.format("Repair session %s for range %s finished", future.session.getName(), future.session.getRange().toString());
+                        sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.SESSION_SUCCESS.ordinal()});
+                    }
+                    catch (ExecutionException e)
+                    {
+                        message = String.format("Repair session %s for range %s failed with error %s", future.session.getName(), future.session.getRange().toString(), e.getCause().getMessage());
+                        logger.error(message, e);
+                        sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.SESSION_FAILED.ordinal()});
+                    }
+                    catch (Exception e)
+                    {
+                        message = String.format("Repair session %s for range %s failed with error %s", future.session.getName(), future.session.getRange().toString(), e.getMessage());
+                        logger.error(message, e);
+                        sendNotification("repair", message, new int[]{cmd, AntiEntropyService.Status.SESSION_FAILED.ordinal()});
+                    }
+                }
+                sendNotification("repair", String.format("Repair command #%d finished", cmd), new int[]{cmd, AntiEntropyService.Status.FINISHED.ordinal()});
+            }
+        }, null);
+        return task;
+    }

@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\net\IncomingTcpConnection.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>Socket</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>Gossiper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FastByteArrayInputStream</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>IncomingStreamReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>StreamHeader</name></name>;</import>
+<import>import <name><name>org</name>.<name>xerial</name>.<name>snappy</name>.<name>SnappyInputStream</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>IncomingTcpConnection</name> <super><extends>extends <name>Thread</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>IncomingTcpConnection</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Socket</name></type> <name>socket</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <name>InetAddress</name></type> <name>from</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>IncomingTcpConnection</name><parameter_list>(<param><decl><type><name>Socket</name></type> <name>socket</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>socket</name> != null</expr>;</assert>
+        <expr_stmt><expr><name><name>this</name>.<name>socket</name></name> = <name>socket</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * A new connection will either stream or message for its entire lifetime: because streaming
+     * bypasses the InputStream implementations to use sendFile, we cannot begin buffering until
+     * we've determined the type of the connection.
+     */</comment>
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <comment type="line">// determine the connection type to decide whether to buffer</comment>
+            <decl_stmt><decl><type><name>DataInputStream</name></type> <name>in</name> <init>= <expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getInputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>validateMagic</name></name><argument_list>(<argument><expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>header</name> <init>= <expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>isStream</name> <init>= <expr><call><name><name>MessagingService</name>.<name>getBits</name></name><argument_list>(<argument><expr><name>header</name></expr></argument>, <argument><expr>3</expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call> == 1</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>version</name> <init>= <expr><call><name><name>MessagingService</name>.<name>getBits</name></name><argument_list>(<argument><expr><name>header</name></expr></argument>, <argument><expr>15</expr></argument>, <argument><expr>8</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Connection version {} from {}"</expr></argument>, <argument><expr><name>version</name></expr></argument>, <argument><expr><call><name><name>socket</name>.<name>getInetAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>isStream</name></expr>)</condition><then>
+                <expr_stmt><expr><call><name>handleStream</name><argument_list>(<argument><expr><name>in</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+                <expr_stmt><expr><call><name>handleLegacyVersion</name><argument_list>(<argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name>handleModernVersion</name><argument_list>(<argument><expr><name>version</name></expr></argument>, <argument><expr><name>header</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if></else></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>EOFException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"eof reading from socket; closing"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// connection will be reset so no need to throw an exception.</comment>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"IOException reading from socket; closing"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name>close</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>handleModernVersion</name><parameter_list>(<param><decl><type><name>int</name></type> <name>version</name></decl></param>, <param><decl><type><name>int</name></type> <name>header</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>DataOutputStream</name></type> <name>out</name> <init>= <expr>new <call><name>DataOutputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getOutputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>current_version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>DataInputStream</name></type> <name>in</name> <init>= <expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getInputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>maxVersion</name> <init>= <expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>from</name> = <call><name><name>CompactEndpointSerializationHelper</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>in</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>compressed</name> <init>= <expr><call><name><name>MessagingService</name>.<name>getBits</name></name><argument_list>(<argument><expr><name>header</name></expr></argument>, <argument><expr>2</expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call> == 1</expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>compressed</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Upgrading incoming connection to be compressed"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>in</name> = new <call><name>DataInputStream</name><argument_list>(<argument><expr>new <call><name>SnappyInputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getInputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name>in</name> = new <call><name>DataInputStream</name><argument_list>(<argument><expr>new <call><name>BufferedInputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getInputStream</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>4096</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Max version for {} is {}"</expr></argument>, <argument><expr><name>from</name></expr></argument>, <argument><expr><name>maxVersion</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>version</name> &gt; <name><name>MessagingService</name>.<name>current_version</name></name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// save the endpoint so gossip will reconnect to it</comment>
+            <expr_stmt><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>addSavedEndpoint</name></name><argument_list>(<argument><expr><name>from</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Received messages from newer protocol version {}. Ignoring"</expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>setVersion</name><argument_list>(<argument><expr><name>from</name></expr></argument>, <argument><expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>current_version</name></name></expr></argument>, <argument><expr><name>maxVersion</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"set version for {} to {}"</expr></argument>, <argument><expr><name>from</name></expr></argument>, <argument><expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>current_version</name></name></expr></argument>, <argument><expr><name>maxVersion</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// outbound side will reconnect if necessary to upgrade version</comment>
+
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>validateMagic</name></name><argument_list>(<argument><expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>receiveMessage</name><argument_list>(<argument><expr><name>in</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></while>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>handleLegacyVersion</name><parameter_list>(<param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>DataInputStream</name></type> <name>in</name> <init>= <expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr>new <call><name>BufferedInputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getInputStream</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>4096</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><name>from</name> = <call><name>receiveMessage</name><argument_list>(<argument><expr><name>in</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// why? see =&gt; CASSANDRA-4099</comment>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Version for {} is {}"</expr></argument>, <argument><expr><name>from</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>version</name> &gt; <name><name>MessagingService</name>.<name>current_version</name></name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// save the endpoint so gossip will reconnect to it</comment>
+            <expr_stmt><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>addSavedEndpoint</name></name><argument_list>(<argument><expr><name>from</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Received messages from newer protocol version. Ignoring"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+        <decl_stmt><decl><type><name>int</name></type> <name>lastVersion</name> <init>= <expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>setVersion</name><argument_list>(<argument><expr><name>from</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"set version for {} to {}"</expr></argument>, <argument><expr><name>from</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>lastVersion</name> &lt; <name>version</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"breaking outbound connections to force version upgrade"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getConnectionPool</name><argument_list>(<argument><expr><name>from</name></expr></argument>)</argument_list></call>.<call><name>resetToNewerVersion</name><argument_list>(<argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>validateMagic</name></name><argument_list>(<argument><expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>header</name> <init>= <expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// legacy protocol re-sends header for each message</comment>
+            <assert>assert <expr>!(<call><name><name>MessagingService</name>.<name>getBits</name></name><argument_list>(<argument><expr><name>header</name></expr></argument>, <argument><expr>3</expr></argument>, <argument><expr>1</expr></argument>)</argument_list></call> == 1) : "Non-stream connection cannot change to stream"</expr>;</assert>
+            <expr_stmt><expr><name>version</name> = <call><name><name>MessagingService</name>.<name>getBits</name></name><argument_list>(<argument><expr><name>header</name></expr></argument>, <argument><expr>15</expr></argument>, <argument><expr>8</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Version is now {}"</expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>receiveMessage</name><argument_list>(<argument><expr><name>in</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></while>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>handleStream</name><parameter_list>(<param><decl><type><name>DataInputStream</name></type> <name>input</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>version</name> == <name><name>MessagingService</name>.<name>current_version</name></name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>size</name> <init>= <expr><call><name><name>input</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>headerBytes</name> <init>= <expr>new <name><name>byte</name><index>[<expr><name>size</name></expr>]</index></name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>input</name>.<name>readFully</name></name><argument_list>(<argument><expr><name>headerBytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>stream</name><argument_list>(<argument><expr><call><name><name>StreamHeader</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr>new <call><name>FastByteArrayInputStream</name><argument_list>(<argument><expr><name>headerBytes</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>input</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <comment type="line">// streaming connections are per-session and have a fixed version.  we can't do anything with a wrong-version stream connection, so drop it.</comment>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Received stream using protocol version {} (my version {}). Terminating connection"</expr></argument>,
+                         <argument><expr><name>version</name></expr></argument>, <argument><expr><name><name>MessagingService</name>.<name>current_version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>InetAddress</name></type> <name>receiveMessage</name><parameter_list>(<param><decl><type><name>DataInputStream</name></type> <name>input</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>version</name> &lt; <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>input</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if> <comment type="line">// size of entire message. in 1.0+ this is just a placeholder</comment>
+
+        <decl_stmt><decl><type><name>String</name></type> <name>id</name> <init>= <expr><call><name><name>input</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>timestamp</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt><empty_stmt>;</empty_stmt>
+        <if>if <condition>(<expr><name>version</name> &gt;= <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+        <block>{
+            <comment type="line">// make sure to readInt, even if cross_node_to is not enabled</comment>
+            <decl_stmt><decl><type><name>int</name></type> <name>partial</name> <init>= <expr><call><name><name>input</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>hasCrossNodeTimeout</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><name>timestamp</name> = (<name>timestamp</name> &amp; 0xFFFFFFFF00000000L) | (((<name>partial</name> &amp; 0xFFFFFFFFL) &lt;&lt; 2) &gt;&gt; 2)</expr>;</expr_stmt></then></if>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>MessageIn</name></type> <name>message</name> <init>= <expr><call><name><name>MessageIn</name>.<name>read</name></name><argument_list>(<argument><expr><name>input</name></expr></argument>, <argument><expr><name>version</name></expr></argument>, <argument><expr><name>id</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>message</name> == null</expr>)</condition><then>
+        <block>{
+            <comment type="line">// callback expired; nothing to do</comment>
+            <return>return <expr>null</expr>;</return>
+        }</block></then></if>
+        <if>if <condition>(<expr><name>version</name> &lt;= <name><name>MessagingService</name>.<name>current_version</name></name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>receive</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Received connection from newer protocol version {}. Ignoring message"</expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <return>return <expr><name><name>message</name>.<name>from</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// reset version here, since we set when starting an incoming socket</comment>
+        <if>if <condition>(<expr><name>from</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>resetVersion</name><argument_list>(<argument><expr><name>from</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>socket</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"error closing socket"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>stream</name><parameter_list>(<param><decl><type><name>StreamHeader</name></type> <name>streamHeader</name></decl></param>, <param><decl><type><name>DataInputStream</name></type> <name>input</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr>new <call><name>IncomingStreamReader</name><argument_list>(<argument><expr><name>streamHeader</name></expr></argument>, <argument><expr><name>socket</name></expr></argument>)</argument_list></call>.<call><name>read</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+}</block></class>
+</unit>

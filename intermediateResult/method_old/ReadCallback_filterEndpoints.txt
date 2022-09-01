@@ -1,0 +1,35 @@
+private List<InetAddress> filterEndpoints(List<InetAddress> ep)
+    {
+        if (resolver instanceof RowDigestResolver)
+        {
+            assert command instanceof ReadCommand : command;
+            String table = ((RowDigestResolver) resolver).table;
+            String columnFamily = ((ReadCommand) command).getColumnFamilyName();
+            CFMetaData cfmd = Schema.instance.getTableMetaData(table).get(columnFamily);
+            double chance = FBUtilities.threadLocalRandom().nextDouble();
+
+            // if global repair then just return all the ep's
+            if (cfmd.getReadRepairChance() > chance)
+                return ep;
+
+            // if local repair then just return localDC ep's
+            if (cfmd.getDcLocalReadRepair() > chance)
+            {
+                List<InetAddress> local = Lists.newArrayList();
+                List<InetAddress> other = Lists.newArrayList();
+                for (InetAddress add : ep)
+                {
+                    if (snitch.getDatacenter(add).equals(localdc))
+                        local.add(add);
+                    else
+                        other.add(add);
+                }
+                // check if blockfor more than we have localep's
+                if (local.size() < blockfor)
+                    local.addAll(other.subList(0, Math.min(blockfor - local.size(), other.size())));
+                return local;
+            }
+        }
+        // we don't read repair on range scans
+        return ep.subList(0, Math.min(ep.size(), blockfor));
+    }

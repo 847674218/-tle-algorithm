@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\db\ReadCommand.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataInput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>IDiskAtomFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryPath</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IVersionedSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessageOut</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>IReadCommand</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>RowDataResolver</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>IFilter</name></name>;</import>
+
+
+<class><specifier>public</specifier> <specifier>abstract</specifier> class <name>ReadCommand</name> <super><implements>implements <name>IReadCommand</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>byte</name></type> <name>CMD_TYPE_GET_SLICE_BY_NAMES</name> <init>= <expr>1</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>byte</name></type> <name>CMD_TYPE_GET_SLICE</name> <init>= <expr>2</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>ReadCommandSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>ReadCommandSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <name><name>MessageOut</name><argument_list>&lt;<argument><name>ReadCommand</name></argument>&gt;</argument_list></name></type> <name>createMessage</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name><name>MessageOut</name><argument_list>&lt;<argument><name>ReadCommand</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>READ</name></name></expr></argument>, <argument><expr><name>this</name></expr></argument>, <argument><expr><name>serializer</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>QueryPath</name></type> <name>queryPath</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>String</name></type> <name>table</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>ByteBuffer</name></type> <name>key</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>isDigestQuery</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>byte</name></type> <name>commandType</name></decl>;</decl_stmt>
+
+    <constructor><specifier>protected</specifier> <name>ReadCommand</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name>QueryPath</name></type> <name>queryPath</name></decl></param>, <param><decl><type><name>byte</name></type> <name>cmdType</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>table</name></name> = <name>table</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>key</name></name> = <name>key</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>queryPath</name></name> = <name>queryPath</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>commandType</name></name> = <name>cmdType</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isDigestQuery</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>isDigestQuery</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setDigestQuery</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>isDigestQuery</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>isDigestQuery</name></name> = <name>isDigestQuery</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getColumnFamilyName</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>queryPath</name>.<name>columnFamilyName</name></name></expr>;</return>
+    }</block></function>
+
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>ReadCommand</name></type> <name>copy</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>Row</name></type> <name>getRow</name><parameter_list>(<param><decl><type><name>Table</name></type> <name>table</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>;</function_decl>
+
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>IDiskAtomFilter</name></type> <name>filter</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <function><type><specifier>protected</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getComparator</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ColumnFamily</name>.<name>getComparatorFor</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><call><name>getColumnFamilyName</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>queryPath</name>.<name>superColumnName</name></name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>getKeyspace</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>table</name></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// maybeGenerateRetryCommand is used to generate a retry for short reads</comment>
+    <function><type><specifier>public</specifier> <name>ReadCommand</name></type> <name>maybeGenerateRetryCommand</name><parameter_list>(<param><decl><type><name>RowDataResolver</name></type> <name>resolver</name></decl></param>, <param><decl><type><name>Row</name></type> <name>row</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>null</expr>;</return>
+    }</block></function>
+
+    <comment type="line">// maybeTrim removes columns from a response that is too long</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>maybeTrim</name><parameter_list>(<param><decl><type><name>Row</name></type> <name>row</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// noop</comment>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getTimeout</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>DatabaseDescriptor</name>.<name>getReadRpcTimeout</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+
+<class>class <name>ReadCommandSerializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>ReadCommand</name></argument>&gt;</argument_list></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>ReadCommand</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>CMD_SERIALIZER_MAP</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Byte</name></argument>, <argument><name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>ReadCommand</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <expr_stmt><expr>static
+    <block>{
+        <expr><call><name><name>CMD_SERIALIZER_MAP</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>ReadCommand</name>.<name>CMD_TYPE_GET_SLICE_BY_NAMES</name></name></expr></argument>, <argument><expr>new <call><name>SliceByNamesReadCommandSerializer</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;
+        <expr><call><name><name>CMD_SERIALIZER_MAP</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>ReadCommand</name>.<name>CMD_TYPE_GET_SLICE</name></name></expr></argument>, <argument><expr>new <call><name>SliceFromReadCommandSerializer</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;
+    }</block>
+
+
+    public <name>void</name> <call><name>serialize</name><argument_list>(<argument><expr><name>ReadCommand</name> <name>command</name></expr></argument>, <argument><expr><name>DataOutput</name> <name>dos</name></expr></argument>, <argument><expr><name>int</name> <name>version</name></expr></argument>)</argument_list></call> throws <name>IOException</name>
+    <block>{
+        <expr><call><name><name>dos</name>.<name>writeByte</name></name><argument_list>(<argument><expr><name><name>command</name>.<name>commandType</name></name></expr></argument>)</argument_list></call></expr>;
+        <expr><call><name><name>CMD_SERIALIZER_MAP</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>command</name>.<name>commandType</name></name></expr></argument>)</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><name>command</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;
+    }</block>
+
+    public <name>ReadCommand</name> <call><name>deserialize</name><argument_list>(<argument><expr><name>DataInput</name> <name>dis</name></expr></argument>, <argument><expr><name>int</name> <name>version</name></expr></argument>)</argument_list></call> throws <name>IOException</name>
+    <block>{
+        <expr><name>byte</name> <name>msgType</name> = <call><name><name>dis</name>.<name>readByte</name></name><argument_list>()</argument_list></call></expr>;
+        <return>return <expr><call><name><name>CMD_SERIALIZER_MAP</name>.<name>get</name></name><argument_list>(<argument><expr><name>msgType</name></expr></argument>)</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></expr></expr_stmt>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>ReadCommand</name></type> <name>command</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>1 + <call><name><name>CMD_SERIALIZER_MAP</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>command</name>.<name>commandType</name></name></expr></argument>)</argument_list></call>.<call><name>serializedSize</name><argument_list>(<argument><expr><name>command</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

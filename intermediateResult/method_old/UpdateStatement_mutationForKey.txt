@@ -1,0 +1,36 @@
+private IMutation mutationForKey(CFDefinition cfDef, ClientState clientState, ByteBuffer key, ColumnNameBuilder builder, List<ByteBuffer> variables)
+    throws InvalidRequestException
+    {
+        validateKey(key);
+        // if true we need to wrap RowMutation into CounterMutation
+        boolean hasCounterColumn = false;
+
+        QueryProcessor.validateKey(key);
+        RowMutation rm = new RowMutation(cfDef.cfm.ksName, key);
+        ColumnFamily cf = rm.addOrGet(cfDef.cfm.cfName);
+
+        if (cfDef.isCompact)
+        {
+            if (builder.componentCount() == 0)
+                throw new InvalidRequestException(String.format("Missing PRIMARY KEY part %s", cfDef.columns.values().iterator().next()));
+
+            Operation value = processedColumns.get(cfDef.value.name);
+            if (value == null)
+                throw new InvalidRequestException(String.format("Missing mandatory column %s", cfDef.value));
+            hasCounterColumn = addToMutation(clientState, cf, builder.build(), cfDef.value, value, variables);
+        }
+        else
+        {
+            for (CFDefinition.Name name : cfDef.metadata.values())
+            {
+                Operation value = processedColumns.get(name.name);
+                if (value == null)
+                    continue;
+
+                ByteBuffer colName = builder.copy().add(name.name.key).build();
+                hasCounterColumn |= addToMutation(clientState, cf, colName, name, value, variables);
+            }
+        }
+
+        return (hasCounterColumn) ? new CounterMutation(rm, getConsistencyLevel()) : rm;
+    }

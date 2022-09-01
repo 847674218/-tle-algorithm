@@ -1,0 +1,58 @@
+protected void stream() throws IOException
+    {
+        ByteBuffer headerBuffer = MessagingService.instance().constructStreamHeader(header, false, MessagingService.instance().getVersion(to));
+        // write header (this should not be compressed for compatibility with other messages)
+        output.write(ByteBufferUtil.getArray(headerBuffer));
+
+        if (header.file == null)
+            return;
+
+        // try to skip kernel page cache if possible
+        RandomAccessReader file = RandomAccessReader.open(new File(header.file.getFilename()), true);
+
+        // setting up data compression stream
+        compressedoutput = new LZFOutputStream(output);
+
+        StreamingMetrics.activeStreamsOutbound.inc();
+        try
+        {
+            long totalBytesTransferred = 0;
+            // stream each of the required sections of the file
+            for (Pair<Long, Long> section : header.file.sections)
+            {
+                // seek to the beginning of the section
+                file.seek(section.left);
+
+                // length of the section to stream
+                long length = section.right - section.left;
+                // tracks write progress
+                long bytesTransferred = 0;
+
+                while (bytesTransferred < length)
+                {
+                    long lastWrite = write(file, length, bytesTransferred);
+                    bytesTransferred += lastWrite;
+                    totalBytesTransferred += lastWrite;
+                    // store streaming progress
+                    header.file.progress += lastWrite;
+                }
+
+                // make sure that current section is send
+                compressedoutput.flush();
+
+                if (logger.isDebugEnabled())
+                    logger.debug("Bytes transferred " + bytesTransferred + "/" + header.file.size);
+            }
+            StreamingMetrics.totalOutgoingBytes.inc(totalBytesTransferred);
+            metrics.outgoingBytes.inc(totalBytesTransferred);
+            // receive reply confirmation
+            receiveReply();
+        }
+        finally
+        {
+            StreamingMetrics.activeStreamsOutbound.dec();
+
+            // no matter what happens close file
+            FileUtils.closeQuietly(file);
+        }
+    }

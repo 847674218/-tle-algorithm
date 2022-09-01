@@ -1,0 +1,75 @@
+private void executeDescribe(Tree statement) throws TException, InvalidRequestException, NotFoundException
+    {
+        if (!CliMain.isConnected())
+            return;
+
+        int argCount = statement.getChildCount();
+
+        if (keySpace == null && argCount == 0)
+        {
+            sessionState.out.println("Authenticate to a Keyspace, before using `describe` or `describe <column_family>`");
+            return;
+        }
+
+        KsDef currentKeySpace = null;
+        if (keySpace != null)
+        {
+            keyspacesMap.remove(keySpace);
+            currentKeySpace = getKSMetaData(keySpace);
+        }
+
+        if (argCount > 1) // in case somebody changes Cli grammar
+            throw new RuntimeException("`describe` command take maximum one argument. See `help describe;`");
+
+        if (argCount == 0)
+        {
+            if (currentKeySpace != null)
+            {
+                describeKeySpace(currentKeySpace.name, null);
+                return;
+            }
+
+            sessionState.out.println("Authenticate to a Keyspace, before using `describe` or `describe <column_family>`");
+        }
+        else if (argCount == 1)
+        {
+            // name of the keyspace or ColumnFamily
+            String entityName = statement.getChild(0).getText();
+
+            KsDef inputKsDef = CliUtils.getKeySpaceDef(entityName, thriftClient.describe_keyspaces());
+
+            if (inputKsDef == null && currentKeySpace == null)
+                throw new RuntimeException(String.format("Keyspace with name '%s' wasn't found, " +
+                                                         "to lookup ColumnFamily with that name, please, authorize to one " +
+                                                         "of the keyspaces first.", entityName));
+
+            CfDef inputCfDef = (inputKsDef == null)
+                    ? getCfDef(currentKeySpace, entityName)
+                    : null;  // no need to lookup CfDef if we know that it was keyspace
+
+            if (inputKsDef != null)
+            {
+                describeKeySpace(inputKsDef.name, inputKsDef);
+            }
+            else if (inputCfDef != null)
+            {
+                NodeProbe probe = sessionState.getNodeProbe();
+
+                try
+                {
+                    describeColumnFamily(currentKeySpace, inputCfDef, probe);
+
+                    if (probe != null)
+                        probe.close();
+                }
+                catch (IOException e)
+                {
+                    sessionState.out.println("Error while closing JMX connection: " + e.getMessage());
+                }
+            }
+            else
+            {
+                sessionState.out.println("Sorry, no Keyspace nor ColumnFamily was found with name: " + entityName);
+            }
+        }
+    }

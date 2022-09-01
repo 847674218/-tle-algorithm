@@ -1,0 +1,43 @@
+private AbstractBounds<RowPosition> getKeyBounds(List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        IPartitioner<?> p = StorageService.getPartitioner();
+        AbstractBounds<RowPosition> bounds;
+
+        if (onToken)
+        {
+            Token startToken = getTokenBound(Bound.START, variables, p);
+            Token endToken = getTokenBound(Bound.END, variables, p);
+
+            RowPosition start = includeKeyBound(Bound.START) ? startToken.minKeyBound() : startToken.maxKeyBound();
+            RowPosition end = includeKeyBound(Bound.END) ? endToken.maxKeyBound() : endToken.minKeyBound();
+            bounds = new Range<RowPosition>(start, end);
+        }
+        else
+        {
+            ByteBuffer startKeyBytes = getKeyBound(Bound.START, variables);
+            ByteBuffer finishKeyBytes = getKeyBound(Bound.END, variables);
+
+            RowPosition startKey = RowPosition.forKey(startKeyBytes, p);
+            RowPosition finishKey = RowPosition.forKey(finishKeyBytes, p);
+            if (startKey.compareTo(finishKey) > 0 && !finishKey.isMinimum(p))
+            {
+                if (p.preservesOrder())
+                    throw new InvalidRequestException("Start key must sort before (or equal to) finish key in your partitioner!");
+                else
+                    throw new InvalidRequestException("Start key sorts after end key. This is not allowed; you probably should not specify end key at all under random partitioner");
+            }
+            if (includeKeyBound(Bound.START))
+            {
+                bounds = includeKeyBound(Bound.END)
+                    ? new Bounds<RowPosition>(startKey, finishKey)
+                    : new IncludingExcludingBounds<RowPosition>(startKey, finishKey);
+            }
+            else
+            {
+                bounds = includeKeyBound(Bound.END)
+                    ? new Range<RowPosition>(startKey, finishKey)
+                    : new ExcludingBounds<RowPosition>(startKey, finishKey);
+            }
+        }
+        return bounds;
+    }

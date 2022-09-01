@@ -1,0 +1,66 @@
+public ByteBuffer removeOldShards(ByteBuffer context, int gcBefore)
+    {
+        int hlength = headerLength(context);
+        ContextState state = new ContextState(context, hlength);
+        int removedShards = 0;
+        int removedDelta = 0;
+        while (state.hasRemaining())
+        {
+            long clock = state.getClock();
+            if (clock < 0)
+            {
+                // We should never have a count != 0 when clock < 0.
+                // We know that previous may have created those situation though, so:
+                //   * for delta shard: we throw an exception since computeOldShardMerger should
+                //     have corrected that situation
+                //   * for non-delta shard: it is a much more crappier situation because there is
+                //     not much we can do since we are not responsible for that shard. So we simply
+                //     ignore the shard.
+                if (state.getCount() != 0)
+                {
+                    if (state.isDelta())
+                    {
+                        throw new IllegalStateException("Counter shard with negative clock but count != 0; context = " + toString(context));
+                    }
+                    else
+                    {
+                        logger.debug("Ignoring non-removable non-delta corrupted shard in context " + toString(context));
+                        state.moveToNext();
+                        continue;
+                    }
+                }
+
+                if (-((int)(clock / 1000)) < gcBefore)
+                {
+                    removedShards++;
+                    if (state.isDelta())
+                        removedDelta++;
+                }
+            }
+            state.moveToNext();
+        }
+
+        if (removedShards == 0)
+            return context;
+
+        int removedHeaderSize = removedDelta * HEADER_ELT_LENGTH;
+        int removedBodySize = removedShards * STEP_LENGTH;
+        int newSize = context.remaining() - removedHeaderSize - removedBodySize;
+        int newHlength = hlength - removedHeaderSize;
+        ByteBuffer cleanedContext = HeapAllocator.instance.allocate(newSize);
+        cleanedContext.putShort(cleanedContext.position(), (short) ((newHlength - HEADER_SIZE_LENGTH) / HEADER_ELT_LENGTH));
+        ContextState cleaned = new ContextState(cleanedContext, newHlength);
+
+        state.reset();
+        while (state.hasRemaining())
+        {
+            long clock = state.getClock();
+            if (clock >= 0 || state.getCount() != 0 || -((int)(clock / 1000)) >= gcBefore)
+            {
+                state.copyTo(cleaned);
+            }
+
+            state.moveToNext();
+        }
+        return cleanedContext;
+    }

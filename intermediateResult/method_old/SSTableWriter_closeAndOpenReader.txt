@@ -1,0 +1,35 @@
+public SSTableReader closeAndOpenReader(long maxDataAge) throws IOException
+    {
+        // index and filter
+        iwriter.close();
+
+        // main data, close will truncate if necessary
+        dataFile.close();
+
+        // write sstable statistics
+        SSTableMetadata sstableMetadata = sstableMetadataCollector.finalizeMetadata(partitioner.getClass().getCanonicalName());
+        writeMetadata(descriptor, sstableMetadata);
+        maybeWriteDigest();
+
+        // remove the 'tmp' marker from all components
+        final Descriptor newdesc = rename(descriptor, components);
+
+        // finalize in-memory state for the reader
+        SegmentedFile ifile = iwriter.builder.complete(newdesc.filenameFor(SSTable.COMPONENT_INDEX));
+        SegmentedFile dfile = dbuilder.complete(newdesc.filenameFor(SSTable.COMPONENT_DATA));
+        SSTableReader sstable = SSTableReader.internalOpen(newdesc,
+                                                           components,
+                                                           metadata,
+                                                           partitioner,
+                                                           ifile,
+                                                           dfile,
+                                                           iwriter.summary,
+                                                           iwriter.bf,
+                                                           maxDataAge,
+                                                           sstableMetadata);
+        sstable.first = getMinimalKey(first);
+        sstable.last = getMinimalKey(last);
+        iwriter = null;
+        dbuilder = null;
+        return sstable;
+    }

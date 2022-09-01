@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\service\RangeSliceResponseResolver.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>LinkedBlockingQueue</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>AbstractIterator</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>IAsyncResult</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessageIn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>CloseableIterator</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>MergeIterator</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Turns RangeSliceReply objects into row (string -&gt; CF) maps, resolving
+ * to the most recent ColumnFamily and setting up read repairs as necessary.
+ */</comment>
+<class><specifier>public</specifier> class <name>RangeSliceResponseResolver</name> <super><implements>implements <name><name>IResponseResolver</name><argument_list>&lt;<argument><name>RangeSliceReply</name></argument>, <argument><name><name>Iterable</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Row</name></argument>,<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>pairComparator</name> <init>= <expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Row</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+    <block>{
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Row</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>o1</name></decl></param>, <param><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Row</name></argument>, <argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>o2</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>o1</name>.<name>left</name>.<name>key</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>o2</name>.<name>left</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>table</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>sources</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name><name>MessageIn</name><argument_list>&lt;<argument><name>RangeSliceReply</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>responses</name> <init>= <expr>new <call><name><name>LinkedBlockingQueue</name><argument_list>&lt;<argument><name><name>MessageIn</name><argument_list>&lt;<argument><name>RangeSliceReply</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt><empty_stmt>;</empty_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IAsyncResult</name></argument>&gt;</argument_list></name></type> <name>repairResults</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>IAsyncResult</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>RangeSliceResponseResolver</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>table</name></name> = <name>table</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setSources</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>sources</name></name> = <name>endpoints</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>getData</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>MessageIn</name><argument_list>&lt;<argument><name>RangeSliceReply</name></argument>&gt;</argument_list></name></type> <name>response</name> <init>= <expr><call><name><name>responses</name>.<name>iterator</name></name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name><name>response</name>.<name>payload</name>.<name>rows</name></name></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// Note: this would deserialize the response a 2nd time if getData was called first.</comment>
+    <comment type="line">// (this is not currently an issue since we don't do read repair for range queries.)</comment>
+    <function><type><specifier>public</specifier> <name><name>Iterable</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>resolve</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>RowIterator</name></argument>&gt;</argument_list></name></type> <name>iters</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>RowIterator</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>responses</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>MessageIn</name><argument_list>&lt;<argument><name>RangeSliceReply</name></argument>&gt;</argument_list></name></type> <name>response</name> <range>: <expr><name>responses</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>RangeSliceReply</name></type> <name>reply</name> <init>= <expr><name><name>response</name>.<name>payload</name></name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>n</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>n</name></expr></argument>, <argument><expr><call><name><name>reply</name>.<name>rows</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>iters</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>RowIterator</name><argument_list>(<argument><expr><call><name><name>reply</name>.<name>rows</name>.<name>iterator</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>response</name>.<name>from</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <comment type="line">// for each row, compute the combination of all different versions seen, and repair incomplete versions</comment>
+        <comment type="line">// TODO do we need to call close?</comment>
+        <decl_stmt><decl><type><name><name>CloseableIterator</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>iter</name> <init>= <expr><call><name><name>MergeIterator</name>.<name>get</name></name><argument_list>(<argument><expr><name>iters</name></expr></argument>, <argument><expr><name>pairComparator</name></expr></argument>, <argument><expr>new <call><name>Reducer</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>resolvedRows</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>n</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <while>while <condition>(<expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call></expr>)</condition>
+            <expr_stmt><expr><call><name><name>resolvedRows</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></while>
+
+        <return>return <expr><name>resolvedRows</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>preprocess</name><parameter_list>(<param><decl><type><name>MessageIn</name></type> <name>message</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>responses</name>.<name>add</name></name><argument_list>(<argument><expr><name>message</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isDataPresent</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>!<call><name><name>responses</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>RowIterator</name> <super><extends>extends <name><name>AbstractIterator</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Row</name></argument>,<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></extends> <implements>implements <name><name>CloseableIterator</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Row</name></argument>,<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Iterator</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>iter</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>source</name></decl>;</decl_stmt>
+
+        <constructor><specifier>private</specifier> <name>RowIterator</name><parameter_list>(<param><decl><type><name><name>Iterator</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>iter</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>source</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>iter</name></name> = <name>iter</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>source</name></name> = <name>source</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>protected</specifier> <name><name>Pair</name><argument_list>&lt;<argument><name>Row</name></argument>,<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>computeNext</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>iter</name>.<name>hasNext</name></name><argument_list>()</argument_list></call> ? <call><name><name>Pair</name>.<name>create</name></name><argument_list>(<argument><expr><call><name><name>iter</name>.<name>next</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>source</name></expr></argument>)</argument_list></call> : <call><name>endOfData</name><argument_list>()</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <block>{}</block></function>
+    }</block></class>
+
+    <function><type><specifier>public</specifier> <name><name>Iterable</name><argument_list>&lt;<argument><name><name>MessageIn</name><argument_list>&lt;<argument><name>RangeSliceReply</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getMessages</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>responses</name></expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> class <name>Reducer</name> <super><extends>extends <name><name>MergeIterator</name>.<name><name>Reducer</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>Row</name></argument>,<argument><name>InetAddress</name></argument>&gt;</argument_list></name></argument>, <argument><name>Row</name></argument>&gt;</argument_list></name></name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name></type> <name>versions</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ColumnFamily</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>sources</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>versionSources</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>sources</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>DecoratedKey</name></type> <name>key</name></decl>;</decl_stmt>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>reduce</name><parameter_list>(<param><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>Row</name></argument>,<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>current</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>key</name> = <name><name>current</name>.<name>left</name>.<name>key</name></name></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>versions</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>current</name>.<name>left</name>.<name>cf</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>versionSources</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>current</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>protected</specifier> <name>Row</name></type> <name>getReduced</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>resolved</name> <init>= <expr><call><name><name>versions</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 1
+                                  ? <call><name><name>RowDataResolver</name>.<name>resolveSuperset</name></name><argument_list>(<argument><expr><name>versions</name></expr></argument>)</argument_list></call>
+                                  : <call><name><name>versions</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>versions</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; <call><name><name>sources</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <comment type="line">// add placeholder rows for sources that didn't have any data, so maybeScheduleRepairs sees them</comment>
+                <for>for (<init><decl><type><name>InetAddress</name></type> <name>source</name> <range>: <expr><name>sources</name></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr>!<call><name><name>versionSources</name>.<name>contains</name></name><argument_list>(<argument><expr><name>source</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>versions</name>.<name>add</name></name><argument_list>(<argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>versionSources</name>.<name>add</name></name><argument_list>(<argument><expr><name>source</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                }</block></for>
+            }</block></then></if>
+            <comment type="line">// resolved can be null even if versions doesn't have all nulls because of the call to removeDeleted in resolveSuperSet</comment>
+            <if>if <condition>(<expr><name>resolved</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>repairResults</name>.<name>addAll</name></name><argument_list>(<argument><expr><call><name><name>RowDataResolver</name>.<name>scheduleRepairs</name></name><argument_list>(<argument><expr><name>resolved</name></expr></argument>, <argument><expr><name>table</name></expr></argument>, <argument><expr><name>key</name></expr></argument>, <argument><expr><name>versions</name></expr></argument>, <argument><expr><name>versionSources</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>versions</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>versionSources</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>new <call><name>Row</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>resolved</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

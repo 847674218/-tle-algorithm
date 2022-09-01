@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\cql3\statements\CreateColumnFamilyStatement.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>statements</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>lang</name>.<name>StringUtils</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>HashMultiset</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Multiset</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>auth</name>.<name>Permission</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ColumnDefinition</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>compress</name>.<name>CompressionParameters</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>ClientState</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>MigrationManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>CqlResult</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>transport</name>.<name>messages</name>.<name>ResultMessage</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+
+<comment type="block" format="javadoc">/** A &lt;code&gt;CREATE COLUMNFAMILY&lt;/code&gt; parsed from a CQL query statement. */</comment>
+<class><specifier>public</specifier> class <name>CreateColumnFamilyStatement</name> <super><extends>extends <name>SchemaAlteringStatement</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>comparator</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>defaultValidator</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>keyValidator</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>keyAliases</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>columnAliases</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>ByteBuffer</name></type> <name>valueAlias</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>columns</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>CFPropDefs</name></type> <name>properties</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>CreateColumnFamilyStatement</name><parameter_list>(<param><decl><type><name>CFName</name></type> <name>name</name></decl></param>, <param><decl><type><name>CFPropDefs</name></type> <name>properties</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>properties</name></name> = <name>properties</name></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>this</name>.<name>properties</name>.<name>hasProperty</name></name><argument_list>(<argument><expr><name><name>CFPropDefs</name>.<name>KW_COMPRESSION</name></name></expr></argument>)</argument_list></call> &amp;&amp; <name><name>CFMetaData</name>.<name>DEFAULT_COMPRESSOR</name></name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>this</name>.<name>properties</name>.<name>addProperty</name></name><argument_list>(<argument><expr><name><name>CFPropDefs</name>.<name>KW_COMPRESSION</name></name></expr></argument>,
+                                            <argument><expr>new <class><super><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+                                            <block>{<block>{
+                                                <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>CompressionParameters</name>.<name>SSTABLE_COMPRESSION</name></name></type></decl></param>, <param><decl><type><name><name>CFMetaData</name>.<name>DEFAULT_COMPRESSOR</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+                                            }</block>}</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>SyntaxException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>checkAccess</name><parameter_list>(<param><decl><type><name>ClientState</name></type> <name>state</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnauthorizedException</name></expr></argument>, <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>state</name>.<name>hasKeyspaceAccess</name></name><argument_list>(<argument><expr><call><name>keyspace</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>Permission</name>.<name>CREATE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="line">// Column definitions</comment>
+    <function><type><specifier>private</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>ColumnDefinition</name></argument>&gt;</argument_list></name></type> <name>getColumns</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>ColumnDefinition</name></argument>&gt;</argument_list></name></type> <name>columnDefs</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>ColumnDefinition</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>Integer</name></type> <name>componentIndex</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>comparator</name> instanceof <name>CompositeType</name></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>CompositeType</name></type> <name>ct</name> <init>= <expr>(<name>CompositeType</name>) <name>comparator</name></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>componentIndex</name> = <call><name><name>ct</name>.<name>types</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>ct</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr></argument>)</argument_list></call> instanceof <name>ColumnToCollectionType</name>
+                           ? <call><name><name>ct</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call> - 2
+                           : <call><name><name>ct</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr>;</expr_stmt>
+        }</block></then></if>
+
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></name></type> <name>col</name> <range>: <expr><call><name><name>columns</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>columnDefs</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>col</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<name>key</name></expr></argument>, <argument><expr>new <call><name>ColumnDefinition</name><argument_list>(<argument><expr><call><name><name>col</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<name>key</name></expr></argument>, <argument><expr><call><name><name>col</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>null</expr></argument>, <argument><expr>null</expr></argument>, <argument><expr>null</expr></argument>, <argument><expr><name>componentIndex</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <return>return <expr><name>columnDefs</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>announceMigration</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>RequestValidationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>MigrationManager</name>.<name>announceNewColumnFamily</name></name><argument_list>(<argument><expr><call><name>getCFMetaData</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>ResultMessage</name>.<name>SchemaChange</name>.<name>Change</name></name></type> <name>changeType</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>ResultMessage</name>.<name>SchemaChange</name>.<name>Change</name>.<name>CREATED</name></name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns a CFMetaData instance based on the parameters parsed from this
+     * &lt;code&gt;CREATE&lt;/code&gt; statement, or defaults where applicable.
+     *
+     * @return a CFMetaData instance corresponding to the values parsed from this statement
+     * @throws InvalidRequestException on failure to validate parsed parameters
+     */</comment>
+    <function><type><specifier>public</specifier> <name>CFMetaData</name></type> <name>getCFMetaData</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>RequestValidationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>CFMetaData</name></type> <name>newCFMD</name></decl>;</decl_stmt>
+        <expr_stmt><expr><name>newCFMD</name> = new <call><name>CFMetaData</name><argument_list>(<argument><expr><call><name>keyspace</name><argument_list>()</argument_list></call></expr></argument>,
+                                 <argument><expr><call><name>columnFamily</name><argument_list>()</argument_list></call></expr></argument>,
+                                 <argument><expr><name><name>ColumnFamilyType</name>.<name>Standard</name></name></expr></argument>,
+                                 <argument><expr><name>comparator</name></expr></argument>,
+                                 <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>applyPropertiesTo</name><argument_list>(<argument><expr><name>newCFMD</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>newCFMD</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>applyPropertiesTo</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>cfmd</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>RequestValidationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>cfmd</name>.<name>defaultValidator</name></name><argument_list>(<argument><expr><name>defaultValidator</name></expr></argument>)</argument_list></call>
+            .<call><name>columnMetadata</name><argument_list>(<argument><expr><call><name>getColumns</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+            .<call><name>keyValidator</name><argument_list>(<argument><expr><name>keyValidator</name></expr></argument>)</argument_list></call>
+            .<call><name>keyAliases</name><argument_list>(<argument><expr><name>keyAliases</name></expr></argument>)</argument_list></call>
+            .<call><name>columnAliases</name><argument_list>(<argument><expr><name>columnAliases</name></expr></argument>)</argument_list></call>
+            .<call><name>valueAlias</name><argument_list>(<argument><expr><name>valueAlias</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>properties</name>.<name>applyToCFMetadata</name></name><argument_list>(<argument><expr><name>cfmd</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>RawStatement</name> <super><extends>extends <name>CFStatement</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>ParsedType</name></argument>&gt;</argument_list></name></type> <name>definitions</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>ParsedType</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>CFPropDefs</name></type> <name>properties</name> <init>= <expr>new <call><name>CFPropDefs</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>keyAliases</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name></type> <name>columnAliases</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name></type> <name>definedOrdering</name> <init>= <expr>new <call><name><name>LinkedHashMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Boolean</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt> <comment type="line">// Insertion ordering is important</comment>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <name>boolean</name></type> <name>useCompactStorage</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Multiset</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name></type> <name>definedNames</name> <init>= <expr><call><name><name>HashMultiset</name>.<name>create</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>RawStatement</name><parameter_list>(<param><decl><type><name>CFName</name></type> <name>name</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <comment type="block" format="javadoc">/**
+         * Transform this raw statement into a CreateColumnFamilyStatement.
+         */</comment>
+        <function><type><specifier>public</specifier> <name><name>ParsedStatement</name>.<name>Prepared</name></name></type> <name>prepare</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>RequestValidationException</name></expr></argument></throws>
+        <block>{
+            <comment type="line">// Column family name</comment>
+            <if>if <condition>(<expr>!<call><name>columnFamily</name><argument_list>()</argument_list></call>.<call><name>matches</name><argument_list>(<argument><expr>"\\w+"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"\"%s\" is not a valid column family name (must be alphanumeric character only: [0-9A-Za-z]+)"</expr></argument>, <argument><expr><call><name>columnFamily</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <if>if <condition>(<expr><call><name>columnFamily</name><argument_list>()</argument_list></call>.<call><name>length</name><argument_list>()</argument_list></call> &gt; <name><name>Schema</name>.<name>NAME_LENGTH</name></name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Column family names shouldn't be more than %s characters long (got \"%s\")"</expr></argument>, <argument><expr><name><name>Schema</name>.<name>NAME_LENGTH</name></name></expr></argument>, <argument><expr><call><name>columnFamily</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <for>for (<init><decl><type><name><name>Multiset</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>definedNames</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <if>if <condition>(<expr><call><name><name>entry</name>.<name>getCount</name></name><argument_list>()</argument_list></call> &gt; 1</expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Multiple definition of identifier %s"</expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getElement</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if></for>
+
+            <expr_stmt><expr><call><name><name>properties</name>.<name>validate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>CreateColumnFamilyStatement</name></type> <name>stmt</name> <init>= <expr>new <call><name>CreateColumnFamilyStatement</name><argument_list>(<argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>properties</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>stmt</name>.<name>setBoundTerms</name></name><argument_list>(<argument><expr><call><name>getBoundsTerms</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>CollectionType</name></argument>&gt;</argument_list></name></type> <name>definedCollections</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>ParsedType</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>definitions</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>id</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>ParsedType</name></type> <name>pt</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>pt</name>.<name>isCollection</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><name>definedCollections</name> == null</expr>)</condition><then>
+                        <expr_stmt><expr><name>definedCollections</name> = new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>, <argument><name>CollectionType</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+                    <expr_stmt><expr><call><name><name>definedCollections</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>id</name>.<name>key</name></name></expr></argument>, <argument><expr>(<name>CollectionType</name>)<call><name><name>pt</name>.<name>getType</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+                <expr_stmt><expr><call><name><name>stmt</name>.<name>columns</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>pt</name>.<name>getType</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// we'll remove what is not a column below</comment>
+            }</block></for>
+
+            <if>if <condition>(<expr><call><name><name>keyAliases</name>.<name>size</name></name><argument_list>()</argument_list></call> != 1</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"You must specify one and only one PRIMARY KEY"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name></type> <name>kAliases</name> <init>= <expr><call><name><name>keyAliases</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>keyTypes</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>kAliases</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>ColumnIdentifier</name></type> <name>alias</name> <range>: <expr><name>kAliases</name></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>stmt</name>.<name>keyAliases</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>alias</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>t</name> <init>= <expr><call><name>getTypeAndRemove</name><argument_list>(<argument><expr><name><name>stmt</name>.<name>columns</name></name></expr></argument>, <argument><expr><name>alias</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>t</name> instanceof <name>CounterColumnType</name></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"counter type is not supported for PRIMARY KEY part %s"</expr></argument>, <argument><expr><name>alias</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                <expr_stmt><expr><call><name><name>keyTypes</name>.<name>add</name></name><argument_list>(<argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <expr_stmt><expr><name><name>stmt</name>.<name>keyValidator</name></name> = <call><name><name>keyTypes</name>.<name>size</name></name><argument_list>()</argument_list></call> == 1 ? <call><name><name>keyTypes</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call> : <call><name><name>CompositeType</name>.<name>getInstance</name></name><argument_list>(<argument><expr><name>keyTypes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// Handle column aliases</comment>
+            <if>if <condition>(<expr><call><name><name>columnAliases</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name>useCompactStorage</name></expr>)</condition><then>
+                <block>{
+                    <comment type="line">// There should remain some column definition since it is a non-composite "static" CF</comment>
+                    <if>if <condition>(<expr><call><name><name>stmt</name>.<name>columns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"No definition found that is not part of the PRIMARY KEY"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                    <if>if <condition>(<expr><name>definedCollections</name> != null</expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Collection types are not supported with COMPACT STORAGE"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                    <expr_stmt><expr><name><name>stmt</name>.<name>comparator</name></name> = <name><name>CFDefinition</name>.<name>definitionType</name></name></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>types</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>definedCollections</name> == null ? 1 : 2</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>types</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>CFDefinition</name>.<name>definitionType</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><name>definedCollections</name> != null</expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>types</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>ColumnToCollectionType</name>.<name>getInstance</name></name><argument_list>(<argument><expr><name>definedCollections</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    <expr_stmt><expr><name><name>stmt</name>.<name>comparator</name></name> = <call><name><name>CompositeType</name>.<name>getInstance</name></name><argument_list>(<argument><expr><name>types</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <comment type="line">// If we use compact storage and have only one alias, it is a</comment>
+                <comment type="line">// standard "dynamic" CF, otherwise it's a composite</comment>
+                <if>if <condition>(<expr><name>useCompactStorage</name> &amp;&amp; <call><name><name>columnAliases</name>.<name>size</name></name><argument_list>()</argument_list></call> == 1</expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><name>definedCollections</name> != null</expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Collection types are not supported with COMPACT STORAGE"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                    <expr_stmt><expr><call><name><name>stmt</name>.<name>columnAliases</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>columnAliases</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call>.<name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name><name>stmt</name>.<name>comparator</name></name> = <call><name>getTypeAndRemove</name><argument_list>(<argument><expr><name><name>stmt</name>.<name>columns</name></name></expr></argument>, <argument><expr><call><name><name>columnAliases</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><name><name>stmt</name>.<name>comparator</name></name> instanceof <name>CounterColumnType</name></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"counter type is not supported for PRIMARY KEY part %s"</expr></argument>, <argument><expr><call><name><name>stmt</name>.<name>columnAliases</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                }</block></then>
+                <else>else
+                <block>{
+                    <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>types</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>columnAliases</name>.<name>size</name></name><argument_list>()</argument_list></call> + 1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <for>for (<init><decl><type><name>ColumnIdentifier</name></type> <name>t</name> <range>: <expr><name>columnAliases</name></expr></range></decl></init>)
+                    <block>{
+                        <expr_stmt><expr><call><name><name>stmt</name>.<name>columnAliases</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>t</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                        <decl_stmt><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name> <init>= <expr><call><name>getTypeAndRemove</name><argument_list>(<argument><expr><name><name>stmt</name>.<name>columns</name></name></expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <if>if <condition>(<expr><name>type</name> instanceof <name>CounterColumnType</name></expr>)</condition><then>
+                            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"counter type is not supported for PRIMARY KEY part %s"</expr></argument>, <argument><expr><name><name>t</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                        <expr_stmt><expr><call><name><name>types</name>.<name>add</name></name><argument_list>(<argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></for>
+
+                    <if>if <condition>(<expr><name>useCompactStorage</name></expr>)</condition><then>
+                    <block>{
+                        <if>if <condition>(<expr><name>definedCollections</name> != null</expr>)</condition><then>
+                            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Collection types are not supported with COMPACT STORAGE"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                    }</block></then>
+                    <else>else
+                    <block>{
+                        <comment type="line">// For sparse, we must add the last UTF8 component</comment>
+                        <comment type="line">// and the collection type if there is one</comment>
+                        <expr_stmt><expr><call><name><name>types</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>CFDefinition</name>.<name>definitionType</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <if>if <condition>(<expr><name>definedCollections</name> != null</expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>types</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>ColumnToCollectionType</name>.<name>getInstance</name></name><argument_list>(<argument><expr><name>definedCollections</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    }</block></else></if>
+
+                    <if>if <condition>(<expr><call><name><name>types</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"Nonsensical empty parameter list for CompositeType"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                    <expr_stmt><expr><name><name>stmt</name>.<name>comparator</name></name> = <call><name><name>CompositeType</name>.<name>getInstance</name></name><argument_list>(<argument><expr><name>types</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></else></if>
+
+            <if>if <condition>(<expr><name>useCompactStorage</name> &amp;&amp; <call><name><name>stmt</name>.<name>columns</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt;= 1</expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>stmt</name>.<name>columns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>columnAliases</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"COMPACT STORAGE with non-composite PRIMARY KEY require one column not part of the PRIMARY KEY (got: %s)"</expr></argument>, <argument><expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><call><name><name>stmt</name>.<name>columns</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                    <comment type="line">// The only value we'll insert will be the empty one, so the default validator don't matter</comment>
+                    <expr_stmt><expr><name><name>stmt</name>.<name>defaultValidator</name></name> = <name><name>BytesType</name>.<name>instance</name></name></expr>;</expr_stmt>
+                    <comment type="line">// We need to distinguish between</comment>
+                    <comment type="line">//   * I'm upgrading from thrift so the valueAlias is null</comment>
+                    <comment type="line">//   * I've define my table with only a PK (and the column value will be empty)</comment>
+                    <comment type="line">// So, we use an empty valueAlias (rather than null) for the second case</comment>
+                    <expr_stmt><expr><name><name>stmt</name>.<name>valueAlias</name></name> = <name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr>;</expr_stmt>
+                }</block></then>
+                <else>else
+                <block>{
+                    <decl_stmt><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></name></type> <name>lastEntry</name> <init>= <expr><call><name><name>stmt</name>.<name>columns</name>.<name>entrySet</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><name><name>stmt</name>.<name>defaultValidator</name></name> = <call><name><name>lastEntry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name><name>stmt</name>.<name>valueAlias</name></name> = <call><name><name>lastEntry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<name>key</name></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>stmt</name>.<name>columns</name>.<name>remove</name></name><argument_list>(<argument><expr><call><name><name>lastEntry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></else></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <if>if <condition>(<expr><name>useCompactStorage</name> &amp;&amp; !<call><name><name>columnAliases</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"COMPACT STORAGE with composite PRIMARY KEY allows no more than one column not part of the PRIMARY KEY (got: %s)"</expr></argument>, <argument><expr><call><name><name>StringUtils</name>.<name>join</name></name><argument_list>(<argument><expr><call><name><name>stmt</name>.<name>columns</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>", "</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                <comment type="line">// There is no way to insert/access a column that is not defined for non-compact storage, so</comment>
+                <comment type="line">// the actual validator don't matter much (except that we want to recognize counter CF as limitation apply to them).</comment>
+                <expr_stmt><expr><name><name>stmt</name>.<name>defaultValidator</name></name> = !<call><name><name>stmt</name>.<name>columns</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> &amp;&amp; (<call><name><name>stmt</name>.<name>columns</name>.<name>values</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call> instanceof <name>CounterColumnType</name>)
+                    ? <name><name>CounterColumnType</name>.<name>instance</name></name>
+                    : <name><name>BytesType</name>.<name>instance</name></name></expr>;</expr_stmt>
+            }</block></else></if>
+
+
+            <comment type="line">// If we give a clustering order, we must explicitely do so for all aliases and in the order of the PK</comment>
+            <if>if <condition>(<expr>!<call><name><name>definedOrdering</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>definedOrdering</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; <call><name><name>columnAliases</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Too much columns provided for CLUSTERING ORDER"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                <decl_stmt><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>ColumnIdentifier</name></type> <name>id</name> <range>: <expr><call><name><name>definedOrdering</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <decl_stmt><decl><type><name>ColumnIdentifier</name></type> <name>c</name> <init>= <expr><call><name><name>columnAliases</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr>!<call><name><name>id</name>.<name>equals</name></name><argument_list>(<argument><expr><name>c</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <if>if <condition>(<expr><call><name><name>definedOrdering</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>c</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key (%s must appear before %s)"</expr></argument>, <argument><expr><name>c</name></expr></argument>, <argument><expr><name>id</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then>
+                        <else>else
+                            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Missing CLUSTERING ORDER for column %s"</expr></argument>, <argument><expr><name>c</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></else></if>
+                    }</block></then></if>
+                    <expr_stmt><expr>++<name>i</name></expr>;</expr_stmt>
+                }</block></for>
+            }</block></then></if>
+
+            <return>return <expr>new <call><name><name>ParsedStatement</name>.<name>Prepared</name></name><argument_list>(<argument><expr><name>stmt</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getTypeAndRemove</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>AbstractType</name></argument>&gt;</argument_list></name></type> <name>columns</name></decl></param>, <param><decl><type><name>ColumnIdentifier</name></type> <name>t</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument>, <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>AbstractType</name></type> <name>type</name> <init>= <expr><call><name><name>columns</name>.<name>get</name></name><argument_list>(<argument><expr><name>t</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>type</name> == null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Unkown definition %s referenced in PRIMARY KEY"</expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <if>if <condition>(<expr><name>type</name> instanceof <name>CollectionType</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Invalid collection type for PRIMARY KEY component %s"</expr></argument>, <argument><expr><name>t</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><call><name><name>columns</name>.<name>remove</name></name><argument_list>(<argument><expr><name>t</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>Boolean</name></type> <name>isReversed</name> <init>= <expr><call><name><name>definedOrdering</name>.<name>get</name></name><argument_list>(<argument><expr><name>t</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <return>return <expr><name>isReversed</name> != null &amp;&amp; <name>isReversed</name> ? <call><name><name>ReversedType</name>.<name>getInstance</name></name><argument_list>(<argument><expr><name>type</name></expr></argument>)</argument_list></call> : <name>type</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>addDefinition</name><parameter_list>(<param><decl><type><name>ColumnIdentifier</name></type> <name>def</name></decl></param>, <param><decl><type><name>ParsedType</name></type> <name>type</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>definedNames</name>.<name>add</name></name><argument_list>(<argument><expr><name>def</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>definitions</name>.<name>put</name></name><argument_list>(<argument><expr><name>def</name></expr></argument>, <argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>addKeyAliases</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name></type> <name>aliases</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>keyAliases</name>.<name>add</name></name><argument_list>(<argument><expr><name>aliases</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>addColumnAlias</name><parameter_list>(<param><decl><type><name>ColumnIdentifier</name></type> <name>alias</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>columnAliases</name>.<name>add</name></name><argument_list>(<argument><expr><name>alias</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>setOrdering</name><parameter_list>(<param><decl><type><name>ColumnIdentifier</name></type> <name>alias</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>reversed</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>definedOrdering</name>.<name>put</name></name><argument_list>(<argument><expr><name>alias</name></expr></argument>, <argument><expr><name>reversed</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>setCompactStorage</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>useCompactStorage</name> = true</expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>checkAccess</name><parameter_list>(<param><decl><type><name>ClientState</name></type> <name>state</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>CqlResult</name></type> <name>execute</name><parameter_list>(<param><decl><type><name>ClientState</name></type> <name>state</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>variables</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

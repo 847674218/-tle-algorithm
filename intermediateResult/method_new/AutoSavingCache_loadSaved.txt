@@ -1,0 +1,73 @@
+public int loadSaved(ColumnFamilyStore cfs)
+    {
+        int count = 0;
+        long start = System.currentTimeMillis();
+
+        // old cache format that only saves keys
+        File path = getCachePath(cfs.table.name, cfs.columnFamily, null);
+        if (path.exists())
+        {
+            DataInputStream in = null;
+            try
+            {
+                logger.info(String.format("reading saved cache %s", path));
+                in = new DataInputStream(new BufferedInputStream(new FileInputStream(path)));
+                Set<ByteBuffer> keys = new HashSet<ByteBuffer>();
+                while (in.available() > 0)
+                {
+                    keys.add(ByteBufferUtil.readWithLength(in));
+                    count++;
+                }
+                cacheLoader.load(keys, cfs);
+            }
+            catch (Exception e)
+            {
+                logger.warn(String.format("error reading saved cache %s, keys loaded so far: %d", path.getAbsolutePath(), count), e);
+                return count;
+            }
+            finally
+            {
+                FileUtils.closeQuietly(in);
+            }
+        }
+
+        // modern format, allows both key and value (so key cache load can be purely sequential)
+        path = getCachePath(cfs.table.name, cfs.columnFamily, CURRENT_VERSION);
+        if (path.exists())
+        {
+            DataInputStream in = null;
+            try
+            {
+                logger.info(String.format("reading saved cache %s", path));
+                in = new DataInputStream(new BufferedInputStream(new FileInputStream(path)));
+                List<Future<Pair<K, V>>> futures = new ArrayList<Future<Pair<K, V>>>();
+                while (in.available() > 0)
+                {
+                    Future<Pair<K, V>> entry = cacheLoader.deserialize(in, cfs);
+                    // Key cache entry can return null, if the SSTable doesn't exist.
+                    if (entry == null)
+                        continue;
+                    futures.add(entry);
+                    count++;
+                }
+
+                for (Future<Pair<K, V>> future : futures)
+                {
+                    Pair<K, V> entry = future.get();
+                    put(entry.left, entry.right);
+                }
+            }
+            catch (Exception e)
+            {
+                logger.warn(String.format("error reading saved cache %s", path.getAbsolutePath()), e);
+            }
+            finally
+            {
+                FileUtils.closeQuietly(in);
+            }
+        }
+        if (logger.isDebugEnabled())
+            logger.debug(String.format("completed reading (%d ms; %d keys) saved cache %s",
+                    System.currentTimeMillis() - start, count, path));
+        return count;
+    }

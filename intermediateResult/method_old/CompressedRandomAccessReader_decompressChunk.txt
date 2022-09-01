@@ -1,0 +1,32 @@
+private void decompressChunk(CompressionMetadata.Chunk chunk) throws IOException
+    {
+        if (channel.position() != chunk.offset)
+            channel.position(chunk.offset);
+
+        if (compressed.capacity() < chunk.length)
+            compressed = ByteBuffer.wrap(new byte[chunk.length]);
+        else
+            compressed.clear();
+        compressed.limit(chunk.length);
+
+        if (channel.read(compressed) != chunk.length)
+            throw new IOException(String.format("(%s) failed to read %d bytes from offset %d.", getPath(), chunk.length, chunk.offset));
+        // technically flip() is unnecessary since all the remaining work uses the raw array, but if that changes
+        // in the future this will save a lot of hair-pulling
+        compressed.flip();
+        validBufferBytes = metadata.compressor().uncompress(compressed.array(), 0, chunk.length, buffer, 0);
+
+        if (metadata.parameters.getCrcCheckChance() > FBUtilities.threadLocalRandom().nextDouble())
+        {
+            checksum.update(buffer, 0, validBufferBytes);
+
+            if (checksum(chunk) != (int) checksum.getValue())
+                throw new CorruptedBlockException(getPath(), chunk);
+
+            // reset checksum object back to the original (blank) state
+            checksum.reset();
+        }
+
+        // buffer offset is always aligned
+        bufferOffset = current & ~(buffer.length - 1);
+    }

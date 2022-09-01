@@ -1,0 +1,32 @@
+private static ColumnFamily merge(List<SSTableIdentityIterator> rows, CompactionController controller)
+    {
+        assert !rows.isEmpty();
+        ColumnFamily cf = null;
+        SecondaryIndexManager.Updater indexer = null;
+        for (SSTableIdentityIterator row : rows)
+        {
+            ColumnFamily thisCF;
+            try
+            {
+                // use a map for the first once since that will be the one we merge into
+                ISortedColumns.Factory factory = cf == null ? TreeMapBackedSortedColumns.factory() : ArrayBackedSortedColumns.factory();
+                thisCF = row.getColumnFamilyWithColumns(factory);
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException("Failed merge of rows on row with key: " + row.getKey(), e);
+            }
+
+            if (cf == null)
+            {
+                cf = thisCF;
+                indexer = controller.cfs.indexManager.updaterFor(row.getKey(), false); // only init indexer once
+            }
+            else
+            {
+                // addAll is ok even if cf is an ArrayBackedSortedColumns
+                cf.addAllWithSizeDelta(thisCF, HeapAllocator.instance, Functions.<IColumn>identity(), indexer);
+            }
+        }
+        return cf;
+    }

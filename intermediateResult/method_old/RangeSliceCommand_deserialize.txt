@@ -1,0 +1,42 @@
+public RangeSliceCommand deserialize(DataInput dis, int version) throws IOException
+    {
+        String keyspace = dis.readUTF();
+        String columnFamily = dis.readUTF();
+
+        int scLength = dis.readInt();
+        ByteBuffer superColumn = null;
+        if (scLength > 0)
+        {
+            byte[] buf = new byte[scLength];
+            dis.readFully(buf);
+            superColumn = ByteBuffer.wrap(buf);
+        }
+
+        TDeserializer dser = new TDeserializer(new TBinaryProtocol.Factory());
+        SlicePredicate pred = new SlicePredicate();
+        FBUtilities.deserialize(dser, pred, dis);
+
+        List<IndexExpression> rowFilter = null;
+        if (version >= MessagingService.VERSION_11)
+        {
+            int filterCount = dis.readInt();
+            rowFilter = new ArrayList<IndexExpression>(filterCount);
+            for (int i = 0; i < filterCount; i++)
+            {
+                IndexExpression expr = new IndexExpression();
+                FBUtilities.deserialize(dser, expr, dis);
+                rowFilter.add(expr);
+            }
+        }
+        AbstractBounds<RowPosition> range = AbstractBounds.serializer().deserialize(dis, version).toRowBounds();
+
+        int maxResults = dis.readInt();
+        boolean maxIsColumns = false;
+        boolean isPaging = false;
+        if (version >= MessagingService.VERSION_11)
+        {
+            maxIsColumns = dis.readBoolean();
+            isPaging = dis.readBoolean();
+        }
+        return new RangeSliceCommand(keyspace, columnFamily, superColumn, pred, range, rowFilter, maxResults, maxIsColumns, isPaging);
+    }

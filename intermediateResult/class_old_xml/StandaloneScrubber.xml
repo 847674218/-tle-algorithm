@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\tools\StandaloneScrubber.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tools</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>commons</name>.<name>cli</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Directories</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>LeveledManifest</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>Scrubber</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>AbstractCassandraDaemon</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>OutputHandler</name></name>;</import>
+
+<import>import static <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tools</name>.<name>BulkLoader</name>.<name>CmdLineOptions</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>StandaloneScrubber</name>
+<block>{
+    <expr_stmt><expr>static
+    <block>{
+        <expr><call><name><name>AbstractCassandraDaemon</name>.<name>initLog4j</name></name><argument_list>()</argument_list></call></expr>;
+    }</block>
+
+    private static <name>final</name> <name>String</name> <name>TOOL_NAME</name> = "sstablescrub"</expr>;</expr_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>VERBOSE_OPTION</name>  <init>= <expr>"verbose"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>DEBUG_OPTION</name>  <init>= <expr>"debug"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>HELP_OPTION</name>  <init>= <expr>"help"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>MANIFEST_CHECK_OPTION</name>  <init>= <expr>"manifest-check"</expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>main</name><parameter_list>(<param><decl><type><name>String</name></type> <name><name>args</name><index>[]</index></name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>Options</name></type> <name>options</name> <init>= <expr><call><name><name>Options</name>.<name>parseArgs</name></name><argument_list>(<argument><expr><name>args</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <comment type="line">// Migrate sstables from pre-#2749 to the correct location</comment>
+            <if>if <condition>(<expr><call><name><name>Directories</name>.<name>sstablesNeedsMigration</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>Directories</name>.<name>migrateSSTables</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <comment type="line">// load keyspace descriptions.</comment>
+            <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>loadSchemas</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><name><name>options</name>.<name>tableName</name></name></expr></argument>, <argument><expr><name><name>options</name>.<name>cfName</name></name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Unknown keyspace/columnFamily %s.%s"</expr></argument>,
+                                                                 <argument><expr><name><name>options</name>.<name>tableName</name></name></expr></argument>,
+                                                                 <argument><expr><name><name>options</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <comment type="line">// Do not load sstables since they might be broken</comment>
+            <decl_stmt><decl><type><name>Table</name></type> <name>table</name> <init>= <expr><call><name><name>Table</name>.<name>openWithoutSSTables</name></name><argument_list>(<argument><expr><name><name>options</name>.<name>tableName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>table</name>.<name>getColumnFamilyStore</name></name><argument_list>(<argument><expr><name><name>options</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>snapshotName</name> <init>= <expr>"pre-scrub-" + <call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><name>OutputHandler</name></type> <name>handler</name> <init>= <expr>new <call><name><name>OutputHandler</name>.<name>SystemOutput</name></name><argument_list>(<argument><expr><name><name>options</name>.<name>verbose</name></name></expr></argument>, <argument><expr><name><name>options</name>.<name>debug</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>Directories</name>.<name>SSTableLister</name></name></type> <name>lister</name> <init>= <expr><call><name><name>cfs</name>.<name>directories</name>.<name>sstableLister</name></name><argument_list>()</argument_list></call>.<call><name>skipCompacted</name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call>.<call><name>skipTemporary</name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// Scrub sstables</comment>
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Descriptor</name></argument>, <argument><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>lister</name>.<name>list</name></name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr>!<call><name><name>components</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>)</argument_list></call> || !<call><name><name>components</name>.<name>contains</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>PRIMARY_INDEX</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <try>try
+                <block>{
+                    <decl_stmt><decl><type><name>SSTableReader</name></type> <name>sstable</name> <init>= <expr><call><name><name>SSTableReader</name>.<name>openNoValidation</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>components</name></expr></argument>, <argument><expr><name><name>cfs</name>.<name>metadata</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>sstables</name>.<name>add</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                    <decl_stmt><decl><type><name>File</name></type> <name>snapshotDirectory</name> <init>= <expr><call><name><name>Directories</name>.<name>getSnapshotDirectory</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>, <argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>sstable</name>.<name>createLinks</name></name><argument_list>(<argument><expr><call><name><name>snapshotDirectory</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Error Loading %s: %s"</expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <if>if <condition>(<expr><name><name>options</name>.<name>debug</name></name></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>e</name>.<name>printStackTrace</name></name><argument_list>(<argument><expr><name><name>System</name>.<name>err</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                }</block></catch></try>
+            }</block></for>
+            <expr_stmt><expr><call><name><name>System</name>.<name>out</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Pre-scrub sstables snapshotted into snapshot %s"</expr></argument>, <argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// If leveled, load the manifest</comment>
+            <decl_stmt><decl><type><name>LeveledManifest</name></type> <name>manifest</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>cfs</name>.<name>directories</name>.<name>tryGetLeveledManifest</name></name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>cfs</name>.<name>directories</name>.<name>snapshotLeveledManifest</name></name><argument_list>(<argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>System</name>.<name>out</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Leveled manifest snapshotted into snapshot %s"</expr></argument>, <argument><expr><name>snapshotName</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <decl_stmt><decl><type><name>int</name></type> <name>maxSizeInMB</name> <init>= <expr><call>(<name>int</name>)<argument_list>(<argument><expr>(<call><name><name>cfs</name>.<name>getCompactionStrategy</name></name><argument_list>()</argument_list></call>.<call><name>getMaxSSTableSize</name><argument_list>()</argument_list></call>) / (1024L * 1024L)</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>manifest</name> = <call><name><name>LeveledManifest</name>.<name>create</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>maxSizeInMB</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <if>if <condition>(<expr>!<name><name>options</name>.<name>manifestCheckOnly</name></name></expr>)</condition><then>
+            <block>{
+                <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+                <block>{
+                    <try>try
+                    <block>{
+                        <decl_stmt><decl><type><name>Scrubber</name></type> <name>scrubber</name> <init>= <expr>new <call><name>Scrubber</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>sstable</name></expr></argument>, <argument><expr><name>handler</name></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <try>try
+                        <block>{
+                            <expr_stmt><expr><call><name><name>scrubber</name>.<name>scrub</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        }</block>
+                        <finally>finally
+                        <block>{
+                            <expr_stmt><expr><call><name><name>scrubber</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        }</block></finally></try>
+
+                        <if>if <condition>(<expr><name>manifest</name> != null</expr>)</condition><then>
+                        <block>{
+                            <if>if <condition>(<expr><call><name><name>scrubber</name>.<name>getNewInOrderSSTable</name></name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+                                <expr_stmt><expr><call><name><name>manifest</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>scrubber</name>.<name>getNewInOrderSSTable</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>added</name> <init>= <expr><call><name><name>scrubber</name>.<name>getNewSSTable</name></name><argument_list>()</argument_list></call> == null
+                                ? <name><name>Collections</name>.</name>&lt;<name>SSTableReader</name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call>
+                                : <call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><call><name><name>scrubber</name>.<name>getNewSSTable</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                            <expr_stmt><expr><call><name><name>manifest</name>.<name>replace</name></name><argument_list>(<argument><expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>added</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        }</block></then></if>
+
+                        <comment type="line">// Remove the sstable (it's been copied by scrub and snapshotted)</comment>
+                        <expr_stmt><expr><call><name><name>sstable</name>.<name>markCompacted</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>sstable</name>.<name>releaseReference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    }</block>
+                    <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Error scrubbing %s: %s"</expr></argument>, <argument><expr><name>sstable</name></expr></argument>, <argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <if>if <condition>(<expr><name><name>options</name>.<name>debug</name></name></expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>e</name>.<name>printStackTrace</name></name><argument_list>(<argument><expr><name><name>System</name>.<name>err</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    }</block></catch></try>
+                }</block></for>
+            }</block></then></if>
+
+            <comment type="line">// Check (and repair) manifest</comment>
+            <if>if <condition>(<expr><name>manifest</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name>checkManifest</name><argument_list>(<argument><expr><name>manifest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <expr_stmt><expr><call><name><name>SSTableDeletingTask</name>.<name>waitForDeletions</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// We need that to stop non daemonized threads</comment>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name><name>options</name>.<name>debug</name></name></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>e</name>.<name>printStackTrace</name></name><argument_list>(<argument><expr><name><name>System</name>.<name>err</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>checkManifest</name><parameter_list>(<param><decl><type><name>LeveledManifest</name></type> <name>manifest</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>System</name>.<name>out</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Checking leveled manifest"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>1</expr></init></decl>;</init> <condition><expr><name>i</name> &lt;= <call><name><name>manifest</name>.<name>getLevelCount</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+            <expr_stmt><expr><call><name><name>manifest</name>.<name>repairOverlappingSSTables</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>Options</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>String</name></type> <name>tableName</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>String</name></type> <name>cfName</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>public</specifier> <name>boolean</name></type> <name>debug</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <name>boolean</name></type> <name>verbose</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <name>boolean</name></type> <name>manifestCheckOnly</name></decl>;</decl_stmt>
+
+        <constructor><specifier>private</specifier> <name>Options</name><parameter_list>(<param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>tableName</name></name> = <name>tableName</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>cfName</name></name> = <name>cfName</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <specifier>static</specifier> <name>Options</name></type> <name>parseArgs</name><parameter_list>(<param><decl><type><name>String</name></type> <name><name>cmdArgs</name><index>[]</index></name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>CommandLineParser</name></type> <name>parser</name> <init>= <expr>new <call><name>GnuParser</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>CmdLineOptions</name></type> <name>options</name> <init>= <expr><call><name>getCmdLineOptions</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <decl_stmt><decl><type><name>CommandLine</name></type> <name>cmd</name> <init>= <expr><call><name><name>parser</name>.<name>parse</name></name><argument_list>(<argument><expr><name>options</name></expr></argument>, <argument><expr><name>cmdArgs</name></expr></argument>, <argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <if>if <condition>(<expr><call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>HELP_OPTION</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name>printUsage</name><argument_list>(<argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+
+                <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>args</name> <init>= <expr><call><name><name>cmd</name>.<name>getArgs</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name><name>args</name>.<name>length</name></name> != 2</expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name>String</name></type> <name>msg</name> <init>= <expr><name><name>args</name>.<name>length</name></name> &lt; 2 ? "Missing arguments" : "Too many arguments"</expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><name>msg</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>printUsage</name><argument_list>(<argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+
+                <decl_stmt><decl><type><name>String</name></type> <name>tableName</name> <init>= <expr><name><name>args</name><index>[<expr>0</expr>]</index></name></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>String</name></type> <name>cfName</name> <init>= <expr><name><name>args</name><index>[<expr>1</expr>]</index></name></expr></init></decl>;</decl_stmt>
+
+                <decl_stmt><decl><type><name>Options</name></type> <name>opts</name> <init>= <expr>new <call><name>Options</name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <expr_stmt><expr><name><name>opts</name>.<name>debug</name></name> = <call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>DEBUG_OPTION</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>opts</name>.<name>verbose</name></name> = <call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>VERBOSE_OPTION</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name><name>opts</name>.<name>manifestCheckOnly</name></name> = <call><name><name>cmd</name>.<name>hasOption</name></name><argument_list>(<argument><expr><name>MANIFEST_CHECK_OPTION</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <return>return <expr><name>opts</name></expr>;</return>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>ParseException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>errorMsg</name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return <expr>null</expr>;</return>
+            }</block></catch></try>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>errorMsg</name><parameter_list>(<param><decl><type><name>String</name></type> <name>msg</name></decl></param>, <param><decl><type><name>CmdLineOptions</name></type> <name>options</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><name>msg</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>printUsage</name><argument_list>(<argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <specifier>static</specifier> <name>CmdLineOptions</name></type> <name>getCmdLineOptions</name><parameter_list>()</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>CmdLineOptions</name></type> <name>options</name> <init>= <expr>new <call><name>CmdLineOptions</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>DEBUG_OPTION</name></expr></argument>,          <argument><expr>"display stack traces"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"v"</expr></argument>,  <argument><expr><name>VERBOSE_OPTION</name></expr></argument>,        <argument><expr>"verbose output"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"h"</expr></argument>,  <argument><expr><name>HELP_OPTION</name></expr></argument>,           <argument><expr>"display this help message"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>options</name>.<name>addOption</name></name><argument_list>(<argument><expr>"m"</expr></argument>,  <argument><expr><name>MANIFEST_CHECK_OPTION</name></expr></argument>, <argument><expr>"only check and repair the leveled manifest, without actually scrubbing the sstables"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>options</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>printUsage</name><parameter_list>(<param><decl><type><name>CmdLineOptions</name></type> <name>options</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>usage</name> <init>= <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%s [options] &lt;keyspace&gt; &lt;column_family&gt;"</expr></argument>, <argument><expr><name>TOOL_NAME</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>StringBuilder</name></type> <name>header</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"--\n"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"Scrub the sstable for the provided column family."</expr></argument> )</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"\n--\n"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>header</name>.<name>append</name></name><argument_list>(<argument><expr>"Options are:"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr>new <call><name>HelpFormatter</name><argument_list>()</argument_list></call>.<call><name>printHelp</name><argument_list>(<argument><expr><name>usage</name></expr></argument>, <argument><expr><call><name><name>header</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>options</name></expr></argument>, <argument><expr>""</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

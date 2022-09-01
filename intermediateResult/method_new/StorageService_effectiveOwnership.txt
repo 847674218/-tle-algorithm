@@ -1,0 +1,39 @@
+public LinkedHashMap<InetAddress, Float> effectiveOwnership(String keyspace) throws IllegalStateException
+    {
+        if (Schema.instance.getNonSystemTables().size() <= 0)
+            throw new IllegalStateException("Couldn't find any Non System Keyspaces to infer replication topology");
+        if (keyspace == null && !hasSameReplication(Schema.instance.getNonSystemTables()))
+            throw new IllegalStateException("Non System keyspaces doesnt have the same topology");
+
+        TokenMetadata metadata = tokenMetadata.cloneOnlyTokenMap();
+
+        if (keyspace == null)
+            keyspace = Schema.instance.getNonSystemTables().get(0);
+
+        Collection<Collection<InetAddress>> endpointsGroupedByDc = new ArrayList<Collection<InetAddress>>();
+        // mapping of dc's to nodes, use sorted map so that we get dcs sorted
+        SortedMap<String, Collection<InetAddress>> sortedDcsToEndpoints = new TreeMap<String, Collection<InetAddress>>();
+        sortedDcsToEndpoints.putAll(metadata.getTopology().getDatacenterEndpoints().asMap());
+        for (Collection<InetAddress> endpoints : sortedDcsToEndpoints.values())
+            endpointsGroupedByDc.add(endpoints);
+
+        Map<Token, Float> tokenOwnership = getPartitioner().describeOwnership(tokenMetadata.sortedTokens());
+        LinkedHashMap<InetAddress, Float> finalOwnership = Maps.newLinkedHashMap();
+
+        // calculate ownership per dc
+        for (Collection<InetAddress> endpoints : endpointsGroupedByDc)
+        {
+            // calculate the ownership with replication and add the endpoint to the final ownership map
+            for (InetAddress endpoint : endpoints)
+            {
+                float ownership = 0.0f;
+                for (Range<Token> range : getRangesForEndpoint(keyspace, endpoint))
+                {
+                    if (tokenOwnership.containsKey(range.right))
+                        ownership += tokenOwnership.get(range.right);
+                }
+                finalOwnership.put(endpoint, ownership);
+            }
+        }
+        return finalOwnership;
+    }

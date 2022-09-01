@@ -1,0 +1,23 @@
+public void begin(final String request, final Map<String, String> parameters)
+    {
+        assert isTracing();
+
+        final long started_at = System.currentTimeMillis();
+        final ByteBuffer sessionIdBytes = state.get().sessionIdBytes;
+
+        StageManager.getStage(Stage.TRACING).execute(new WrappedRunnable()
+        {
+            public void runMayThrow() throws Exception
+            {
+                CFMetaData cfMeta = CFMetaData.TraceSessionsCf;
+                ColumnFamily cf = ColumnFamily.create(cfMeta);
+                addColumn(cf, buildName(cfMeta, bytes("coordinator")), FBUtilities.getBroadcastAddress());
+                addColumn(cf, buildName(cfMeta, bytes("request")), request);
+                addColumn(cf, buildName(cfMeta, bytes("started_at")), started_at);
+                addParameterColumns(cf, parameters);
+                RowMutation mutation = new RowMutation(TRACE_KS, sessionIdBytes);
+                mutation.add(cf);
+                StorageProxy.mutate(Arrays.asList(mutation), ConsistencyLevel.ANY);
+            }
+        });
+    }

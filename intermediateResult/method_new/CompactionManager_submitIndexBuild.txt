@@ -1,0 +1,35 @@
+public Future<?> submitIndexBuild(final SecondaryIndexBuilder builder)
+    {
+        Runnable runnable = new Runnable()
+        {
+            public void run()
+            {
+                compactionLock.readLock().lock();
+                try
+                {
+                    metrics.beginCompaction(builder);
+                    try
+                    {
+                        builder.build();
+                    }
+                    finally
+                    {
+                        metrics.finishCompaction(builder);
+                    }
+                }
+                finally
+                {
+                    compactionLock.readLock().unlock();
+                }
+            }
+        };
+
+        // don't submit to the executor if the compaction lock is held by the current thread. Instead return a simple
+        // future that will be immediately immediately get()ed and executed. Happens during a migration, which locks
+        // the compaction thread and then reinitializes a ColumnFamilyStore. Under normal circumstances, CFS spawns
+        // index jobs to the compaction manager (this) and blocks on them.
+        if (compactionLock.isWriteLockedByCurrentThread())
+            return new SimpleFuture(runnable);
+        else
+            return executor.submit(runnable);
+    }

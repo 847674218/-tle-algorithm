@@ -1,0 +1,151 @@
+private List<CqlRow> process(List<Row> rows, CqlMetadata schema, List<ByteBuffer> variables) throws InvalidRequestException
+    {
+        List<CqlRow> cqlRows = new ArrayList<CqlRow>();
+        List<Pair<CFDefinition.Name, Selector>> selection = getExpandedSelection();
+        List<Column> thriftColumns = null;
+
+        // Add schema only once
+        for (Pair<CFDefinition.Name, Selector> p : selection)
+            addToSchema(schema, p);
+
+        for (org.apache.cassandra.db.Row row : rows)
+        {
+            // Not columns match the query, skip
+            if (row.cf == null)
+                continue;
+
+            if (cfDef.isCompact)
+            {
+                // One cqlRow per column
+                for (IColumn c : columnsInOrder(row.cf, variables))
+                {
+                    if (c.isMarkedForDelete())
+                        continue;
+
+                    thriftColumns = new ArrayList<Column>(selection.size());
+
+                    ByteBuffer[] components = null;
+
+                    if (cfDef.isComposite)
+                    {
+                        components = ((CompositeType)cfDef.cfm.comparator).split(c.name());
+                    }
+                    else if (sliceRestriction != null)
+                    {
+                        // For dynamic CF, the column could be out of the requested bounds, filter here
+                        if (!sliceRestriction.isInclusive(Bound.START) && c.name().equals(sliceRestriction.bound(Bound.START).getByteBuffer(cfDef.cfm.comparator, variables)))
+                            continue;
+                        if (!sliceRestriction.isInclusive(Bound.END) && c.name().equals(sliceRestriction.bound(Bound.END).getByteBuffer(cfDef.cfm.comparator, variables)))
+                            continue;
+                    }
+
+                    // Respect selection order
+                    for (Pair<CFDefinition.Name, Selector> p : selection)
+                    {
+                        CFDefinition.Name name = p.left;
+                        Selector selector = p.right;
+
+                        addToSchema(schema, p);
+                        Column col;
+                        switch (name.kind)
+                        {
+                            case KEY_ALIAS:
+                                col = new Column(selector.id().key);
+                                col.setValue(row.key.key).setTimestamp(-1L);
+                                break;
+                            case COLUMN_ALIAS:
+                                col = new Column(selector.id().key);
+                                col.setTimestamp(c.timestamp());
+                                if (cfDef.isComposite)
+                                {
+                                    if (name.position < components.length)
+                                        col.setValue(components[name.position]);
+                                    else
+                                        col.setValue(ByteBufferUtil.EMPTY_BYTE_BUFFER);
+                                }
+                                else
+                                {
+                                    col.setValue(c.name());
+                                }
+                                break;
+                            case VALUE_ALIAS:
+                                col = makeReturnColumn(selector, c);
+                                break;
+                            case COLUMN_METADATA:
+                                // This should not happen for compact CF
+                                throw new AssertionError();
+                            default:
+                                throw new AssertionError();
+                        }
+                        thriftColumns.add(col);
+                    }
+                    cqlRows.add(new CqlRow(row.key.key, thriftColumns));
+                }
+            }
+            else if (cfDef.isComposite)
+            {
+                // Sparse case: group column in cqlRow when composite prefix is equal
+                CompositeType composite = (CompositeType)cfDef.cfm.comparator;
+                int last = composite.types.size() - 1;
+
+                ByteBuffer[] previous = null;
+                Map<ByteBuffer, IColumn> group = new HashMap<ByteBuffer, IColumn>();
+                for (IColumn c : row.cf)
+                {
+                    if (c.isMarkedForDelete())
+                        continue;
+
+                    ByteBuffer[] current = composite.split(c.name());
+                    // If current differs from previous, we've just finished a group
+                    if (previous != null && !isSameRow(previous, current))
+                    {
+                        cqlRows.add(handleGroup(selection, row.key.key, previous, group, schema));
+                        group = new HashMap<ByteBuffer, IColumn>();
+                    }
+
+                    // Accumulate the current column
+                    group.put(current[last], c);
+                    previous = current;
+                }
+                // Handle the last group
+                if (previous != null)
+                    cqlRows.add(handleGroup(selection, row.key.key, previous, group, schema));
+            }
+            else
+            {
+                if (row.cf.getLiveColumnCount() == 0)
+                    continue;
+
+                // Static case: One cqlRow for all columns
+                thriftColumns = new ArrayList<Column>(selection.size());
+
+                // Respect selection order
+                for (Pair<CFDefinition.Name, Selector> p : selection)
+                {
+                    CFDefinition.Name name = p.left;
+                    Selector selector = p.right;
+
+                    if (name.kind == CFDefinition.Name.Kind.KEY_ALIAS)
+                    {
+                        thriftColumns.add(new Column(selector.id().key).setValue(row.key.key).setTimestamp(-1L));
+                        continue;
+                    }
+
+                    IColumn c = row.cf.getColumn(name.name.key);
+                    thriftColumns.add(makeReturnColumn(selector, c));
+                }
+                cqlRows.add(new CqlRow(row.key.key, thriftColumns));
+            }
+        }
+
+        orderResults(selection, cqlRows);
+
+        // Internal calls always return columns in the comparator order, even when reverse was set
+        if (isReversed)
+            Collections.reverse(cqlRows);
+
+        // Trim result if needed to respect the limit
+        cqlRows = cqlRows.size() > parameters.limit ? cqlRows.subList(0, parameters.limit) : cqlRows;
+
+        return cqlRows;
+    }

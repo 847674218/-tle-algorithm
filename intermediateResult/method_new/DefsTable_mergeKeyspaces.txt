@@ -1,0 +1,65 @@
+private static Set<String> mergeKeyspaces(Map<DecoratedKey, ColumnFamily> old, Map<DecoratedKey, ColumnFamily> updated)
+    {
+        // calculate the difference between old and new states (note that entriesOnlyLeft() will be always empty)
+        MapDifference<DecoratedKey, ColumnFamily> diff = Maps.difference(old, updated);
+
+        /**
+         * At first step we check if any new keyspaces were added.
+         */
+        for (Map.Entry<DecoratedKey, ColumnFamily> entry : diff.entriesOnlyOnRight().entrySet())
+        {
+            ColumnFamily ksAttrs = entry.getValue();
+
+            // we don't care about nested ColumnFamilies here because those are going to be processed separately
+            if (!ksAttrs.isEmpty())
+                addKeyspace(KSMetaData.fromSchema(new Row(entry.getKey(), entry.getValue()), Collections.<CFMetaData>emptyList()));
+        }
+
+        /**
+         * At second step we check if there were any keyspaces re-created, in this context
+         * re-created means that they were previously deleted but still exist in the low-level schema as empty keys
+         */
+
+        Map<DecoratedKey, MapDifference.ValueDifference<ColumnFamily>> modifiedEntries = diff.entriesDiffering();
+
+        // instead of looping over all modified entries and skipping processed keys all the time
+        // we would rather store "left to process" items and iterate over them removing already met keys
+        List<DecoratedKey> leftToProcess = new ArrayList<DecoratedKey>(modifiedEntries.size());
+
+        for (Map.Entry<DecoratedKey, MapDifference.ValueDifference<ColumnFamily>> entry : modifiedEntries.entrySet())
+        {
+            ColumnFamily prevValue = entry.getValue().leftValue();
+            ColumnFamily newValue = entry.getValue().rightValue();
+
+            if (prevValue.isEmpty())
+            {
+                addKeyspace(KSMetaData.fromSchema(new Row(entry.getKey(), newValue), Collections.<CFMetaData>emptyList()));
+                continue;
+            }
+
+            leftToProcess.add(entry.getKey());
+        }
+
+        if (leftToProcess.size() == 0)
+            return Collections.emptySet();
+
+        /**
+         * At final step we updating modified keyspaces and saving keyspaces drop them later
+         */
+
+        Set<String> keyspacesToDrop = new HashSet<String>();
+
+        for (DecoratedKey key : leftToProcess)
+        {
+            MapDifference.ValueDifference<ColumnFamily> valueDiff = modifiedEntries.get(key);
+
+            ColumnFamily newState = valueDiff.rightValue();
+
+            if (newState.isEmpty())
+                keyspacesToDrop.add(AsciiType.instance.getString(key.key));
+            else
+                updateKeyspace(KSMetaData.fromSchema(new Row(key, newState), Collections.<CFMetaData>emptyList()));
+        }
+
+        return keyspacesToDrop;
+    }

@@ -1,0 +1,31 @@
+private Map<ByteBuffer, List<ColumnOrSuperColumn>> multigetSliceInternal(String keyspace, List<ByteBuffer> keys, ColumnParent column_parent, SlicePredicate predicate, ConsistencyLevel consistency_level)
+    throws org.apache.cassandra.exceptions.InvalidRequestException, UnavailableException, TimedOutException
+    {
+        CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_parent.column_family);
+        ThriftValidation.validateColumnParent(metadata, column_parent);
+        ThriftValidation.validatePredicate(metadata, column_parent, predicate);
+
+        org.apache.cassandra.db.ConsistencyLevel consistencyLevel = ThriftConversion.fromThrift(consistency_level);
+        consistencyLevel.validateForRead(keyspace);
+
+        List<ReadCommand> commands = new ArrayList<ReadCommand>(keys.size());
+        if (predicate.column_names != null)
+        {
+            for (ByteBuffer key: keys)
+            {
+                ThriftValidation.validateKey(metadata, key);
+                commands.add(new SliceByNamesReadCommand(keyspace, key, column_parent, predicate.column_names));
+            }
+        }
+        else
+        {
+            SliceRange range = predicate.slice_range;
+            for (ByteBuffer key: keys)
+            {
+                ThriftValidation.validateKey(metadata, key);
+                commands.add(new SliceFromReadCommand(keyspace, key, column_parent, range.start, range.finish, range.reversed, range.count));
+            }
+        }
+
+        return getSlice(commands, consistencyLevel);
+    }

@@ -1,0 +1,67 @@
+public void updateLiveRatio() throws RuntimeException
+    {
+        if (!MemoryMeter.isInitialized())
+        {
+            // hack for openjdk.  we log a warning about this in the startup script too.
+            logger.warn("MemoryMeter uninitialized (jamm not specified as java agent); assuming liveRatio of 10.0.  Usually this means cassandra-env.sh disabled jamm because you are using a buggy JRE; upgrade to the Sun JRE instead");
+            cfs.liveRatio = 10.0;
+            return;
+        }
+
+        if (!meteringInProgress.add(cfs))
+        {
+            logger.debug("Metering already pending or active for {}; skipping liveRatio update", cfs);
+            return;
+        }
+
+        Runnable runnable = new Runnable()
+        {
+            public void run()
+            {
+                try
+                {
+                    activelyMeasuring = Memtable.this;
+
+                    long start = System.currentTimeMillis();
+                    // ConcurrentSkipListMap has cycles, so measureDeep will have to track a reference to EACH object it visits.
+                    // So to reduce the memory overhead of doing a measurement, we break it up to row-at-a-time.
+                    long deepSize = meter.measure(columnFamilies);
+                    int objects = 0;
+                    for (Map.Entry<RowPosition, ColumnFamily> entry : columnFamilies.entrySet())
+                    {
+                        deepSize += meter.measureDeep(entry.getKey()) + meter.measureDeep(entry.getValue());
+                        objects += entry.getValue().getColumnCount();
+                    }
+                    double newRatio = (double) deepSize / currentSize.get();
+
+                    if (newRatio < MIN_SANE_LIVE_RATIO)
+                    {
+                        logger.warn("setting live ratio to minimum of {} instead of {}", MIN_SANE_LIVE_RATIO, newRatio);
+                        newRatio = MIN_SANE_LIVE_RATIO;
+                    }
+                    if (newRatio > MAX_SANE_LIVE_RATIO)
+                    {
+                        logger.warn("setting live ratio to maximum of {} instead of {}", MAX_SANE_LIVE_RATIO, newRatio);
+                        newRatio = MAX_SANE_LIVE_RATIO;
+                    }
+
+                    // we want to be very conservative about our estimate, since the penalty for guessing low is OOM
+                    // death.  thus, higher estimates are believed immediately; lower ones are averaged w/ the old
+                    if (newRatio > cfs.liveRatio)
+                        cfs.liveRatio = newRatio;
+                    else
+                        cfs.liveRatio = (cfs.liveRatio + newRatio) / 2.0;
+
+                    logger.info("{} liveRatio is {} (just-counted was {}).  calculation took {}ms for {} columns",
+                                new Object[]{ cfs, cfs.liveRatio, newRatio, System.currentTimeMillis() - start, objects });
+                    activelyMeasuring = null;
+                }
+                finally
+                {
+                    meteringInProgress.remove(cfs);
+                }
+            }
+        };
+
+        meterExecutor.submit(runnable);
+    }

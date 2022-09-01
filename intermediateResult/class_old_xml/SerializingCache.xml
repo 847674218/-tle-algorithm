@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\cache\SerializingCache.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cache</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOError</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Set</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>googlecode</name>.<name>concurrentlinkedhashmap</name>.<name>ConcurrentLinkedHashMap</name></name>;</import>
+<import>import <name><name>com</name>.<name>googlecode</name>.<name>concurrentlinkedhashmap</name>.<name>EvictionListener</name></name>;</import>
+<import>import <name><name>com</name>.<name>googlecode</name>.<name>concurrentlinkedhashmap</name>.<name>Weigher</name></name>;</import>
+<import>import <name><name>com</name>.<name>googlecode</name>.<name>concurrentlinkedhashmap</name>.<name>Weighers</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>ISerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>MemoryInputStream</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>MemoryOutputStream</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Serializes cache values off-heap.
+ */</comment>
+<class><specifier>public</specifier> class <name><name>SerializingCache</name><argument_list>&lt;<argument><name>K</name></argument>, <argument><name>V</name></argument>&gt;</argument_list></name> <super><implements>implements <name><name>ICache</name><argument_list>&lt;<argument><name>K</name></argument>, <argument><name>V</name></argument>&gt;</argument_list></name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SerializingCache</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>DEFAULT_CONCURENCY_LEVEL</name> <init>= <expr>64</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentLinkedHashMap</name><argument_list>&lt;<argument><name>K</name></argument>, <argument><name>FreeableMemory</name></argument>&gt;</argument_list></name></type> <name>map</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ISerializer</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></type> <name>serializer</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>SerializingCache</name><parameter_list>(<param><decl><type><name>long</name></type> <name>capacity</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>useMemoryWeigher</name></decl></param>, <param><decl><type><name><name>ISerializer</name><argument_list>&lt;<argument><name>V</name></argument>&gt;</argument_list></name></type> <name>serializer</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>serializer</name></name> = <name>serializer</name></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name><name>EvictionListener</name><argument_list>&lt;<argument><name>K</name></argument>,<argument><name>FreeableMemory</name></argument>&gt;</argument_list></name></type> <name>listener</name> <init>= <expr>new <class><super><name><name>EvictionListener</name><argument_list>&lt;<argument><name>K</name></argument>, <argument><name>FreeableMemory</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>onEviction</name><parameter_list>(<param><decl><type><name>K</name></type> <name>k</name></decl></param>, <param><decl><type><name>FreeableMemory</name></type> <name>mem</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>mem</name>.<name>unreference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><name><name>this</name>.<name>map</name></name> = new <call><name><name>ConcurrentLinkedHashMap</name>.<name><name>Builder</name><argument_list>&lt;<argument><name>K</name></argument>, <argument><name>FreeableMemory</name></argument>&gt;</argument_list></name></name><argument_list>()</argument_list></call>
+                   .<call><name>weigher</name><argument_list>(<argument><expr><name>useMemoryWeigher</name>
+                                ? <call><name>createMemoryWeigher</name><argument_list>()</argument_list></call>
+                                : <name><name>Weighers</name>.</name>&lt;<name>FreeableMemory</name>&gt;<call><name>singleton</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>
+                   .<call><name>maximumWeightedCapacity</name><argument_list>(<argument><expr><name>capacity</name></expr></argument>)</argument_list></call>
+                   .<call><name>concurrencyLevel</name><argument_list>(<argument><expr><name>DEFAULT_CONCURENCY_LEVEL</name></expr></argument>)</argument_list></call>
+                   .<call><name>listener</name><argument_list>(<argument><expr><name>listener</name></expr></argument>)</argument_list></call>
+                   .<call><name>build</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Weigher</name><argument_list>&lt;<argument><name>FreeableMemory</name></argument>&gt;</argument_list></name></type> <name>createMemoryWeigher</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>new <class><super><name><name>Weigher</name><argument_list>&lt;<argument><name>FreeableMemory</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>int</name></type> <name>weightOf</name><parameter_list>(<param><decl><type><name>FreeableMemory</name></type> <name>value</name></decl></param>)</parameter_list>
+            <block>{
+                <return>return <expr>(<name>int</name>) <call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><call><name><name>value</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr>;</return>
+    }</block></function>
+
+	<function><type><specifier>private</specifier> <name>V</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>FreeableMemory</name></type> <name>mem</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <return>return <expr><call><name><name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr>new <call><name>MemoryInputStream</name><argument_list>(<argument><expr><name>mem</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Cannot fetch in memory data, we will failback to read from disk "</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>null</expr>;</return>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>FreeableMemory</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>V</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>serializedSize</name> <init>= <expr><call><name><name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>serializedSize</name> &gt; <name><name>Integer</name>.<name>MAX_VALUE</name></name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IllegalArgumentException</name><argument_list>(<argument><expr>"Unable to allocate " + <name>serializedSize</name> + " bytes"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>FreeableMemory</name></type> <name>freeableMemory</name></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>freeableMemory</name> = new <call><name>FreeableMemory</name><argument_list>(<argument><expr><name>serializedSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>OutOfMemoryError</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr>null</expr>;</return>
+        }</block></catch></try>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>, <argument><expr>new <call><name>DataOutputStream</name><argument_list>(<argument><expr>new <call><name>MemoryOutputStream</name><argument_list>(<argument><expr><name>freeableMemory</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <return>return <expr><name>freeableMemory</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>capacity</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>map</name>.<name>capacity</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setCapacity</name><parameter_list>(<param><decl><type><name>long</name></type> <name>capacity</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>map</name>.<name>setCapacity</name></name><argument_list>(<argument><expr><name>capacity</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isEmpty</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>map</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>size</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>map</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>weightedSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>map</name>.<name>weightedSize</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>clear</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>map</name>.<name>clear</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>V</name></type> <name>get</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>FreeableMemory</name></type> <name>mem</name> <init>= <expr><call><name><name>map</name>.<name>get</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>mem</name> == null</expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+        <if>if <condition>(<expr>!<call><name><name>mem</name>.<name>reference</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+        <try>try
+        <block>{
+            <return>return <expr><call><name>deserialize</name><argument_list>(<argument><expr><name>mem</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>mem</name>.<name>unreference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>put</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>, <param><decl><type><name>V</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>FreeableMemory</name></type> <name>mem</name> <init>= <expr><call><name>serialize</name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>mem</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if> <comment type="line">// out of memory.  never mind.</comment>
+
+        <decl_stmt><decl><type><name>FreeableMemory</name></type> <name>old</name> <init>= <expr><call><name><name>map</name>.<name>put</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>mem</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>old</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>old</name>.<name>unreference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>putIfAbsent</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>, <param><decl><type><name>V</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>FreeableMemory</name></type> <name>mem</name> <init>= <expr><call><name>serialize</name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>mem</name> == null</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if> <comment type="line">// out of memory.  never mind.</comment>
+
+        <decl_stmt><decl><type><name>FreeableMemory</name></type> <name>old</name> <init>= <expr><call><name><name>map</name>.<name>putIfAbsent</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>mem</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>old</name> != null</expr>)</condition><then>
+            <comment type="line">// the new value was not put, we've uselessly allocated some memory, free it</comment>
+            <expr_stmt><expr><call><name><name>mem</name>.<name>unreference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        <return>return <expr><name>old</name> == null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>replace</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>, <param><decl><type><name>V</name></type> <name>oldToReplace</name></decl></param>, <param><decl><type><name>V</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// if there is no old value in our map, we fail</comment>
+        <decl_stmt><decl><type><name>FreeableMemory</name></type> <name>old</name> <init>= <expr><call><name><name>map</name>.<name>get</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>old</name> == null</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <comment type="line">// see if the old value matches the one we want to replace</comment>
+        <decl_stmt><decl><type><name>FreeableMemory</name></type> <name>mem</name> <init>= <expr><call><name>serialize</name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>mem</name> == null</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if> <comment type="line">// out of memory.  never mind.</comment>
+
+        <decl_stmt><decl><type><name>V</name></type> <name>oldValue</name></decl>;</decl_stmt>
+        <comment type="line">// reference old guy before de-serializing</comment>
+        <if>if <condition>(<expr>!<call><name><name>old</name>.<name>reference</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if> <comment type="line">// we have already freed hence noop.</comment>
+        <try>try
+        <block>{
+             <expr_stmt><expr><name>oldValue</name> = <call><name>deserialize</name><argument_list>(<argument><expr><name>old</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>old</name>.<name>unreference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>success</name> <init>= <expr><call><name><name>oldValue</name>.<name>equals</name></name><argument_list>(<argument><expr><name>oldToReplace</name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>map</name>.<name>replace</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>old</name></expr></argument>, <argument><expr><name>mem</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>success</name></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>old</name>.<name>unreference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then> <comment type="line">// so it will be eventually be cleaned</comment>
+        <else>else
+            <expr_stmt><expr><call><name><name>mem</name>.<name>unreference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></else></if>
+        <return>return <expr><name>success</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>remove</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>FreeableMemory</name></type> <name>mem</name> <init>= <expr><call><name><name>map</name>.<name>remove</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>mem</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>mem</name>.<name>unreference</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>K</name></argument>&gt;</argument_list></name></type> <name>keySet</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>map</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>K</name></argument>&gt;</argument_list></name></type> <name>hotKeySet</name><parameter_list>(<param><decl><type><name>int</name></type> <name>n</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>map</name>.<name>descendingKeySetWithLimit</name></name><argument_list>(<argument><expr><name>n</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>containsKey</name><parameter_list>(<param><decl><type><name>K</name></type> <name>key</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>map</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isPutCopying</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

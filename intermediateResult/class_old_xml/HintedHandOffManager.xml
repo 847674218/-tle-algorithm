@@ -1,0 +1,509 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\HintedHandOffManager.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataInputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>MBeanServer</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>ObjectName</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>annotations</name>.<name>VisibleForTesting</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>ImmutableSortedSet</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>Descriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>JMXEnabledThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>IFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>NamesQueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryFilter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryPath</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>IPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>ApplicationState</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>FailureDetector</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>Gossiper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>WrappedRunnable</name></name>;</import>
+<import>import <name><name>org</name>.<name>cliffc</name>.<name>high_scale_lib</name>.<name>NonBlockingHashSet</name></name>;</import>
+
+
+
+<comment type="block" format="javadoc">/**
+ * For each endpoint for which we have hints, there is a row in the system hints CF.
+ * The key for this row is ByteBuffer.wrap(string), i.e. "127.0.0.1".
+ * (We have to use String keys for compatibility with OPP.)
+ * SuperColumns in these rows are the mutations to replay, with uuid names:
+ *
+ *  &lt;dest token&gt;: {           // key
+ *    &lt;uuid&gt;: {               // supercolumn
+ *      mutation: &lt;mutation&gt;  // subcolumn
+ *      version: &lt;mutation serialization version&gt;
+ *      table: &lt;table of hinted mutation&gt;
+ *      key: &lt;key of hinted mutation&gt;
+ *    }
+ *  }
+ *
+ * When FailureDetector signals that a node that was down is back up, we page through
+ * the hinted mutations and send them over one at a time, waiting for
+ * hinted_handoff_throttle_delay in between each.
+ *
+ * deliverHints is also exposed to JMX so it can be run manually if FD ever misses
+ * its cue somehow.
+ */</comment>
+
+<class><specifier>public</specifier> class <name>HintedHandOffManager</name> <super><implements>implements <name>HintedHandOffManagerMBean</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>HintedHandOffManager</name></type> <name>instance</name> <init>= <expr>new <call><name>HintedHandOffManager</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>HINTS_CF</name> <init>= <expr>"HintsColumnFamily"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger_</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>HintedHandOffManager</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>PAGE_SIZE</name> <init>= <expr>128</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>LARGE_NUMBER</name> <init>= <expr>65536</expr></init></decl>;</decl_stmt> <comment type="line">// 64k nodes ought to be enough for anybody.</comment>
+
+    <comment type="line">// in 0.8, subcolumns were KS-CF bytestrings, and the data was stored in the "normal" storage there.</comment>
+    <comment type="line">// (so replay always consisted of sending an entire row,</comment>
+    <comment type="line">// no matter how little was part of the mutation that created the hint.)</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>SEPARATOR_08</name> <init>= <expr>"-"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>NonBlockingHashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>queuedDeliveries</name> <init>= <expr>new <call><name><name>NonBlockingHashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ExecutorService</name></type> <name>executor_</name> <init>= <expr>new <call><name>JMXEnabledThreadPoolExecutor</name><argument_list>(<argument><expr>"HintedHandoff"</expr></argument>, <argument><expr><name><name>Thread</name>.<name>MIN_PRIORITY</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>MBeanServer</name></type> <name>mbs</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>mbs</name>.<name>registerMBean</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr>"org.apache.cassandra.db:type=HintedHandoffManager"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"Created HHOM instance, registered MBean."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>scheduleAllDeliveries</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>optionalTasks</name>.<name>scheduleWithFixedDelay</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr>10</expr></argument>, <argument><expr>10</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MINUTES</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>sendMutation</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>RowMutation</name></type> <name>mutation</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>TimeoutException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>IWriteResponseHandler</name></type> <name>responseHandler</name> <init>= <expr><call><name><name>WriteResponseHandler</name>.<name>create</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendRR</name><argument_list>(<argument><expr><name>mutation</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>responseHandler</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>responseHandler</name>.<name>get</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getHintedHandoffThrottleDelay</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>deleteHint</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>tokenBytes</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>hintId</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>RowMutation</name></type> <name>rm</name> <init>= <expr>new <call><name>RowMutation</name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>, <argument><expr><name>tokenBytes</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>rm</name>.<name>delete</name></name><argument_list>(<argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name>HINTS_CF</name></expr></argument>, <argument><expr><name>hintId</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>rm</name>.<name>applyUnsafe</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// don't bother with commitlog since we're going to flush as soon as we're done with delivery</comment>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>deleteHintsForEndpoint</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>String</name></type> <name>ipOrHostname</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>endpoint</name> <init>= <expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>ipOrHostname</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name>deleteHintsForEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>UnknownHostException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger_</name>.<name>warn</name></name><argument_list>(<argument><expr>"Unable to find "+<name>ipOrHostname</name>+", not a hostname or ipaddr of a node?:"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>e</name>.<name>printStackTrace</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>deleteHintsForEndpoint</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call>.<call><name>isMember</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+        <decl_stmt><decl><type><name><name>Token</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>token</name> <init>= <expr><call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call>.<call><name>getToken</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>tokenBytes</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call>.<call><name>toByteArray</name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>RowMutation</name></type> <name>rm</name> <init>= <expr>new <call><name>RowMutation</name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>, <argument><expr><name>tokenBytes</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>rm</name>.<name>delete</name></name><argument_list>(<argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name>HINTS_CF</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// execute asynchronously to avoid blocking caller (which may be processing gossip)</comment>
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <try>try
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger_</name>.<name>info</name></name><argument_list>(<argument><expr>"Deleting any stored hints for " + <name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>rm</name>.<name>apply</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>compact</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger_</name>.<name>warn</name></name><argument_list>(<argument><expr>"Could not delete hints for " + <name>endpoint</name> + ": " + <name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></catch></try>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>optionalTasks</name>.<name>execute</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><annotation>@<name>VisibleForTesting</name></annotation>
+    <specifier>protected</specifier> <name><name>Future</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>compact</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>ExecutionException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>hintStore</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name>HINTS_CF</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>hintStore</name>.<name>forceBlockingFlush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>Descriptor</name></argument>&gt;</argument_list></name></type> <name>descriptors</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>Descriptor</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTable</name></type> <name>sstable</name> <range>: <expr><call><name><name>hintStore</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>descriptors</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>sstable</name>.<name>descriptor</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><call><name><name>CompactionManager</name>.<name>instance</name>.<name>submitUserDefined</name></name><argument_list>(<argument><expr><name>hintStore</name></expr></argument>, <argument><expr><name>descriptors</name></expr></argument>, <argument><expr><call>(<name>int</name>) <argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> / 1000</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>pagingFinished</name><parameter_list>(<param><decl><type><name>ColumnFamily</name></type> <name>hintColumnFamily</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>startColumn</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// done if no hints found or the start column (same as last column processed in previous iteration) is the only one</comment>
+        <return>return <expr><name>hintColumnFamily</name> == null
+               || (<call><name><name>hintColumnFamily</name>.<name>getSortedColumns</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> == 1 &amp;&amp; <call><name><name>hintColumnFamily</name>.<name>getColumn</name></name><argument_list>(<argument><expr><name>startColumn</name></expr></argument>)</argument_list></call> != null)</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>int</name></type> <name>waitForSchemaAgreement</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>TimeoutException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>Gossiper</name></type> <name>gossiper</name> <init>= <expr><name><name>Gossiper</name>.<name>instance</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>waited</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <comment type="line">// first, wait for schema to be gossiped.</comment>
+        <while>while <condition>(<expr><call><name><name>gossiper</name>.<name>getEndpointStateForEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>getApplicationState</name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>SCHEMA</name></name></expr></argument>)</argument_list></call> == null</expr>)</condition>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr>1000</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+            <expr_stmt><expr><name>waited</name> += 1000</expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>waited</name> &gt; 2 * <name><name>StorageService</name>.<name>RING_DELAY</name></name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>TimeoutException</name><argument_list>(<argument><expr>"Didin't receive gossiped schema from " + <name>endpoint</name> + " in " + 2 * <name><name>StorageService</name>.<name>RING_DELAY</name></name> + "ms"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></while>
+        <expr_stmt><expr><name>waited</name> = 0</expr>;</expr_stmt>
+        <comment type="line">// then wait for the correct schema version.</comment>
+        <comment type="line">// usually we use DD.getDefsVersion, which checks the local schema uuid as stored in the system table.</comment>
+        <comment type="line">// here we check the one in gossip instead; this serves as a canary to warn us if we introduce a bug that</comment>
+        <comment type="line">// causes the two to diverge (see CASSANDRA-2946)</comment>
+        <while>while <condition>(<expr>!<call><name><name>gossiper</name>.<name>getEndpointStateForEndpoint</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>getApplicationState</name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>SCHEMA</name></name></expr></argument>)</argument_list></call>.<call><name><name>value</name>.<name>equals</name></name><argument_list>(
+                <argument><expr><call><name><name>gossiper</name>.<name>getEndpointStateForEndpoint</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>getApplicationState</name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>SCHEMA</name></name></expr></argument>)</argument_list></call>.<name>value</name></expr></argument>)</argument_list></call></expr>)</condition>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr>1000</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+            <expr_stmt><expr><name>waited</name> += 1000</expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>waited</name> &gt; 2 * <name><name>StorageService</name>.<name>RING_DELAY</name></name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>TimeoutException</name><argument_list>(<argument><expr>"Could not reach schema agreement with " + <name>endpoint</name> + " in " + 2 * <name><name>StorageService</name>.<name>RING_DELAY</name></name> + "ms"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        }</block></while>
+        <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"schema for {} matches local schema"</expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>waited</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>deliverHintsToEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>DigestMismatchException</name></expr></argument>, <argument><expr><name>InvalidRequestException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>deliverHintsToEndpointInternal</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <finally>finally
+        <block>{
+            <expr_stmt><expr><call><name><name>queuedDeliveries</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></finally></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>deliverHintsToEndpointInternal</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument>, <argument><expr><name>DigestMismatchException</name></expr></argument>, <argument><expr><name>InvalidRequestException</name></expr></argument>, <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>hintStore</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name>HINTS_CF</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>hintStore</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if> <comment type="line">// nothing to do, don't confuse users by logging a no-op handoff</comment>
+
+        <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"Checking remote({}) schema before delivering hints"</expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>waitForSchemaAgreement</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>TimeoutException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return;</return>
+        }</block></catch></try>
+
+        <if>if <condition>(<expr>!<call><name><name>FailureDetector</name>.<name>instance</name>.<name>isAlive</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"Endpoint {} died before hint delivery, aborting"</expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+
+        <comment type="line">// 1. Get the key of the endpoint we need to handoff</comment>
+        <comment type="line">// 2. For each column, deserialize the mutation and send it to the endpoint</comment>
+        <comment type="line">// 3. Delete the subcolumn if the write was successful</comment>
+        <comment type="line">// 4. Force a flush</comment>
+        <comment type="line">// 5. Do major compaction to clean up all deletes etc.</comment>
+
+        <comment type="line">// find the hints for the node using its token.</comment>
+        <decl_stmt><decl><type><name><name>Token</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>token</name> <init>= <expr><call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call>.<call><name>getToken</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>logger_</name>.<name>info</name></name><argument_list>(<argument><expr>"Started hinted handoff for token: {} with IP: {}"</expr></argument>, <argument><expr><name>token</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>tokenBytes</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call>.<call><name>toByteArray</name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>epkey</name> <init>=  <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>decorateKey</name><argument_list>(<argument><expr><name>tokenBytes</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>rowsReplayed</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>startColumn</name> <init>= <expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>int</name></type> <name>pageSize</name> <init>= <expr><name>PAGE_SIZE</name></expr></init></decl>;</decl_stmt>
+        <comment type="line">// read less columns (mutations) per page if they are very large</comment>
+        <if>if <condition>(<expr><call><name><name>hintStore</name>.<name>getMeanColumns</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>averageColumnSize</name> <init>= <expr><call>(<name>int</name>) <argument_list>(<argument><expr><call><name><name>hintStore</name>.<name>getMeanRowSize</name></name><argument_list>()</argument_list></call> / <call><name><name>hintStore</name>.<name>getMeanColumns</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>pageSize</name> = <call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><name>PAGE_SIZE</name></expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getInMemoryCompactionLimit</name></name><argument_list>()</argument_list></call> / <name>averageColumnSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>pageSize</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr>2</expr></argument>, <argument><expr><name>pageSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// page size of 1 does not allow actual paging b/c of &gt;= behavior on startColumn</comment>
+            <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"average hinted-row column size is {}; using pageSize of {}"</expr></argument>, <argument><expr><name>averageColumnSize</name></expr></argument>, <argument><expr><name>pageSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <label><name>delivery</name>:</label>
+        <while>while <condition>(<expr>true</expr>)</condition>
+        <block>{
+            <decl_stmt><decl><type><name>QueryFilter</name></type> <name>filter</name> <init>= <expr><call><name><name>QueryFilter</name>.<name>getSliceFilter</name></name><argument_list>(<argument><expr><name>epkey</name></expr></argument>, <argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><name>HINTS_CF</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>startColumn</name></expr></argument>, <argument><expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr></argument>, <argument><expr>false</expr></argument>, <argument><expr><name>pageSize</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>hintsPage</name> <init>= <expr><call><name><name>ColumnFamilyStore</name>.<name>removeDeleted</name></name><argument_list>(<argument><expr><call><name><name>hintStore</name>.<name>getColumnFamily</name></name><argument_list>(<argument><expr><name>filter</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call>(<name>int</name>)<argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> / 1000</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name>pagingFinished</name><argument_list>(<argument><expr><name>hintsPage</name></expr></argument>, <argument><expr><name>startColumn</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <break>break;</break></then></if>
+
+            <label><name>page</name>:</label>
+            <for>for (<init><decl><type><name>IColumn</name></type> <name>hint</name> <range>: <expr><call><name><name>hintsPage</name>.<name>getSortedColumns</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <comment type="line">// Skip tombstones:</comment>
+                <comment type="line">// if we iterate quickly enough, it's possible that we could request a new page in the same millisecond</comment>
+                <comment type="line">// in which the local deletion timestamp was generated on the last column in the old page, in which</comment>
+                <comment type="line">// case the hint will have no columns (since it's deleted) but will still be included in the resultset</comment>
+                <comment type="line">// since (even with gcgs=0) it's still a "relevant" tombstone.</comment>
+                <if>if <condition>(<expr>!<call><name><name>hint</name>.<name>isLive</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <expr_stmt><expr><name>startColumn</name> = <call><name><name>hint</name>.<name>name</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>IColumn</name></type> <name>subColumn</name> <range>: <expr><call><name><name>hint</name>.<name>getSubColumns</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <comment type="line">// both 0.8 and 1.0 column names are UTF8 strings, so this check is safe</comment>
+                    <if>if <condition>(<expr><call><name><name>ByteBufferUtil</name>.<name>string</name></name><argument_list>(<argument><expr><call><name><name>subColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>contains</name><argument_list>(<argument><expr><name>SEPARATOR_08</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"0.8-style hint found.  This should have been taken care of by purgeIncompatibleHints"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name>deleteHint</name><argument_list>(<argument><expr><name>tokenBytes</name></expr></argument>, <argument><expr><call><name><name>hint</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>hint</name>.<name>maxTimestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <continue>continue page;</continue>
+                    }</block></then></if>
+                }</block></for>
+
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>versionColumn</name> <init>= <expr><call><name><name>hint</name>.<name>getSubColumn</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"version"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>tableColumn</name> <init>= <expr><call><name><name>hint</name>.<name>getSubColumn</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"table"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>keyColumn</name> <init>= <expr><call><name><name>hint</name>.<name>getSubColumn</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"key"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>IColumn</name></type> <name>mutationColumn</name> <init>= <expr><call><name><name>hint</name>.<name>getSubColumn</name></name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>bytes</name></name><argument_list>(<argument><expr>"mutation"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <assert>assert <expr><name>versionColumn</name> != null</expr>;</assert>
+                <assert>assert <expr><name>tableColumn</name> != null</expr>;</assert>
+                <assert>assert <expr><name>keyColumn</name> != null</expr>;</assert>
+                <assert>assert <expr><name>mutationColumn</name> != null</expr>;</assert>
+                <decl_stmt><decl><type><name>DataInputStream</name></type> <name>in</name> <init>= <expr>new <call><name>DataInputStream</name><argument_list>(<argument><expr><call><name><name>ByteBufferUtil</name>.<name>inputStream</name></name><argument_list>(<argument><expr><call><name><name>mutationColumn</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>RowMutation</name></type> <name>rm</name></decl>;</decl_stmt>
+                <try>try
+                <block>{
+                    <expr_stmt><expr><name>rm</name> = <call><name><name>RowMutation</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr><name>in</name></expr></argument>, <argument><expr><call><name><name>ByteBufferUtil</name>.<name>toInt</name></name><argument_list>(<argument><expr><call><name><name>versionColumn</name>.<name>value</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>UnknownColumnFamilyException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"Skipping delivery of hint for deleted columnfamily"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><name>rm</name> = null</expr>;</expr_stmt>
+                }</block></catch></try>
+
+                <try>try
+                <block>{
+                    <if>if <condition>(<expr><name>rm</name> != null</expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name>sendMutation</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>rm</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><name>rowsReplayed</name>++</expr>;</expr_stmt>
+                    }</block></then></if>
+                    <expr_stmt><expr><call><name>deleteHint</name><argument_list>(<argument><expr><name>tokenBytes</name></expr></argument>, <argument><expr><call><name><name>hint</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>hint</name>.<name>maxTimestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>TimeoutException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger_</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Timed out replaying hints to %s; aborting further deliveries"</expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break delivery;</break>
+                }</block></catch></try>
+            }</block></for>
+        }</block></while>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>compact</name><argument_list>()</argument_list></call>.<call><name>get</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <expr_stmt><expr><call><name><name>logger_</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Finished hinted handoff of %s rows to endpoint %s"</expr></argument>, <argument><expr><name>rowsReplayed</name></expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Attempt delivery to any node for which we have hints.  Necessary since we can generate hints even for
+     * nodes which are never officially down/failed.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>scheduleAllDeliveries</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger_</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+          <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"Started scheduleAllDeliveries"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>hintStore</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_TABLE</name></name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name>HINTS_CF</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>IPartitioner</name></type> <name>p</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>RowPosition</name></type> <name>minPos</name> <init>= <expr><call><name><name>p</name>.<name>getMinimumToken</name></name><argument_list>()</argument_list></call>.<call><name>minKeyBound</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>RowPosition</name></argument>&gt;</argument_list></name></type> <name>range</name> <init>= <expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>RowPosition</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>minPos</name></expr></argument>, <argument><expr><name>minPos</name></expr></argument>, <argument><expr><name>p</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>IFilter</name></type> <name>filter</name> <init>= <expr>new <call><name>NamesQueryFilter</name><argument_list>(<argument><expr><name><name>ImmutableSortedSet</name>.</name>&lt;<name>ByteBuffer</name>&gt;<call><name>of</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>rows</name> <init>= <expr><call><name><name>hintStore</name>.<name>getRangeSlice</name></name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>range</name></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>, <argument><expr><name>filter</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Row</name></type> <name>row</name> <range>: <expr><name>rows</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>Token</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>token</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call>.<call><name>fromByteArray</name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>target</name> <init>= <expr><call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call>.<call><name>getEndpoint</name><argument_list>(<argument><expr><name>token</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// token may have since been removed (in which case we have just read back a tombstone)</comment>
+            <if>if <condition>(<expr><name>target</name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name>scheduleHintDelivery</name><argument_list>(<argument><expr><name>target</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+
+        <if>if <condition>(<expr><call><name><name>logger_</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+          <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"Finished scheduleAllDeliveries"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <comment type="block">/*
+     * This method is used to deliver hints to a particular endpoint.
+     * When we learn that some endpoint is back up we deliver the data
+     * to him via an event driven mechanism.
+    */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>scheduleHintDelivery</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>InetAddress</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger_</name>.<name>debug</name></name><argument_list>(<argument><expr>"deliverHints to {}"</expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr>!<call><name><name>queuedDeliveries</name>.<name>add</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>r</name> <init>= <expr>new <class><super><name>WrappedRunnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>runMayThrow</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>Exception</name></expr></argument></throws>
+            <block>{
+                <expr_stmt><expr><call><name>deliverHintsToEndpoint</name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+    	<expr_stmt><expr><call><name><name>executor_</name>.<name>execute</name></name><argument_list>(<argument><expr><name>r</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>scheduleHintDelivery</name><parameter_list>(<param><decl><type><name>String</name></type> <name>to</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnknownHostException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>scheduleHintDelivery</name><argument_list>(<argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>listEndpointsPendingHints</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Token</name>.<name>TokenFactory</name></name></type> <name>tokenFactory</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// Extract the keys as strings to be reported.</comment>
+        <decl_stmt><decl><type><name><name>LinkedList</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>result</name> <init>= <expr>new <call><name><name>LinkedList</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Row</name></type> <name>row</name> <range>: <expr><call><name>getHintsSlice</name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name><name>row</name>.<name>cf</name></name> != null</expr>)</condition><then> <comment type="line">//ignore removed rows</comment>
+                <expr_stmt><expr><call><name><name>result</name>.<name>addFirst</name></name><argument_list>(<argument><expr><call><name><name>tokenFactory</name>.<name>toString</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name>.<name>token</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <return>return <expr><name>result</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>countPendingHints</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Token</name>.<name>TokenFactory</name></name></type> <name>tokenFactory</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call>.<call><name>getTokenFactory</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>result</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>Row</name></type> <name>row</name> <range>: <expr><call><name>getHintsSlice</name><argument_list>(<argument><expr><name><name>Integer</name>.<name>MAX_VALUE</name></name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><name><name>row</name>.<name>cf</name></name> == null</expr>)</condition><then> <comment type="line">// ignore removed rows</comment>
+                <continue>continue;</continue></then></if>
+
+            <decl_stmt><decl><type><name>int</name></type> <name>count</name> <init>= <expr><call><name><name>row</name>.<name>cf</name>.<name>getColumnCount</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>count</name> &gt; 0</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>result</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>tokenFactory</name>.<name>toString</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name>.<name>token</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>count</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <return>return <expr><name>result</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>getHintsSlice</name><parameter_list>(<param><decl><type><name>int</name></type> <name>column_count</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// ColumnParent for HintsCF...</comment>
+        <decl_stmt><decl><type><name>ColumnParent</name></type> <name>parent</name> <init>= <expr>new <call><name>ColumnParent</name><argument_list>(<argument><expr><name>HINTS_CF</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// Get count # of columns...</comment>
+        <decl_stmt><decl><type><name>SlicePredicate</name></type> <name>predicate</name> <init>= <expr>new <call><name>SlicePredicate</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SliceRange</name></type> <name>sliceRange</name> <init>= <expr>new <call><name>SliceRange</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>sliceRange</name>.<name>setStart</name></name><argument_list>(<argument><expr>new <name><name>byte</name><index>[<expr>0</expr>]</index></name></expr></argument>)</argument_list></call>.<call><name>setFinish</name><argument_list>(<argument><expr>new <name><name>byte</name><index>[<expr>0</expr>]</index></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sliceRange</name>.<name>setCount</name></name><argument_list>(<argument><expr><name>column_count</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>predicate</name>.<name>setSlice_range</name></name><argument_list>(<argument><expr><name>sliceRange</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// From keys "" to ""...</comment>
+        <decl_stmt><decl><type><name><name>IPartitioner</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>partitioner</name> <init>= <expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>RowPosition</name></type> <name>minPos</name> <init>= <expr><call><name><name>partitioner</name>.<name>getMinimumToken</name></name><argument_list>()</argument_list></call>.<call><name>minKeyBound</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>RowPosition</name></argument>&gt;</argument_list></name></type> <name>range</name> <init>= <expr>new <call><name><name>Range</name><argument_list>&lt;<argument><name>RowPosition</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>minPos</name></expr></argument>, <argument><expr><name>minPos</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// Get a bunch of rows!</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Row</name></argument>&gt;</argument_list></name></type> <name>rows</name></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>rows</name> = <call><name><name>StorageProxy</name>.<name>getRangeSlice</name></name><argument_list>(<argument><expr>new <call><name>RangeSliceCommand</name><argument_list>(<argument><expr>"system"</expr></argument>, <argument><expr><name>parent</name></expr></argument>, <argument><expr><name>predicate</name></expr></argument>, <argument><expr><name>range</name></expr></argument>, <argument><expr>null</expr></argument>, <argument><expr><name>LARGE_NUMBER</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>ConsistencyLevel</name>.<name>ONE</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger_</name>.<name>info</name></name><argument_list>(<argument><expr>"HintsCF getEPPendingHints timed out."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <return>return <expr><name>rows</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

@@ -1,0 +1,35 @@
+private void orderResults(List<Pair<CFDefinition.Name, Selector>> selection, List<CqlRow> cqlRows)
+    {
+        // There is nothing to do if
+        //   a. there are no results,
+        //   b. no ordering information where given,
+        //   c. key restriction wasn't given or it's not an IN expression
+        if (cqlRows.isEmpty() || parameters.orderings.isEmpty() || keyRestriction == null || keyRestriction.eqValues.size() < 2)
+            return;
+
+
+        // optimization when only *one* order condition was given
+        // because there is no point of using composite comparator if there is only one order condition
+        if (parameters.orderings.size() == 1)
+        {
+            CFDefinition.Name ordering = cfDef.get(parameters.orderings.keySet().iterator().next());
+            Collections.sort(cqlRows, new SingleColumnComparator(getColumnPositionInSelect(selection, ordering), ordering.type));
+            return;
+        }
+
+        // builds a 'composite' type for multi-column comparison from the comparators of the ordering components
+        // and passes collected position information and built composite comparator to CompositeComparator to do
+        // an actual comparison of the CQL rows.
+        List<AbstractType<?>> types = new ArrayList<AbstractType<?>>(parameters.orderings.size());
+        int[] positions = new int[parameters.orderings.size()];
+
+        int idx = 0;
+        for (ColumnIdentifier identifier : parameters.orderings.keySet())
+        {
+            CFDefinition.Name orderingColumn = cfDef.get(identifier);
+            types.add(orderingColumn.type);
+            positions[idx++] = getColumnPositionInSelect(selection, orderingColumn);
+        }
+
+        Collections.sort(cqlRows, new CompositeComparator(types, positions));
+    }

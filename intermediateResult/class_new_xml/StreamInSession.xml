@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\streaming\StreamInSession.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutputStream</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>Socket</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentMap</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>cliffc</name>.<name>high_scale_lib</name>.<name>NonBlockingHashMap</name></name>;</import>
+<import>import <name><name>org</name>.<name>cliffc</name>.<name>high_scale_lib</name>.<name>NonBlockingHashSet</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>FailureDetector</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessageOut</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>OutboundTcpConnection</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>UUIDGen</name></name>;</import>
+
+<comment type="block" format="javadoc">/** each context gets its own StreamInSession. So there may be &gt;1 Session per host */</comment>
+<class><specifier>public</specifier> class <name>StreamInSession</name> <super><extends>extends <name>AbstractStreamSession</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>StreamInSession</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>ConcurrentMap</name><argument_list>&lt;<argument><name>UUID</name></argument>, <argument><name>StreamInSession</name></argument>&gt;</argument_list></name></type> <name>sessions</name> <init>= <expr>new <call><name><name>NonBlockingHashMap</name><argument_list>&lt;<argument><name>UUID</name></argument>, <argument><name>StreamInSession</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></type> <name>files</name> <init>= <expr>new <call><name><name>NonBlockingHashSet</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>readers</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>PendingFile</name></type> <name>current</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>Socket</name></type> <name>socket</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>volatile</specifier> <name>int</name></type> <name>retries</name></decl>;</decl_stmt>
+
+    <constructor><specifier>private</specifier> <name>StreamInSession</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>host</name></decl></param>, <param><decl><type><name>UUID</name></type> <name>sessionId</name></decl></param>, <param><decl><type><name>IStreamCallback</name></type> <name>callback</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr>null</expr></argument>, <argument><expr><name>host</name></expr></argument>, <argument><expr><name>sessionId</name></expr></argument>, <argument><expr><name>callback</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>StreamInSession</name></type> <name>create</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>host</name></decl></param>, <param><decl><type><name>IStreamCallback</name></type> <name>callback</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StreamInSession</name></type> <name>session</name> <init>= <expr>new <call><name>StreamInSession</name><argument_list>(<argument><expr><name>host</name></expr></argument>, <argument><expr><call><name><name>UUIDGen</name>.<name>getTimeUUID</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>callback</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>sessions</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>session</name>.<name>getSessionId</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>session</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>session</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>StreamInSession</name></type> <name>get</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>host</name></decl></param>, <param><decl><type><name>UUID</name></type> <name>sessionId</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StreamInSession</name></type> <name>session</name> <init>= <expr><call><name><name>sessions</name>.<name>get</name></name><argument_list>(<argument><expr><name>sessionId</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>session</name> == null</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>StreamInSession</name></type> <name>possibleNew</name> <init>= <expr>new <call><name>StreamInSession</name><argument_list>(<argument><expr><name>host</name></expr></argument>, <argument><expr><name>sessionId</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>(<name>session</name> = <call><name><name>sessions</name>.<name>putIfAbsent</name></name><argument_list>(<argument><expr><name>sessionId</name></expr></argument>, <argument><expr><name>possibleNew</name></expr></argument>)</argument_list></call>) == null</expr>)</condition><then>
+                <expr_stmt><expr><name>session</name> = <name>possibleNew</name></expr>;</expr_stmt></then></if>
+        }</block></then></if>
+        <return>return <expr><name>session</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>boolean</name></type> <name>hasSession</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>sessionId</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>sessions</name>.<name>get</name></name><argument_list>(<argument><expr><name>sessionId</name></expr></argument>)</argument_list></call> != null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setCurrentFile</name><parameter_list>(<param><decl><type><name>PendingFile</name></type> <name>file</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>current</name></name> = <name>file</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setTable</name><parameter_list>(<param><decl><type><name>String</name></type> <name>table</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>table</name></name> = <name>table</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setSocket</name><parameter_list>(<param><decl><type><name>Socket</name></type> <name>socket</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>socket</name></name> = <name>socket</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addFiles</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></type> <name>files</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>PendingFile</name></type> <name>file</name> <range>: <expr><name>files</name></expr></range></decl></init>)
+        <block>{
+            <if>if<condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Adding file {} to Stream Request queue"</expr></argument>, <argument><expr><call><name><name>file</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <expr_stmt><expr><call><name><name>this</name>.<name>files</name>.<name>add</name></name><argument_list>(<argument><expr><name>file</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>finished</name><parameter_list>(<param><decl><type><name>PendingFile</name></type> <name>remoteFile</name></decl></param>, <param><decl><type><name>SSTableReader</name></type> <name>reader</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Finished {} (from {}). Sending ack to {}"</expr></argument>, <argument><expr>new <name><name>Object</name><index>[]</index></name> <block>{<expr><name>remoteFile</name></expr>, <expr><call><name>getHost</name><argument_list>()</argument_list></call></expr>, <expr><name>this</name></expr>}</block></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <assert>assert <expr><name>reader</name> != null</expr>;</assert>
+        <expr_stmt><expr><call><name><name>readers</name>.<name>add</name></name><argument_list>(<argument><expr><name>reader</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>files</name>.<name>remove</name></name><argument_list>(<argument><expr><name>remoteFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>remoteFile</name>.<name>equals</name></name><argument_list>(<argument><expr><name>current</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><name>current</name> = null</expr>;</expr_stmt></then></if>
+        <decl_stmt><decl><type><name>StreamReply</name></type> <name>reply</name> <init>= <expr>new <call><name>StreamReply</name><argument_list>(<argument><expr><call><name><name>remoteFile</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>getSessionId</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>StreamReply</name>.<name>Status</name>.<name>FILE_FINISHED</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// send a StreamStatus message telling the source node it can delete this file</comment>
+        <expr_stmt><expr><call><name>sendMessage</name><argument_list>(<argument><expr><call><name><name>reply</name>.<name>createMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"ack {} sent for {}"</expr></argument>, <argument><expr><name>reply</name></expr></argument>, <argument><expr><name>remoteFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>retry</name><parameter_list>(<param><decl><type><name>PendingFile</name></type> <name>remoteFile</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>retries</name>++</expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>retries</name> &gt; <call><name><name>DatabaseDescriptor</name>.<name>getMaxStreamingRetries</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Failed streaming session %s from %s while receiving %s"</expr></argument>, <argument><expr><call><name>getSessionId</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>getHost</name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>current</name></expr></argument>)</argument_list></call></expr></argument>,
+                         <argument><expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"Too many retries for " + <name>remoteFile</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>close</name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+        <decl_stmt><decl><type><name>StreamReply</name></type> <name>reply</name> <init>= <expr>new <call><name>StreamReply</name><argument_list>(<argument><expr><call><name><name>remoteFile</name>.<name>getFilename</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>getSessionId</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>StreamReply</name>.<name>Status</name>.<name>FILE_RETRY</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Streaming of file {} for {} failed: requesting a retry."</expr></argument>, <argument><expr><name>remoteFile</name></expr></argument>, <argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>sendMessage</name><argument_list>(<argument><expr><call><name><name>reply</name>.<name>createMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Sending retry message failed, closing session."</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>close</name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>sendMessage</name><parameter_list>(<param><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>StreamReply</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>DataOutputStream</name></type> <name>out</name> <init>= <expr>new <call><name>DataOutputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getOutputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>OutboundTcpConnection</name>.<name>write</name></name><argument_list>(<argument><expr><name>message</name></expr></argument>,
+                                    <argument><expr><call><name><name>String</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name>getSessionId</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+                                    <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                    <argument><expr><name>out</name></expr></argument>,
+                                    <argument><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getVersion</name><argument_list>(<argument><expr><call><name>getHost</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>closeIfFinished</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>files</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>HashMap</name> <argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>cfstores</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>readers</name></expr></range></decl></init>)
+                <block>{
+                    <assert>assert <expr><call><name><name>sstable</name>.<name>getTableName</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr>;</assert>
+
+                    <comment type="line">// Acquire the reference (for secondary index building) before submitting the index build,</comment>
+                    <comment type="line">// so it can't get compacted out of existence in between</comment>
+                    <if>if <condition>(<expr>!<call><name><name>sstable</name>.<name>acquireReference</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr>"We shouldn't fail acquiring a reference on a sstable that has just been transferred"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                    <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><call><name><name>sstable</name>.<name>getTableName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><call><name><name>sstable</name>.<name>getColumnFamilyName</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr>!<call><name><name>cfstores</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>cfstores</name>.<name>put</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    <expr_stmt><expr><call><name><name>cfstores</name>.<name>get</name></name><argument_list>(<argument><expr><name>cfs</name></expr></argument>)</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name>sstable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+
+                <comment type="line">// add sstables and build secondary indexes</comment>
+                <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>cfstores</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call> != null</expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>addSSTables</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <expr_stmt><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name><name>indexManager</name>.<name>maybeBuildSecondaryIndexes</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name><name>indexManager</name>.<name>allIndexesNames</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                }</block></for>
+            }</block>
+            <finally>finally
+            <block>{
+                <for>for (<init><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>referenced</name> <range>: <expr><call><name><name>cfstores</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <expr_stmt><expr><call><name><name>SSTableReader</name>.<name>releaseReferences</name></name><argument_list>(<argument><expr><name>referenced</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            }</block></finally></try>
+
+            <comment type="line">// send reply to source that we're done</comment>
+            <decl_stmt><decl><type><name>StreamReply</name></type> <name>reply</name> <init>= <expr>new <call><name>StreamReply</name><argument_list>(<argument><expr>""</expr></argument>, <argument><expr><call><name>getSessionId</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>StreamReply</name>.<name>Status</name>.<name>SESSION_FINISHED</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Finished streaming session {} from {}"</expr></argument>, <argument><expr><call><name>getSessionId</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>getHost</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <try>try
+            <block>{
+                <if>if <condition>(<expr><name>socket</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>OutboundTcpConnection</name>.<name>write</name></name><argument_list>(<argument><expr><call><name><name>reply</name>.<name>createMessage</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                <argument><expr><call><name><name>sessionId</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                <argument><expr>new <call><name>DataOutputStream</name><argument_list>(<argument><expr><call><name><name>socket</name>.<name>getOutputStream</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+                                                <argument><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getVersion</name><argument_list>(<argument><expr><call><name>getHost</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                <else>else
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"No socket to reply to {} with!"</expr></argument>, <argument><expr><call><name>getHost</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+            }</block>
+            <finally>finally
+            <block>{
+                <if>if <condition>(<expr><name>socket</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>socket</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></finally></try>
+
+            <expr_stmt><expr><call><name>close</name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>closeInternal</name><parameter_list>(<param><decl><type><name>boolean</name></type> <name>success</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>sessions</name>.<name>remove</name></name><argument_list>(<argument><expr><name>sessionId</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr>!<name>success</name> &amp;&amp; <call><name><name>FailureDetector</name>.<name>instance</name>.<name>isAlive</name></name><argument_list>(<argument><expr><call><name>getHost</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>StreamReply</name></type> <name>reply</name> <init>= <expr>new <call><name>StreamReply</name><argument_list>(<argument><expr>""</expr></argument>, <argument><expr><call><name>getSessionId</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>StreamReply</name>.<name>Status</name>.<name>SESSION_FAILURE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendOneWay</name><argument_list>(<argument><expr><call><name><name>reply</name>.<name>createMessage</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>getHost</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** query method to determine which hosts are streaming to this node. */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getSources</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>set</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>StreamInSession</name></type> <name>session</name> <range>: <expr><call><name><name>sessions</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>set</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>session</name>.<name>getHost</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>set</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** query the status of incoming files. */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></type> <name>getIncomingFiles</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>host</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name></type> <name>set</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>PendingFile</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>UUID</name></argument>, <argument><name>StreamInSession</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>sessions</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>StreamInSession</name></type> <name>session</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>session</name>.<name>getHost</name></name><argument_list>()</argument_list></call>.<call><name>equals</name><argument_list>(<argument><expr><name>host</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name><name>session</name>.<name>current</name></name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>set</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>session</name>.<name>current</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <expr_stmt><expr><call><name><name>set</name>.<name>addAll</name></name><argument_list>(<argument><expr><name><name>session</name>.<name>files</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+        <return>return <expr><name>set</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

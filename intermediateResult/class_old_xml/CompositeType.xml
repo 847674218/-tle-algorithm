@@ -1,0 +1,264 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\marshal\CompositeType.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>HashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>ColumnNameBuilder</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>Relation</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>Term</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>DataOutputBuffer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>InvalidRequestException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+
+<comment type="block">/*
+ * The encoding of a CompositeType column name should be:
+ *   &lt;component&gt;&lt;component&gt;&lt;component&gt; ...
+ * where &lt;component&gt; is:
+ *   &lt;length of value&gt;&lt;value&gt;&lt;'end-of-component' byte&gt;
+ * where &lt;length of value&gt; is a 2 bytes unsigned short the and the
+ * 'end-of-component' byte should always be 0 for actual column name.
+ * However, it can set to 1 for query bounds. This allows to query for the
+ * equivalent of 'give me the full super-column'. That is, if during a slice
+ * query uses:
+ *   start = &lt;3&gt;&lt;"foo".getBytes()&gt;&lt;0&gt;
+ *   end   = &lt;3&gt;&lt;"foo".getBytes()&gt;&lt;1&gt;
+ * then he will be sure to get *all* the columns whose first component is "foo".
+ * If for a component, the 'end-of-component' is != 0, there should not be any
+ * following component. The end-of-component can also be -1 to allow
+ * non-inclusive query. For instance:
+ *   start = &lt;3&gt;&lt;"foo".getBytes()&gt;&lt;-1&gt;
+ * allows to query everything that is greater than &lt;3&gt;&lt;"foo".getBytes()&gt;, but
+ * not &lt;3&gt;&lt;"foo".getBytes()&gt; itself.
+ */</comment>
+<class><specifier>public</specifier> class <name>CompositeType</name> <super><extends>extends <name>AbstractCompositeType</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>types</name></decl>;</decl_stmt>
+
+    <comment type="line">// interning instances</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>, <argument><name>CompositeType</name></argument>&gt;</argument_list></name></type> <name>instances</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></argument>, <argument><name>CompositeType</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>CompositeType</name></type> <name>getInstance</name><parameter_list>(<param><decl><type><name>TypeParser</name></type> <name>parser</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>getInstance</name><argument_list>(<argument><expr><call><name><name>parser</name>.<name>getTypeParameters</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <specifier>synchronized</specifier> <name>CompositeType</name></type> <name>getInstance</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>types</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>types</name> != null &amp;&amp; !<call><name><name>types</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>;</assert>
+
+        <decl_stmt><decl><type><name>CompositeType</name></type> <name>ct</name> <init>= <expr><call><name><name>instances</name>.<name>get</name></name><argument_list>(<argument><expr><name>types</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>ct</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>ct</name> = new <call><name>CompositeType</name><argument_list>(<argument><expr><name>types</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>instances</name>.<name>put</name></name><argument_list>(<argument><expr><name>types</name></expr></argument>, <argument><expr><name>ct</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <return>return <expr><name>ct</name></expr>;</return>
+    }</block></function>
+
+    <constructor><specifier>private</specifier> <name>CompositeType</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>types</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>types</name></name> = <name>types</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>protected</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getNextComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getNextComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb1</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb2</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getAndAppendNextComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>, <param><decl><type><name>StringBuilder</name></type> <name>sb</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>ParsedComparator</name></type> <name>parseNextComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>String</name></type> <name>part</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>StaticParsedComparator</name><argument_list>(<argument><expr><call><name><name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>part</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>validateNextComparator</name><parameter_list>(<param><decl><type><name>int</name></type> <name>i</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>MarshalException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>i</name> &gt;= <call><name><name>types</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>MarshalException</name><argument_list>(<argument><expr>"Too many bytes for comparator"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr><call><name><name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>boolean</name></type> <name>isCompatibleWith</name><parameter_list>(<param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>previous</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><name>this</name> == <name>previous</name></expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if>
+
+        <if>if <condition>(<expr>!(<name>previous</name> instanceof <name>CompositeType</name>)</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <comment type="line">// Extending with new components is fine</comment>
+        <decl_stmt><decl><type><name>CompositeType</name></type> <name>cp</name> <init>= <expr>(<name>CompositeType</name>)<name>previous</name></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>types</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; <call><name><name>cp</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>cp</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <decl_stmt><decl><type><name>AbstractType</name></type> <name>tprev</name> <init>= <expr><call><name><name>cp</name>.<name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>AbstractType</name></type> <name>tnew</name> <init>= <expr><call><name><name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>!<call><name><name>tnew</name>.<name>isCompatibleWith</name></name><argument_list>(<argument><expr><name>tprev</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr>false</expr>;</return></then></if>
+        }</block></for>
+        <return>return <expr>true</expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>StaticParsedComparator</name> <super><implements>implements <name>ParsedComparator</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>String</name></type> <name>part</name></decl>;</decl_stmt>
+
+        <constructor><name>StaticParsedComparator</name><parameter_list>(<param><decl><type><name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>type</name></decl></param>, <param><decl><type><name>String</name></type> <name>part</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>type</name></name> = <name>type</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>part</name></name> = <name>part</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name><name>AbstractType</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>getAbstractType</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>type</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>String</name></type> <name>getRemainingPart</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>part</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>getComparatorSerializedSize</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>0</expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serializeComparator</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>)</parameter_list> <block>{}</block></function>
+    }</block></class>
+
+    <function><type><annotation>@<name>Override</name></annotation>
+    <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getClass</name><argument_list>()</argument_list></call>.<call><name>getName</name><argument_list>()</argument_list></call> + <call><name><name>TypeParser</name>.<name>stringifyTypeParameters</name></name><argument_list>(<argument><expr><name>types</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>Builder</name> <super><implements>implements <name>ColumnNameBuilder</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>CompositeType</name></type> <name>composite</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>int</name></type> <name>current</name></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>DataOutputBuffer</name></type> <name>out</name> <init>= <expr>new <call><name>DataOutputBuffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>Builder</name><parameter_list>(<param><decl><type><name>CompositeType</name></type> <name>composite</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><name><name>this</name>.<name>composite</name></name> = <name>composite</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <constructor><specifier>private</specifier> <name>Builder</name><parameter_list>(<param><decl><type><name>Builder</name></type> <name>b</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name><name>b</name>.<name>composite</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>current</name></name> = <name><name>b</name>.<name>current</name></name></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr><call><name><name>b</name>.<name>out</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>b</name>.<name>out</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>Builder</name></type> <name>add</name><parameter_list>(<param><decl><type><name>Term</name></type> <name>t</name></decl></param>, <param><decl><type><name><name>Relation</name>.<name>Type</name></name></type> <name>op</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>variables</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+        <block>{
+            <if>if <condition>(<expr><name>current</name> &gt;= <call><name><name>composite</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"Composite column is already fully constructed"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <decl_stmt><decl><type><name>AbstractType</name></type> <name>currentType</name> <init>= <expr><call><name><name>composite</name>.<name>types</name>.<name>get</name></name><argument_list>(<argument><expr><name>current</name>++</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>buffer</name> <init>= <expr><call><name><name>t</name>.<name>getByteBuffer</name></name><argument_list>(<argument><expr><name>currentType</name></expr></argument>, <argument><expr><name>variables</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>writeWithShortLength</name></name><argument_list>(<argument><expr><name>buffer</name></expr></argument>, <argument><expr><name>out</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="block">/*
+             * Given the rules for eoc (end-of-component, see AbstractCompositeType.compare()),
+             * We can select:
+             *   - = 'a' by using &lt;'a'&gt;&lt;0&gt;
+             *   - &lt; 'a' by using &lt;'a'&gt;&lt;-1&gt;
+             *   - &lt;= 'a' by using &lt;'a'&gt;&lt;1&gt;
+             *   - &gt; 'a' by using &lt;'a'&gt;&lt;1&gt;
+             *   - &gt;= 'a' by using &lt;'a'&gt;&lt;0&gt;
+             */</comment>
+            <switch>switch <condition>(<expr><name>op</name></expr>)</condition>
+            <block>{
+                <case>case <expr><name>LT</name></expr>:
+                    <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr>(<name>byte</name>) -1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                </case><case>case <expr><name>GT</name></expr>:
+                </case><case>case <expr><name>LTE</name></expr>:
+                    <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr>(<name>byte</name>) 1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                </case><default>default:
+                    <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr>(<name>byte</name>) 0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+            </default>}</block></switch>
+            <return>return <expr><name>this</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>Builder</name></type> <name>add</name><parameter_list>(<param><decl><type><name>ByteBuffer</name></type> <name>bb</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>current</name> &gt;= <call><name><name>composite</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"Composite column is already fully constructed"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>writeWithShortLength</name></name><argument_list>(<argument><expr><name>bb</name></expr></argument>, <argument><expr><name>out</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr>(<name>byte</name>) 0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>this</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>componentCount</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name>current</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>build</name><parameter_list>()</parameter_list>
+        <block>{
+            <comment type="line">// potentially slightly space-wasteful in favor of avoiding a copy</comment>
+            <return>return <expr><call><name><name>ByteBuffer</name>.<name>wrap</name></name><argument_list>(<argument><expr><call><name><name>out</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>out</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>buildAsEndOfRange</name><parameter_list>()</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><name>current</name> &gt;= <call><name><name>composite</name>.<name>types</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>IllegalStateException</name><argument_list>(<argument><expr>"Composite column is already fully constructed"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <if>if <condition>(<expr><name>current</name> == 0</expr>)</condition><then>
+                <return>return <expr><name><name>ByteBufferUtil</name>.<name>EMPTY_BYTE_BUFFER</name></name></expr>;</return></then></if>
+
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>bb</name> <init>= <expr><call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>bb</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>bb</name>.<name>remaining</name></name><argument_list>()</argument_list></call> - 1</expr></argument>, <argument><expr>(<name>byte</name>)1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name>bb</name></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>Builder</name></type> <name>copy</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>new <call><name>Builder</name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

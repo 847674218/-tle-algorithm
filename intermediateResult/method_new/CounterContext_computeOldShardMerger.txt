@@ -1,0 +1,114 @@
+public ByteBuffer computeOldShardMerger(ByteBuffer context, List<CounterId.CounterIdRecord> oldIds, long mergeBefore)
+    {
+        long now = System.currentTimeMillis();
+        int hlength = headerLength(context);
+        CounterId localId = CounterId.getLocalId();
+
+        Iterator<CounterId.CounterIdRecord> recordIterator = oldIds.iterator();
+        CounterId.CounterIdRecord currRecord = recordIterator.hasNext() ? recordIterator.next() : null;
+
+        ContextState state = new ContextState(context, hlength);
+
+        List<CounterId> toMerge = new ArrayList<CounterId>();
+        long mergeTotal = 0;
+        while (state.hasRemaining() && currRecord != null)
+        {
+            assert !currRecord.id.equals(localId);
+
+            CounterId counterId = state.getCounterId();
+            int c = counterId.compareTo(currRecord.id);
+
+            if (c > 0)
+            {
+                currRecord = recordIterator.hasNext() ? recordIterator.next() : null;
+                continue;
+            }
+
+            if (state.isDelta())
+            {
+                if (state.getClock() < 0)
+                {
+                    // Already merged shard, waiting to be collected
+
+                    if (counterId.equals(localId))
+                        // we should not get there, but we have been creating problematic context prior to #2968
+                        throw new RuntimeException("Current counterId with a negative clock (likely due to #2968). You need to restart this node with -Dcassandra.renew_counter_id=true to fix.");
+
+                    if (state.getCount() != 0)
+                    {
+                        // This should not happen, but previous bugs have generated this (#2968 in particular) so fixing it.
+                        logger.error(String.format("Invalid counter context (clock is %d and count is %d for CounterId %s), will fix", state.getCount(), state.getCount(), counterId.toString()));
+                        toMerge.add(counterId);
+                        mergeTotal += state.getCount();
+                    }
+                }
+                else if (c == 0)
+                {
+                    // Found an old id. However, merging an oldId that has just been renewed isn't safe, so
+                    // we check that it has been renewed before mergeBefore.
+                    if (currRecord.timestamp < mergeBefore)
+                    {
+                        toMerge.add(counterId);
+                        mergeTotal += state.getCount();
+                    }
+                }
+            }
+
+            if (c == 0)
+                currRecord = recordIterator.hasNext() ? recordIterator.next() : null;
+
+            state.moveToNext();
+        }
+        // Continuing the iteration so that we can repair invalid shards
+        while (state.hasRemaining())
+        {
+            CounterId counterId = state.getCounterId();
+            if (state.isDelta() && state.getClock() < 0)
+            {
+                if (counterId.equals(localId))
+                    // we should not get there, but we have been creating problematic context prior to #2968
+                    throw new RuntimeException("Current counterId with a negative clock (likely due to #2968). You need to restart this node with -Dcassandra.renew_counter_id=true to fix.");
+
+                if (state.getCount() != 0)
+                {
+                    // This should not happen, but previous bugs have generated this (#2968 in particular) so fixing it.
+                    logger.error(String.format("Invalid counter context (clock is %d and count is %d for CounterId %s), will fix", state.getClock(), state.getCount(), counterId.toString()));
+                    toMerge.add(counterId);
+                    mergeTotal += state.getCount();
+                }
+            }
+            state.moveToNext();
+        }
+
+        if (toMerge.isEmpty())
+            return null;
+
+        ContextState merger = ContextState.allocate(toMerge.size() + 1, toMerge.size() + 1);
+        state.reset();
+        int i = 0;
+        int removedTotal = 0;
+        boolean localWritten = false;
+        while (state.hasRemaining())
+        {
+            CounterId counterId = state.getCounterId();
+            if (counterId.compareTo(localId) > 0)
+            {
+                merger.writeElement(localId, 1L, mergeTotal, true);
+                localWritten = true;
+            }
+            else if (i < toMerge.size() && counterId.compareTo(toMerge.get(i)) == 0)
+            {
+                long count = state.getCount();
+                removedTotal += count;
+                merger.writeElement(counterId, -now - state.getClock(), -count, true);
+                ++i;
+            }
+            state.moveToNext();
+        }
+        if (!localWritten)
+            merger.writeElement(localId, 1L, mergeTotal, true);
+
+        // sanity check
+        assert mergeTotal == removedTotal;
+        return merger.context;
+    }

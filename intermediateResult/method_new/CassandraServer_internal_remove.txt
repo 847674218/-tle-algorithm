@@ -1,0 +1,21 @@
+private void internal_remove(ByteBuffer key, ColumnPath column_path, long timestamp, ConsistencyLevel consistency_level, boolean isCommutativeOp)
+    throws RequestValidationException, UnavailableException, TimedOutException
+    {
+        ThriftClientState cState = state();
+        String keyspace = cState.getKeyspace();
+        cState.hasColumnFamilyAccess(keyspace, column_path.column_family, Permission.MODIFY);
+
+        CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_path.column_family, isCommutativeOp);
+        ThriftValidation.validateKey(metadata, key);
+        ThriftValidation.validateColumnPathOrParent(metadata, column_path);
+        if (isCommutativeOp)
+            ThriftConversion.fromThrift(consistency_level).validateCounterForWrite(metadata);
+
+        RowMutation rm = new RowMutation(keyspace, key);
+        rm.delete(new QueryPath(column_path), timestamp);
+
+        if (isCommutativeOp)
+            doInsert(consistency_level, Arrays.asList(new CounterMutation(rm, ThriftConversion.fromThrift(consistency_level))));
+        else
+            doInsert(consistency_level, Arrays.asList(rm));
+    }

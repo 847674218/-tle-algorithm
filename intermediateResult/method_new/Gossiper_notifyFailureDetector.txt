@@ -1,0 +1,40 @@
+void notifyFailureDetector(InetAddress endpoint, EndpointState remoteEndpointState)
+    {
+        EndpointState localEndpointState = endpointStateMap.get(endpoint);
+        /*
+         * If the local endpoint state exists then report to the FD only
+         * if the versions workout.
+        */
+        if ( localEndpointState != null )
+        {
+            IFailureDetector fd = FailureDetector.instance;
+            int localGeneration = localEndpointState.getHeartBeatState().getGeneration();
+            int remoteGeneration = remoteEndpointState.getHeartBeatState().getGeneration();
+            if ( remoteGeneration > localGeneration )
+            {
+                localEndpointState.updateTimestamp();
+                // this node was dead and the generation changed, this indicates a reboot, or possibly a takeover
+                // we will clean the fd intervals for it and relearn them
+                if (!localEndpointState.isAlive())
+                {
+                    logger.debug("Clearing interval times for {} due to generation change", endpoint);
+                    fd.clear(endpoint);
+                }
+                fd.report(endpoint);
+                return;
+            }
+
+            if ( remoteGeneration == localGeneration )
+            {
+                int localVersion = getMaxEndpointStateVersion(localEndpointState);
+                int remoteVersion = remoteEndpointState.getHeartBeatState().getHeartBeatVersion();
+                if ( remoteVersion > localVersion )
+                {
+                    localEndpointState.updateTimestamp();
+                    // just a version change, report to the fd
+                    fd.report(endpoint);
+                }
+            }
+        }
+
+    }

@@ -1,0 +1,380 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\cql3\statements\UpdateStatement.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name>.<name>statements</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql3</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>filter</name>.<name>QueryPath</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>AbstractType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>marshal</name>.<name>LongType</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>ClientState</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>InvalidRequestException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>ByteBufferUtil</name></name>;</import>
+
+<import>import static <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql</name>.<name>QueryProcessor</name>.<name>validateColumnName</name></name>;</import>
+<import>import static <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>cql</name>.<name>QueryProcessor</name>.<name>validateKey</name></name>;</import>
+
+<import>import static <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>ThriftValidation</name>.<name>validateColumnFamily</name></name>;</import>
+<import>import static <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>ThriftValidation</name>.<name>validateCommutativeForWrite</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * An &lt;code&gt;UPDATE&lt;/code&gt; statement parsed from a CQL query statement.
+ *
+ */</comment>
+<class><specifier>public</specifier> class <name>UpdateStatement</name> <super><extends>extends <name>ModificationStatement</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <name>CFDefinition</name></type> <name>cfDef</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Operation</name></argument>&gt;</argument_list></name></type> <name>columns</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name></type> <name>columnNames</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>columnValues</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>Relation</name></argument>&gt;</argument_list></name></type> <name>whereClause</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Operation</name></argument>&gt;</argument_list></name></type> <name>processedColumns</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Operation</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>processedKeys</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Creates a new UpdateStatement from a column family name, columns map, consistency
+     * level, and key term.
+     *
+     * @param name column family being operated on
+     * @param columns a map of column name/values pairs
+     * @param whereClause the where clause
+     * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
+     */</comment>
+    <constructor><specifier>public</specifier> <name>UpdateStatement</name><parameter_list>(<param><decl><type><name>CFName</name></type> <name>name</name></decl></param>,
+                           <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Operation</name></argument>&gt;</argument_list></name></type> <name>columns</name></decl></param>,
+                           <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Relation</name></argument>&gt;</argument_list></name></type> <name>whereClause</name></decl></param>,
+                           <param><decl><type><name>Attributes</name></type> <name>attrs</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>attrs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name><name>this</name>.<name>columns</name></name> = <name>columns</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>whereClause</name></name> = <name>whereClause</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>columnNames</name></name> = null</expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>columnValues</name></name> = null</expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Creates a new UpdateStatement from a column family name, a consistency level,
+     * key, and lists of column names and values.  It is intended for use with the
+     * alternate update format, &lt;code&gt;INSERT&lt;/code&gt;.
+     *
+     * @param name column family being operated on
+     * @param columnNames list of column names
+     * @param columnValues list of column values (corresponds to names)
+     * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
+     */</comment>
+    <constructor><specifier>public</specifier> <name>UpdateStatement</name><parameter_list>(<param><decl><type><name>CFName</name></type> <name>name</name></decl></param>,
+                           <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>&gt;</argument_list></name></type> <name>columnNames</name></decl></param>,
+                           <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>columnValues</name></decl></param>,
+                           <param><decl><type><name>Attributes</name></type> <name>attrs</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>name</name></expr></argument>, <argument><expr><name>attrs</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name><name>this</name>.<name>columnNames</name></name> = <name>columnNames</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>columnValues</name></name> = <name>columnValues</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>whereClause</name></name> = null</expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>columns</name></name> = null</expr>;</expr_stmt>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/** {@inheritDoc} */</comment>
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IMutation</name></argument>&gt;</argument_list></name></type> <name>getMutations</name><parameter_list>(<param><decl><type><name>ClientState</name></type> <name>clientState</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>variables</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// Check key</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>keys</name> <init>= <expr><call><name><name>processedKeys</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>cfDef</name>.<name>key</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>keys</name> == null || <call><name><name>keys</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Missing mandatory PRIMARY KEY part %s"</expr></argument>, <argument><expr><name><name>cfDef</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <decl_stmt><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name> <init>= <expr><call><name><name>cfDef</name>.<name>getColumnNameBuilder</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>CFDefinition</name>.<name>Name</name></name></type> <name>firstEmpty</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>CFDefinition</name>.<name>Name</name></name></type> <name>name</name> <range>: <expr><call><name><name>cfDef</name>.<name>columns</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name> <init>= <expr><call><name><name>processedKeys</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>values</name> == null || <call><name><name>values</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>firstEmpty</name> = <name>name</name></expr>;</expr_stmt>
+                <comment type="line">// For sparse, we must have all components</comment>
+                <if>if <condition>(<expr><name><name>cfDef</name>.<name>isComposite</name></name> &amp;&amp; !<name><name>cfDef</name>.<name>isCompact</name></name></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Missing mandatory PRIMARY KEY part %s"</expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            }</block></then>
+            <else>else <if>if <condition>(<expr><name>firstEmpty</name> != null</expr>)</condition><then>
+            <block>{
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Missing PRIMARY KEY part %s since %s is set"</expr></argument>, <argument><expr><name><name>firstEmpty</name>.<name>name</name></name></expr></argument>, <argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></then>
+            <else>else
+            <block>{
+                <assert>assert <expr><call><name><name>values</name>.<name>size</name></name><argument_list>()</argument_list></call> == 1</expr>;</assert> <comment type="line">// We only allow IN for row keys so far</comment>
+                <expr_stmt><expr><call><name><name>builder</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>values</name>.<name>get</name></name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name><name>Relation</name>.<name>Type</name>.<name>EQ</name></name></expr></argument>, <argument><expr><name>variables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if></else></if>
+        }</block></for>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>IMutation</name></argument>&gt;</argument_list></name></type> <name>rowMutations</name> <init>= <expr>new <call><name><name>LinkedList</name><argument_list>&lt;<argument><name>IMutation</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>Term</name></type> <name>key</name><range>: <expr><name>keys</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>rawKey</name> <init>= <expr><call><name><name>key</name>.<name>getByteBuffer</name></name><argument_list>(<argument><expr><name><name>cfDef</name>.<name>key</name>.<name>type</name></name></expr></argument>, <argument><expr><name>variables</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>rowMutations</name>.<name>add</name></name><argument_list>(<argument><expr><call><name>mutationForKey</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>, <argument><expr><name>clientState</name></expr></argument>, <argument><expr><name>rawKey</name></expr></argument>, <argument><expr><name>builder</name></expr></argument>, <argument><expr><name>variables</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <return>return <expr><name>rowMutations</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Compute a row mutation for a single key
+     *
+     * @param cfDef column family being operated on
+     * @param clientState user/session state
+     * @param key key to change
+     * @param builder ongoing column name accumulator for the current statement
+     * @param variables positional values
+     *
+     * @return row mutation
+     *
+     * @throws InvalidRequestException on the wrong request
+     */</comment>
+    <function><type><specifier>private</specifier> <name>IMutation</name></type> <name>mutationForKey</name><parameter_list>(<param><decl><type><name>CFDefinition</name></type> <name>cfDef</name></decl></param>, <param><decl><type><name>ClientState</name></type> <name>clientState</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>key</name></decl></param>, <param><decl><type><name>ColumnNameBuilder</name></type> <name>builder</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>variables</name></decl></param>)</parameter_list>
+    <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>validateKey</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// if true we need to wrap RowMutation into CounterMutation</comment>
+        <decl_stmt><decl><type><name>boolean</name></type> <name>hasCounterColumn</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>QueryProcessor</name>.<name>validateKey</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>RowMutation</name></type> <name>rm</name> <init>= <expr>new <call><name>RowMutation</name><argument_list>(<argument><expr><name><name>cfDef</name>.<name>cfm</name>.<name>ksName</name></name></expr></argument>, <argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>rm</name>.<name>addOrGet</name></name><argument_list>(<argument><expr><name><name>cfDef</name>.<name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name><name>cfDef</name>.<name>isCompact</name></name></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>builder</name>.<name>componentCount</name></name><argument_list>()</argument_list></call> == 0</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Missing PRIMARY KEY part %s"</expr></argument>, <argument><expr><call><name><name>cfDef</name>.<name>columns</name>.<name>values</name></name><argument_list>()</argument_list></call>.<call><name>iterator</name><argument_list>()</argument_list></call>.<call><name>next</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <decl_stmt><decl><type><name>Operation</name></type> <name>value</name> <init>= <expr><call><name><name>processedColumns</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>cfDef</name>.<name>value</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>value</name> == null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Missing mandatory column %s"</expr></argument>, <argument><expr><name><name>cfDef</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><name>hasCounterColumn</name> = <call><name>addToMutation</name><argument_list>(<argument><expr><name>clientState</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><call><name><name>builder</name>.<name>build</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>cfDef</name>.<name>value</name></name></expr></argument>, <argument><expr><name>value</name></expr></argument>, <argument><expr><name>variables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <for>for (<init><decl><type><name><name>CFDefinition</name>.<name>Name</name></name></type> <name>name</name> <range>: <expr><call><name><name>cfDef</name>.<name>metadata</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>Operation</name></type> <name>value</name> <init>= <expr><call><name><name>processedColumns</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>value</name> == null</expr>)</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>colName</name> <init>= <expr><call><name><name>builder</name>.<name>copy</name></name><argument_list>()</argument_list></call>.<call><name>add</name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name>.<name>key</name></name></expr></argument>)</argument_list></call>.<call><name>build</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><name>hasCounterColumn</name> |= <call><name>addToMutation</name><argument_list>(<argument><expr><name>clientState</name></expr></argument>, <argument><expr><name>cf</name></expr></argument>, <argument><expr><name>colName</name></expr></argument>, <argument><expr><name>name</name></expr></argument>, <argument><expr><name>value</name></expr></argument>, <argument><expr><name>variables</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></else></if>
+
+        <return>return <expr>(<name>hasCounterColumn</name>) ? new <call><name>CounterMutation</name><argument_list>(<argument><expr><name>rm</name></expr></argument>, <argument><expr><call><name>getConsistencyLevel</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> : <name>rm</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>addToMutation</name><parameter_list>(<param><decl><type><name>ClientState</name></type> <name>clientState</name></decl></param>,
+                                  <param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>,
+                                  <param><decl><type><name>ByteBuffer</name></type> <name>colName</name></decl></param>,
+                                  <param><decl><type><name><name>CFDefinition</name>.<name>Name</name></name></type> <name>valueDef</name></decl></param>,
+                                  <param><decl><type><name>Operation</name></type> <name>value</name></decl></param>,
+                                  <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ByteBuffer</name></argument>&gt;</argument_list></name></type> <name>variables</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>value</name>.<name>isUnary</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>validateColumnName</name><argument_list>(<argument><expr><name>colName</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>valueBytes</name> <init>= <expr><call><name><name>value</name>.<name>value</name>.<name>getByteBuffer</name></name><argument_list>(<argument><expr><name><name>valueDef</name>.<name>type</name></name></expr></argument>, <argument><expr><name>variables</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>Column</name></type> <name>c</name> <init>= <expr><name>timeToLive</name> &gt; 0
+                       ? new <call><name>ExpiringColumn</name><argument_list>(<argument><expr><name>colName</name></expr></argument>, <argument><expr><name>valueBytes</name></expr></argument>, <argument><expr><call><name>getTimestamp</name><argument_list>(<argument><expr><name>clientState</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timeToLive</name></expr></argument>)</argument_list></call>
+                       : new <call><name>Column</name><argument_list>(<argument><expr><name>colName</name></expr></argument>, <argument><expr><name>valueBytes</name></expr></argument>, <argument><expr><call><name>getTimestamp</name><argument_list>(<argument><expr><name>clientState</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>cf</name>.<name>addColumn</name></name><argument_list>(<argument><expr><name>c</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>false</expr>;</return>
+        }</block></then>
+        <else>else
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>valueDef</name>.<name>name</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>value</name>.<name>ident</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Only expressions like X = X + &lt;long&gt; are supported."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <decl_stmt><decl><type><name>long</name></type> <name>val</name></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>val</name> = <call><name><name>ByteBufferUtil</name>.<name>toLong</name></name><argument_list>(<argument><expr><call><name><name>value</name>.<name>value</name>.<name>getByteBuffer</name></name><argument_list>(<argument><expr><name><name>LongType</name>.<name>instance</name></name></expr></argument>, <argument><expr><name>variables</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>NumberFormatException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"'%s' is an invalid value, should be a long."</expr></argument>,
+                            <argument><expr><call><name><name>value</name>.<name>value</name>.<name>getText</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+
+            <if>if <condition>(<expr><name><name>value</name>.<name>type</name></name> == <name><name>Operation</name>.<name>Type</name>.<name>MINUS</name></name></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><name>val</name> == <name><name>Long</name>.<name>MIN_VALUE</name></name></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"The negation of " + <name>val</name> + " overflows supported integer precision (signed 8 bytes integer)"</expr></argument>)</argument_list></call></expr>;</throw></then>
+                <else>else
+                    <expr_stmt><expr><name>val</name> = -<name>val</name></expr>;</expr_stmt></else></if>
+            }</block></then></if>
+            <expr_stmt><expr><call><name><name>cf</name>.<name>addCounter</name></name><argument_list>(<argument><expr>new <call><name>QueryPath</name><argument_list>(<argument><expr><call><name>columnFamily</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>null</expr></argument>, <argument><expr><name>colName</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>val</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>true</expr>;</return>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>ParsedStatement</name>.<name>Prepared</name></name></type> <name>prepare</name><parameter_list>(<param><decl><type><name><name>CFDefinition</name>.<name>Name</name><index>[]</index></name></type> <name>boundNames</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>boolean</name></type> <name>hasCommutativeOperation</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>columns</name> != null</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Operation</name></argument>&gt;</argument_list></name></name></type> <name>column</name> <range>: <expr><call><name><name>columns</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr>!<call><name><name>column</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>isUnary</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>hasCommutativeOperation</name> = true</expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><name>hasCommutativeOperation</name> &amp;&amp; <call><name><name>column</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>isUnary</name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"Mix of commutative and non-commutative operations is not allowed."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            }</block></for>
+        }</block></then></if>
+
+        <comment type="line">// Deal here with the keyspace overwrite thingy to avoid mistake</comment>
+        <decl_stmt><decl><type><name>CFMetaData</name></type> <name>metadata</name> <init>= <expr><call><name>validateColumnFamily</name><argument_list>(<argument><expr><call><name>keyspace</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name>columnFamily</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>hasCommutativeOperation</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>hasCommutativeOperation</name></expr>)</condition><then>
+            <expr_stmt><expr><call><name>validateCommutativeForWrite</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><name>cLevel</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><name>cfDef</name> = <call><name><name>metadata</name>.<name>getCfDef</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>columns</name> == null</expr>)</condition><then>
+        <block>{
+            <comment type="line">// Created from an INSERT</comment>
+            <comment type="line">// Don't hate, validate.</comment>
+            <if>if <condition>(<expr><call><name><name>columnNames</name>.<name>size</name></name><argument_list>()</argument_list></call> != <call><name><name>columnValues</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"unmatched column names/values"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <if>if <condition>(<expr><call><name><name>columnNames</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; 1</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr>"no columns specified for INSERT"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <call><name><name>columnNames</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <block>{
+                <decl_stmt><decl><type><name><name>CFDefinition</name>.<name>Name</name></name></type> <name>name</name> <init>= <expr><call><name><name>cfDef</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>columnNames</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>name</name> == null</expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Unknown identifier %s"</expr></argument>, <argument><expr><call><name><name>columnNames</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                <decl_stmt><decl><type><name>Term</name></type> <name>value</name> <init>= <expr><call><name><name>columnValues</name>.<name>get</name></name><argument_list>(<argument><expr><name>i</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>value</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name><name>boundNames</name><index>[<expr><name><name>value</name>.<name>bindIndex</name></name></expr>]</index></name> = <name>name</name></expr>;</expr_stmt></then></if>
+
+                <switch>switch <condition>(<expr><name><name>name</name>.<name>kind</name></name></expr>)</condition>
+                <block>{
+                    <case>case <expr><name>KEY_ALIAS</name></expr>:
+                    </case><case>case <expr><name>COLUMN_ALIAS</name></expr>:
+                        <if>if <condition>(<expr><call><name><name>processedKeys</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Multiple definition found for PRIMARY KEY part %s"</expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                        <expr_stmt><expr><call><name><name>processedKeys</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <break>break;</break>
+                    </case><case>case <expr><name>VALUE_ALIAS</name></expr>:
+                    </case><case>case <expr><name>COLUMN_METADATA</name></expr>:
+                        <if>if <condition>(<expr><call><name><name>processedColumns</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Multiple definition found for column %s"</expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                        <expr_stmt><expr><call><name><name>processedColumns</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>, <argument><expr>new <call><name>Operation</name><argument_list>(<argument><expr><name>value</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <break>break;</break>
+                </case>}</block></switch>
+            }</block></for>
+        }</block></then>
+        <else>else
+        <block>{
+            <comment type="line">// Created from an UPDATE</comment>
+            <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name>Operation</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>columns</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name><name>CFDefinition</name>.<name>Name</name></name></type> <name>name</name> <init>= <expr><call><name><name>cfDef</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>name</name> == null</expr>)</condition><then>
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Unknown identifier %s"</expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+                <switch>switch <condition>(<expr><name><name>name</name>.<name>kind</name></name></expr>)</condition>
+                <block>{
+                    <case>case <expr><name>KEY_ALIAS</name></expr>:
+                    </case><case>case <expr><name>COLUMN_ALIAS</name></expr>:
+                        <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"PRIMARY KEY part %s found in SET part"</expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+                    </case><case>case <expr><name>VALUE_ALIAS</name></expr>:
+                    </case><case>case <expr><name>COLUMN_METADATA</name></expr>:
+                        <if>if <condition>(<expr><call><name><name>processedColumns</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                            <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Multiple definition found for column %s"</expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                        <decl_stmt><decl><type><name>Operation</name></type> <name>op</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <if>if <condition>(<expr><call><name><name>op</name>.<name>value</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                            <expr_stmt><expr><name><name>boundNames</name><index>[<expr><name><name>op</name>.<name>value</name>.<name>bindIndex</name></name></expr>]</index></name> = <name>name</name></expr>;</expr_stmt></then></if>
+                        <expr_stmt><expr><call><name><name>processedColumns</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>, <argument><expr><name>op</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                        <break>break;</break>
+                </case>}</block></switch>
+            }</block></for>
+            <expr_stmt><expr><call><name>processKeys</name><argument_list>(<argument><expr><name>cfDef</name></expr></argument>, <argument><expr><name>whereClause</name></expr></argument>, <argument><expr><name>processedKeys</name></expr></argument>, <argument><expr><name>boundNames</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <return>return <expr>new <call><name><name>ParsedStatement</name>.<name>Prepared</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr><name><name>Arrays</name>.</name>&lt;<name><name>CFDefinition</name>.<name>Name</name></name>&gt;<call><name>asList</name><argument_list>(<argument><expr><name>boundNames</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>ParsedStatement</name>.<name>Prepared</name></name></type> <name>prepare</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>CFDefinition</name>.<name>Name</name></name><index>[]</index></type> <name>names</name> <init>= <expr>new <name><name>CFDefinition</name>.<name>Name</name><index>[<expr><call><name>getBoundsTerms</name><argument_list>()</argument_list></call></expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <return>return <expr><call><name>prepare</name><argument_list>(<argument><expr><name>names</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// Reused by DeleteStatement</comment>
+    <function><type><specifier>static</specifier> <name>void</name></type> <name>processKeys</name><parameter_list>(<param><decl><type><name>CFDefinition</name></type> <name>cfDef</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Relation</name></argument>&gt;</argument_list></name></type> <name>keys</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ColumnIdentifier</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>processed</name></decl></param>, <param><decl><type><name><name>CFDefinition</name>.<name>Name</name><index>[]</index></name></type> <name>names</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>InvalidRequestException</name></expr></argument></throws>
+    <block>{
+        <for>for (<init><decl><type><name>Relation</name></type> <name>rel</name> <range>: <expr><name>keys</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name><name>CFDefinition</name>.<name>Name</name></name></type> <name>name</name> <init>= <expr><call><name><name>cfDef</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>rel</name>.<name>getEntity</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>name</name> == null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Unknown key identifier %s"</expr></argument>, <argument><expr><call><name><name>rel</name>.<name>getEntity</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <switch>switch <condition>(<expr><name><name>name</name>.<name>kind</name></name></expr>)</condition>
+            <block>{
+                <case>case <expr><name>KEY_ALIAS</name></expr>:
+                </case><case>case <expr><name>COLUMN_ALIAS</name></expr>:
+                    <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>Term</name></argument>&gt;</argument_list></name></type> <name>values</name></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><call><name><name>rel</name>.<name>operator</name></name><argument_list>()</argument_list></call> == <name><name>Relation</name>.<name>Type</name>.<name>EQ</name></name></expr>)</condition><then>
+                        <expr_stmt><expr><name>values</name> = <call><name><name>Collections</name>.<name>singletonList</name></name><argument_list>(<argument><expr><call><name><name>rel</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+                    <else>else <if>if <condition>(<expr><name><name>name</name>.<name>kind</name></name> == <name><name>CFDefinition</name>.<name>Name</name>.<name>Kind</name>.<name>KEY_ALIAS</name></name> &amp;&amp; <call><name><name>rel</name>.<name>operator</name></name><argument_list>()</argument_list></call> == <name><name>Relation</name>.<name>Type</name>.<name>IN</name></name></expr>)</condition><then>
+                        <expr_stmt><expr><name>values</name> = <call><name><name>rel</name>.<name>getInValues</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then>
+                    <else>else
+                        <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Invalid operator %s for key %s"</expr></argument>, <argument><expr><call><name><name>rel</name>.<name>operator</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>rel</name>.<name>getEntity</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></else></if></else></if>
+
+                    <if>if <condition>(<expr><call><name><name>processed</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                        <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Multiple definition found for PRIMARY KEY part %s"</expr></argument>, <argument><expr><name>name</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+                    <for>for (<init><decl><type><name>Term</name></type> <name>value</name> <range>: <expr><name>values</name></expr></range></decl></init>)
+                        <if>if <condition>(<expr><call><name><name>value</name>.<name>isBindMarker</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                            <expr_stmt><expr><name><name>names</name><index>[<expr><name><name>value</name>.<name>bindIndex</name></name></expr>]</index></name> = <name>name</name></expr>;</expr_stmt></then></if></for>
+                    <expr_stmt><expr><call><name><name>processed</name>.<name>put</name></name><argument_list>(<argument><expr><name><name>name</name>.<name>name</name></name></expr></argument>, <argument><expr><name>values</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                </case><case>case <expr><name>VALUE_ALIAS</name></expr>:
+                </case><case>case <expr><name>COLUMN_METADATA</name></expr>:
+                    <throw>throw <expr>new <call><name>InvalidRequestException</name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"PRIMARY KEY part %s found in SET part"</expr></argument>, <argument><expr><call><name><name>rel</name>.<name>getEntity</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw>
+            </case>}</block></switch>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"UpdateStatement(name=%s, keys=%s, columns=%s, consistency=%s, timestamp=%s, timeToLive=%s)"</expr></argument>,
+                             <argument><expr><name>cfName</name></expr></argument>,
+                             <argument><expr><name>whereClause</name></expr></argument>,
+                             <argument><expr><name>columns</name></expr></argument>,
+                             <argument><expr><call><name>getConsistencyLevel</name><argument_list>()</argument_list></call></expr></argument>,
+                             <argument><expr><name>timestamp</name></expr></argument>,
+                             <argument><expr><name>timeToLive</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

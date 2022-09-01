@@ -1,0 +1,24 @@
+private static InetAddress findSuitableEndpoint(String table, ByteBuffer key, String localDataCenter) throws UnavailableException
+    {
+        IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
+        List<InetAddress> endpoints = StorageService.instance.getLiveNaturalEndpoints(table, key);
+        if (endpoints.isEmpty())
+            throw new UnavailableException();
+
+        List<InetAddress> localEndpoints = new ArrayList<InetAddress>();
+        for (InetAddress endpoint : endpoints)
+        {
+            if (snitch.getDatacenter(endpoint).equals(localDataCenter))
+                localEndpoints.add(endpoint);
+        }
+        if (localEndpoints.isEmpty())
+        {
+            // No endpoint in local DC, pick the closest endpoint according to the snitch
+            snitch.sortByProximity(FBUtilities.getBroadcastAddress(), endpoints);
+            return endpoints.get(0);
+        }
+        else
+        {
+            return localEndpoints.get(FBUtilities.threadLocalRandom().nextInt(localEndpoints.size()));
+        }
+    }

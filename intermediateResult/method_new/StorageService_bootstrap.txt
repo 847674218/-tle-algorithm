@@ -1,0 +1,31 @@
+private void bootstrap(Collection<Token> tokens)
+    {
+        isBootstrapMode = true;
+        SystemTable.updateTokens(tokens); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping
+        if (0 == DatabaseDescriptor.getReplaceTokens().size())
+        {
+            // if not an existing token then bootstrap
+            // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
+            Gossiper.instance.addLocalApplicationState(ApplicationState.TOKENS, valueFactory.tokens(tokens));
+            Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS,
+                                                       valueFactory.bootstrapping(tokens));
+            setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
+            try
+            {
+                Thread.sleep(RING_DELAY);
+            }
+            catch (InterruptedException e)
+            {
+                throw new AssertionError(e);
+            }
+        }
+        else
+        {
+            // Dont set any state for the node which is bootstrapping the existing token...
+            tokenMetadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
+        }
+        Tracing.instance();
+        setMode(Mode.JOINING, "Starting to bootstrap...", true);
+        new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, tokenMetadata).bootstrap(); // handles token update
+        logger.info("Bootstrap completed! for the tokens {}", tokens);
+    }

@@ -1,0 +1,1001 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\net\MessagingService.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataInput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOError</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>AsynchronousCloseException</name></name>;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>channels</name>.<name>ServerSocketChannel</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ExecutorService</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicInteger</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>MBeanServer</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>ObjectName</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>base</name>.<name>Function</name></name>;</import>
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Lists</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>DebuggableThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>Stage</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>StageManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>EncryptionOptions</name>.<name>ServerEncryptionOptions</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>BootStrapper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>GossipDigestAck</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>GossipDigestAck2</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name>.<name>GossipDigestSyn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IVersionedSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>DataOutputBuffer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>locator</name>.<name>ILatencySubscriber</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>metrics</name>.<name>ConnectionMetrics</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>metrics</name>.<name>DroppedMessageMetrics</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>sink</name>.<name>SinkManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>security</name>.<name>SSLFactory</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name>.<name>compress</name>.<name>CompressedFileStreamTask</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>tracing</name>.<name>Tracing</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>cliffc</name>.<name>high_scale_lib</name>.<name>NonBlockingHashMap</name></name>;</import>
+
+<class><specifier>public</specifier> <specifier>final</specifier> class <name>MessagingService</name> <super><implements>implements <name>MessagingServiceMBean</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>MBEAN_NAME</name> <init>= <expr>"org.apache.cassandra.net:type=MessagingService"</expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// 8 bits version, so don't waste versions</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>VERSION_10</name>  <init>= <expr>3</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>VERSION_11</name>  <init>= <expr>4</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>VERSION_117</name> <init>= <expr>5</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>VERSION_12</name>  <init>= <expr>6</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>current_version</name> <init>= <expr><name>VERSION_12</name></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * we preface every message with this number so the recipient can validate the sender is sane
+     */</comment>
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>PROTOCOL_MAGIC</name> <init>= <expr>0xCA552DFA</expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* All verb handler identifiers */</comment>
+    <enum><specifier>public</specifier> enum <name>Verb</name>
+    <block>{
+        <decl><name>MUTATION</name></decl>,
+        <decl_stmt><decl><type><annotation>@<name>Deprecated</name></annotation></type> <name>BINARY</name></decl></decl_stmt>,
+        <decl><name>READ_REPAIR</name></decl>,
+        <decl><name>READ</name></decl>,
+        <decl><name>REQUEST_RESPONSE</name></decl>, <comment type="line">// client-initiated reads and writes</comment>
+        <decl_stmt><decl><type><annotation>@<name>Deprecated</name></annotation></type> <name>STREAM_INITIATE</name></decl></decl_stmt>,
+        <decl_stmt><decl><type><annotation>@<name>Deprecated</name></annotation></type> <name>STREAM_INITIATE_DONE</name></decl></decl_stmt>,
+        <decl><name>STREAM_REPLY</name></decl>,
+        <decl><name>STREAM_REQUEST</name></decl>,
+        <decl><name>RANGE_SLICE</name></decl>,
+        <decl><name>BOOTSTRAP_TOKEN</name></decl>,
+        <decl><name>TREE_REQUEST</name></decl>,
+        <decl><name>TREE_RESPONSE</name></decl>,
+        <decl_stmt><decl><type><annotation>@<name>Deprecated</name></annotation></type> <name>JOIN</name></decl></decl_stmt>,
+        <decl><name>GOSSIP_DIGEST_SYN</name></decl>,
+        <decl><name>GOSSIP_DIGEST_ACK</name></decl>,
+        <decl><name>GOSSIP_DIGEST_ACK2</name></decl>,
+        <decl_stmt><decl><type><annotation>@<name>Deprecated</name></annotation></type> <name>DEFINITIONS_ANNOUNCE</name></decl></decl_stmt>,
+        <decl><name>DEFINITIONS_UPDATE</name></decl>,
+        <decl><name>TRUNCATE</name></decl>,
+        <decl><name>SCHEMA_CHECK</name></decl>,
+        <decl_stmt><decl><type><annotation>@<name>Deprecated</name></annotation></type> <name>INDEX_SCAN</name></decl></decl_stmt>,
+        <decl><name>REPLICATION_FINISHED</name></decl>,
+        <decl><name>INTERNAL_RESPONSE</name></decl>, <comment type="line">// responses to internal calls</comment>
+        <decl><name>COUNTER_MUTATION</name></decl>,
+        <decl><name>STREAMING_REPAIR_REQUEST</name></decl>,
+        <decl><name>STREAMING_REPAIR_RESPONSE</name></decl>,
+        <decl><name>SNAPSHOT</name></decl>, <comment type="line">// Similar to nt snapshot</comment>
+        <decl><name>MIGRATION_REQUEST</name></decl>,
+        <decl><name>GOSSIP_SHUTDOWN</name></decl>,
+        <decl><name>_TRACE</name></decl>, <comment type="line">// dummy verb so we can use MS.droppedMessages</comment>
+        <comment type="line">// use as padding for backwards compatability where a previous version needs to validate a verb from the future.</comment>
+        <decl><name>UNUSED_1</name></decl>,
+        <decl><name>UNUSED_2</name></decl>,
+        <decl><name>UNUSED_3</name></decl>,
+        ;
+        <comment type="line">// remember to add new verbs at the end, since we serialize by ordinal</comment>
+    }</block></enum>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Verb</name><index>[]</index></type> <name>VERBS</name> <init>= <expr><call><name><name>Verb</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>EnumMap</name><argument_list>&lt;<argument><name><name>MessagingService</name>.<name>Verb</name></name></argument>, <argument><name>Stage</name></argument>&gt;</argument_list></name></type> <name>verbStages</name> <init>= <expr>new <class><super><name><name>EnumMap</name><argument_list>&lt;<argument><name><name>MessagingService</name>.<name>Verb</name></name></argument>, <argument><name>Stage</name></argument>&gt;</argument_list></name></super><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>class</name></name></expr></argument>)</argument_list>
+    <block>{<block>{
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>MUTATION</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MUTATION</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>BINARY</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MUTATION</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>READ_REPAIR</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MUTATION</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>TRUNCATE</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MUTATION</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>READ</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>READ</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>REQUEST_RESPONSE</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>REQUEST_RESPONSE</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>STREAM_REPLY</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MISC</name></name></type></decl></param>)</parameter_list>;</constructor_decl> <comment type="line">// actually handled by FileStreamTask and streamExecutors</comment>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>STREAM_REQUEST</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MISC</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>RANGE_SLICE</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>READ</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>BOOTSTRAP_TOKEN</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MISC</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>TREE_REQUEST</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>ANTI_ENTROPY</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>TREE_RESPONSE</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>ANTI_ENTROPY</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>STREAMING_REPAIR_REQUEST</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>ANTI_ENTROPY</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>STREAMING_REPAIR_RESPONSE</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>ANTI_ENTROPY</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>GOSSIP_DIGEST_ACK</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>GOSSIP</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>GOSSIP_DIGEST_ACK2</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>GOSSIP</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>GOSSIP_DIGEST_SYN</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>GOSSIP</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>GOSSIP_SHUTDOWN</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>GOSSIP</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>DEFINITIONS_UPDATE</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MIGRATION</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>SCHEMA_CHECK</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MIGRATION</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>MIGRATION_REQUEST</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MIGRATION</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>INDEX_SCAN</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>READ</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>REPLICATION_FINISHED</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MISC</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>INTERNAL_RESPONSE</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>INTERNAL_RESPONSE</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>COUNTER_MUTATION</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MUTATION</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>SNAPSHOT</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>MISC</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>UNUSED_1</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>INTERNAL_RESPONSE</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>UNUSED_2</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>INTERNAL_RESPONSE</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>UNUSED_3</name></name></type></decl></param>, <param><decl><type><name><name>Stage</name>.<name>INTERNAL_RESPONSE</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+    }</block>}</block></class></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Messages we receive in IncomingTcpConnection have a Verb that tells us what kind of message it is.
+     * Most of the time, this is enough to determine how to deserialize the message payload.
+     * The exception is the REQUEST_RESPONSE verb, which just means "a reply to something you told me to do."
+     * Traditionally, this was fine since each VerbHandler knew what type of payload it expected, and
+     * handled the deserialization itself.  Now that we do that in ITC, to avoid the extra copy to an
+     * intermediary byte[] (See CASSANDRA-3716), we need to wire that up to the CallbackInfo object
+     * (see below).
+     */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>EnumMap</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>verbSerializers</name> <init>= <expr>new <class><super><name><name>EnumMap</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>(<argument><expr><name><name>Verb</name>.<name>class</name></name></expr></argument>)</argument_list>
+    <block>{<block>{
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>REQUEST_RESPONSE</name></name></type></decl></param>, <param><decl><type><name><name>CallbackDeterminedSerializer</name>.<name>instance</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>INTERNAL_RESPONSE</name></name></type></decl></param>, <param><decl><type><name><name>CallbackDeterminedSerializer</name>.<name>instance</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>MUTATION</name></name></type></decl></param>, <param><decl><type><name><name>RowMutation</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>READ_REPAIR</name></name></type></decl></param>, <param><decl><type><name><name>RowMutation</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>READ</name></name></type></decl></param>, <param><decl><type><name><name>ReadCommand</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>STREAM_REPLY</name></name></type></decl></param>, <param><decl><type><name><name>StreamReply</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>STREAM_REQUEST</name></name></type></decl></param>, <param><decl><type><name><name>StreamRequest</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>RANGE_SLICE</name></name></type></decl></param>, <param><decl><type><name><name>RangeSliceCommand</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>BOOTSTRAP_TOKEN</name></name></type></decl></param>, <param><decl><type><name><name>BootStrapper</name>.<name>StringSerializer</name>.<name>instance</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>TREE_REQUEST</name></name></type></decl></param>, <param><decl><type><name><name>AntiEntropyService</name>.<name>TreeRequest</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>TREE_RESPONSE</name></name></type></decl></param>, <param><decl><type><name><name>AntiEntropyService</name>.<name>Validator</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>STREAMING_REPAIR_REQUEST</name></name></type></decl></param>, <param><decl><type><name><name>StreamingRepairTask</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>STREAMING_REPAIR_RESPONSE</name></name></type></decl></param>, <param><decl><type><name><name>UUIDSerializer</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>GOSSIP_DIGEST_ACK</name></name></type></decl></param>, <param><decl><type><name><name>GossipDigestAck</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>GOSSIP_DIGEST_ACK2</name></name></type></decl></param>, <param><decl><type><name><name>GossipDigestAck2</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>GOSSIP_DIGEST_SYN</name></name></type></decl></param>, <param><decl><type><name><name>GossipDigestSyn</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>DEFINITIONS_UPDATE</name></name></type></decl></param>, <param><decl><type><name><name>MigrationManager</name>.<name>MigrationsSerializer</name>.<name>instance</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>TRUNCATE</name></name></type></decl></param>, <param><decl><type><name><name>Truncation</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>INDEX_SCAN</name></name></type></decl></param>, <param><decl><type><name><name>IndexScanCommand</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <expr_stmt><expr><call><name>put</name><argument_list>(<argument><expr><name><name>Verb</name>.<name>REPLICATION_FINISHED</name></name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>COUNTER_MUTATION</name></name></type></decl></param>, <param><decl><type><name><name>CounterMutation</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+    }</block>}</block></class></expr></init></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * A Map of what kind of serializer to wire up to a REQUEST_RESPONSE callback, based on outbound Verb.
+     */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>EnumMap</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>callbackDeserializers</name> <init>= <expr>new <class><super><name><name>EnumMap</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>(<argument><expr><name><name>Verb</name>.<name>class</name></name></expr></argument>)</argument_list>
+    <block>{<block>{
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>MUTATION</name></name></type></decl></param>, <param><decl><type><name><name>WriteResponse</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>READ_REPAIR</name></name></type></decl></param>, <param><decl><type><name><name>WriteResponse</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>COUNTER_MUTATION</name></name></type></decl></param>, <param><decl><type><name><name>WriteResponse</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>RANGE_SLICE</name></name></type></decl></param>, <param><decl><type><name><name>RangeSliceReply</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>READ</name></name></type></decl></param>, <param><decl><type><name><name>ReadResponse</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>TRUNCATE</name></name></type></decl></param>, <param><decl><type><name><name>TruncateResponse</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <expr_stmt><expr><call><name>put</name><argument_list>(<argument><expr><name><name>Verb</name>.<name>SNAPSHOT</name></name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>MIGRATION_REQUEST</name></name></type></decl></param>, <param><decl><type><name><name>MigrationManager</name>.<name>MigrationsSerializer</name>.<name>instance</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>SCHEMA_CHECK</name></name></type></decl></param>, <param><decl><type><name><name>UUIDSerializer</name>.<name>serializer</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <constructor_decl><name>put</name><parameter_list>(<param><decl><type><name><name>Verb</name>.<name>BOOTSTRAP_TOKEN</name></name></type></decl></param>, <param><decl><type><name><name>BootStrapper</name>.<name>StringSerializer</name>.<name>instance</name></name></type></decl></param>)</parameter_list>;</constructor_decl>
+        <expr_stmt><expr><call><name>put</name><argument_list>(<argument><expr><name><name>Verb</name>.<name>REPLICATION_FINISHED</name></name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block>}</block></class></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* This records all the results mapped by message Id */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ExpiringMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>CallbackInfo</name></argument>&gt;</argument_list></name></type> <name>callbacks</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * a placeholder class that means "deserialize using the callback." We can't implement this without
+     * special-case code in InboundTcpConnection because there is no way to pass the message id to IVersionedSerializer.
+     */</comment>
+    <class><specifier>static</specifier> class <name>CallbackDeterminedSerializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>Object</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>CallbackDeterminedSerializer</name></type> <name>instance</name> <init>= <expr>new <call><name>CallbackDeterminedSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <function><type><specifier>public</specifier> <name>Object</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>in</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>out</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>Object</name></type> <name>o</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+    }</block></class>
+
+    <comment type="block">/* Lookup table for registering message handlers based on the verb. */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name>IVerbHandler</name></argument>&gt;</argument_list></name></type> <name>verbHandlers</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * One executor per destination InetAddress for streaming.
+     * &lt;p/&gt;
+     * See CASSANDRA-3494 for the background. We have streaming in place so we do not want to limit ourselves to
+     * one stream at a time for throttling reasons. But, we also do not want to just arbitrarily stream an unlimited
+     * amount of files at once because a single destination might have hundreds of files pending and it would cause a
+     * seek storm. So, transfer exactly one file per destination host. That puts a very natural rate limit on it, in
+     * addition to mapping well to the expected behavior in many cases.
+     * &lt;p/&gt;
+     * We will create our stream executors with a core size of 0 so that they time out and do not consume threads. This
+     * means the overhead in the degenerate case of having streamed to everyone in the ring over time as a ring changes,
+     * is not going to be a thread per node - but rather an instance per node. That's totally fine.
+     */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>DebuggableThreadPoolExecutor</name></argument>&gt;</argument_list></name></type> <name>streamExecutors</name> <init>= <expr>new <call><name><name>NonBlockingHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>DebuggableThreadPoolExecutor</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>NonBlockingHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>OutboundTcpConnectionPool</name></argument>&gt;</argument_list></name></type> <name>connectionManagers</name> <init>= <expr>new <call><name><name>NonBlockingHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>OutboundTcpConnectionPool</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>int</name></type> <name>LOG_DROPPED_INTERVAL_IN_MS</name> <init>= <expr>5000</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>SocketThread</name></argument>&gt;</argument_list></name></type> <name>socketThreads</name> <init>= <expr><call><name><name>Lists</name>.<name>newArrayList</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>SimpleCondition</name></type> <name>listenGate</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * Verbs it's okay to drop if the request has been queued longer than the request timeout.  These
+     * all correspond to client requests or something triggered by them; we don't want to
+     * drop internal messages like bootstrap or repair notifications.
+     */</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>EnumSet</name><argument_list>&lt;<argument><name>Verb</name></argument>&gt;</argument_list></name></type> <name>DROPPABLE_VERBS</name> <init>= <expr><call><name><name>EnumSet</name>.<name>of</name></name><argument_list>(<argument><expr><name><name>Verb</name>.<name>BINARY</name></name></expr></argument>,
+                                                                   <argument><expr><name><name>Verb</name>.<name>_TRACE</name></name></expr></argument>,
+                                                                   <argument><expr><name><name>Verb</name>.<name>MUTATION</name></name></expr></argument>,
+                                                                   <argument><expr><name><name>Verb</name>.<name>READ_REPAIR</name></name></expr></argument>,
+                                                                   <argument><expr><name><name>Verb</name>.<name>READ</name></name></expr></argument>,
+                                                                   <argument><expr><name><name>Verb</name>.<name>RANGE_SLICE</name></name></expr></argument>,
+                                                                   <argument><expr><name><name>Verb</name>.<name>REQUEST_RESPONSE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// total dropped message counts for server lifetime</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name>DroppedMessageMetrics</name></argument>&gt;</argument_list></name></type> <name>droppedMessages</name> <init>= <expr>new <call><name><name>EnumMap</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name>DroppedMessageMetrics</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>Verb</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <comment type="line">// dropped count when last requested for the Recent api.  high concurrency isn't necessary here.</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>lastDroppedInternal</name> <init>= <expr>new <call><name><name>EnumMap</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>Verb</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ILatencySubscriber</name></argument>&gt;</argument_list></name></type> <name>subscribers</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ILatencySubscriber</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// protocol versions of the other nodes in the cluster</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>ConcurrentMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>versions</name> <init>= <expr>new <call><name><name>NonBlockingHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>MSHandle</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>MessagingService</name></type> <name>instance</name> <init>= <expr>new <call><name>MessagingService</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    }</block></class>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>MessagingService</name></type> <name>instance</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>MSHandle</name>.<name>instance</name></name></expr>;</return>
+    }</block></function>
+
+    <constructor><specifier>private</specifier> <name>MessagingService</name><parameter_list>()</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>Verb</name></type> <name>verb</name> <range>: <expr><name>DROPPABLE_VERBS</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>droppedMessages</name>.<name>put</name></name><argument_list>(<argument><expr><name>verb</name></expr></argument>, <argument><expr>new <call><name>DroppedMessageMetrics</name><argument_list>(<argument><expr><name>verb</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>lastDroppedInternal</name>.<name>put</name></name><argument_list>(<argument><expr><name>verb</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <expr_stmt><expr><name>listenGate</name> = new <call><name>SimpleCondition</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>verbHandlers</name> = new <call><name><name>EnumMap</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name>IVerbHandler</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>Verb</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>logDropped</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name>logDroppedMessages</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>scheduledTasks</name>.<name>scheduleWithFixedDelay</name></name><argument_list>(<argument><expr><name>logDropped</name></expr></argument>, <argument><expr><name>LOG_DROPPED_INTERVAL_IN_MS</name></expr></argument>, <argument><expr><name>LOG_DROPPED_INTERVAL_IN_MS</name></expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name><name>Function</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>ExpiringMap</name>.<name><name>CacheableObject</name><argument_list>&lt;<argument><name>CallbackInfo</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></argument>, <argument><name>?</name></argument>&gt;</argument_list></name></type> <name>timeoutReporter</name> <init>= <expr>new <class><super><name><name>Function</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>ExpiringMap</name>.<name><name>CacheableObject</name><argument_list>&lt;<argument><name>CallbackInfo</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></argument>, <argument><name>Object</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>Object</name></type> <name>apply</name><parameter_list>(<param><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name><name>ExpiringMap</name>.<name><name>CacheableObject</name><argument_list>&lt;<argument><name>CallbackInfo</name></argument>&gt;</argument_list></name></name></argument>&gt;</argument_list></name></type> <name>pair</name></decl></param>)</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>CallbackInfo</name></type> <name>expiredCallbackInfo</name> <init>= <expr><name><name>pair</name>.<name>right</name>.<name>value</name></name></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name>maybeAddLatency</name><argument_list>(<argument><expr><name><name>expiredCallbackInfo</name>.<name>callback</name></name></expr></argument>, <argument><expr><name><name>expiredCallbackInfo</name>.<name>target</name></name></expr></argument>, <argument><expr><name><name>pair</name>.<name>right</name>.<name>timeout</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>ConnectionMetrics</name>.<name>totalTimeouts</name>.<name>mark</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>getConnectionPool</name><argument_list>(<argument><expr><name><name>expiredCallbackInfo</name>.<name>target</name></name></expr></argument>)</argument_list></call>.<call><name>incrementTimeout</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+                <if>if <condition>(<expr><call><name><name>expiredCallbackInfo</name>.<name>shouldHint</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <assert>assert <expr><name><name>expiredCallbackInfo</name>.<name>sentMessage</name></name> != null</expr>;</assert>
+                    <decl_stmt><decl><type><name>RowMutation</name></type> <name>rm</name> <init>= <expr>(<name>RowMutation</name>) <name><name>expiredCallbackInfo</name>.<name>sentMessage</name>.<name>payload</name></name></expr></init></decl>;</decl_stmt>
+                    <return>return <expr><call><name><name>StorageProxy</name>.<name>submitHint</name></name><argument_list>(<argument><expr><name>rm</name></expr></argument>, <argument><expr><name><name>expiredCallbackInfo</name>.<name>target</name></name></expr></argument>, <argument><expr>null</expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</return>
+                }</block></then></if>
+
+                <return>return <expr>null</expr>;</return>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><name>callbacks</name> = new <call><name><name>ExpiringMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>CallbackInfo</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getMinRpcTimeout</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>timeoutReporter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name>MBeanServer</name></type> <name>mbs</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>mbs</name>.<name>registerMBean</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name>MBEAN_NAME</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Track latency information for the dynamic snitch
+     *
+     * @param cb      the callback associated with this message -- this lets us know if it's a message type we're interested in
+     * @param address the host that replied to the message
+     * @param latency
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>maybeAddLatency</name><parameter_list>(<param><decl><type><name>IMessageCallback</name></type> <name>cb</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>address</name></decl></param>, <param><decl><type><name>long</name></type> <name>latency</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>cb</name>.<name>isLatencyForSnitch</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name>addLatency</name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>latency</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addLatency</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>address</name></decl></param>, <param><decl><type><name>long</name></type> <name>latency</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>ILatencySubscriber</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>receiveTiming</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>latency</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * called from gossiper when it notices a node is not responding.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>convict</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Resetting pool for " + <name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>getConnectionPool</name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call>.<call><name>reset</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Listen on the specified port.
+     *
+     * @param localEp InetAddress whose port to listen on.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>listen</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>localEp</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name><name>callbacks</name>.<name>reset</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// hack to allow tests to stop/restart MS</comment>
+        <for>for (<init><decl><type><name>ServerSocket</name></type> <name>ss</name> <range>: <expr><call><name>getServerSocket</name><argument_list>(<argument><expr><name>localEp</name></expr></argument>)</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>SocketThread</name></type> <name>th</name> <init>= <expr>new <call><name>SocketThread</name><argument_list>(<argument><expr><name>ss</name></expr></argument>, <argument><expr>"ACCEPT-" + <name>localEp</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>th</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>socketThreads</name>.<name>add</name></name><argument_list>(<argument><expr><name>th</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <expr_stmt><expr><call><name><name>listenGate</name>.<name>signalAll</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ServerSocket</name></argument>&gt;</argument_list></name></type> <name>getServerSocket</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>localEp</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>ConfigurationException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ServerSocket</name></argument>&gt;</argument_list></name></type> <name>ss</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ServerSocket</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr>2</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>getServerEncryptionOptions</name></name><argument_list>()</argument_list></call>.<name>internode_encryption</name> != <name><name>ServerEncryptionOptions</name>.<name>InternodeEncryption</name>.<name>none</name></name></expr>)</condition><then>
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>ss</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>SSLFactory</name>.<name>getServerSocket</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getServerEncryptionOptions</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>localEp</name></expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getSSLStoragePort</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Unable to create ssl socket"</expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+            <comment type="line">// setReuseAddress happens in the factory.</comment>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Starting Encrypted Messaging Service on SSL port {}"</expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getSSLStoragePort</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name>ServerSocketChannel</name></type> <name>serverChannel</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><name>serverChannel</name> = <call><name><name>ServerSocketChannel</name>.<name>open</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <decl_stmt><decl><type><name>ServerSocket</name></type> <name>socket</name> <init>= <expr><call><name><name>serverChannel</name>.<name>socket</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>socket</name>.<name>setReuseAddress</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>SocketException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Insufficient permissions to setReuseAddress"</expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <decl_stmt><decl><type><name>InetSocketAddress</name></type> <name>address</name> <init>= <expr>new <call><name>InetSocketAddress</name><argument_list>(<argument><expr><name>localEp</name></expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getStoragePort</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>socket</name>.<name>bind</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>BindException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call>.<call><name>contains</name><argument_list>(<argument><expr>"in use"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr><name>address</name> + " is in use by another process.  Change listen_address:storage_port in cassandra.yaml to values that do not conflict with other services"</expr></argument>)</argument_list></call></expr>;</throw></then>
+            <else>else <if>if <condition>(<expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call>.<call><name>contains</name><argument_list>(<argument><expr>"Cannot assign requested address"</expr></argument>)</argument_list></call></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>ConfigurationException</name><argument_list>(<argument><expr>"Unable to bind to address " + <name>address</name>
+                                                 + ". Set listen_address in cassandra.yaml to an interface you can bind to, e.g., your private IP address on EC2"</expr></argument>)</argument_list></call></expr>;</throw></then>
+            <else>else
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw></else></if></else></if>
+        }</block></catch>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Starting Messaging Service on port {}"</expr></argument>, <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getStoragePort</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>ss</name>.<name>add</name></name><argument_list>(<argument><expr><name>socket</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>ss</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>waitUntilListening</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>listenGate</name>.<name>await</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>ie</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"await interrupted"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>destroyConnectionPool</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>OutboundTcpConnectionPool</name></type> <name>cp</name> <init>= <expr><call><name><name>connectionManagers</name>.<name>get</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>cp</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+        <expr_stmt><expr><call><name><name>cp</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>connectionManagers</name>.<name>remove</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>OutboundTcpConnectionPool</name></type> <name>getConnectionPool</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>OutboundTcpConnectionPool</name></type> <name>cp</name> <init>= <expr><call><name><name>connectionManagers</name>.<name>get</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>cp</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>connectionManagers</name>.<name>putIfAbsent</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>, <argument><expr>new <call><name>OutboundTcpConnectionPool</name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>cp</name> = <call><name><name>connectionManagers</name>.<name>get</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <return>return <expr><name>cp</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>OutboundTcpConnection</name></type> <name>getConnection</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>, <param><decl><type><name>MessageOut</name></type> <name>msg</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>getConnectionPool</name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call>.<call><name>getConnection</name><argument_list>(<argument><expr><name>msg</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Register a verb and the corresponding verb handler with the
+     * Messaging Service.
+     *
+     * @param verb
+     * @param verbHandler handler for the specified verb
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>registerVerbHandlers</name><parameter_list>(<param><decl><type><name>Verb</name></type> <name>verb</name></decl></param>, <param><decl><type><name>IVerbHandler</name></type> <name>verbHandler</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr>!<call><name><name>verbHandlers</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>verb</name></expr></argument>)</argument_list></call></expr>;</assert>
+        <expr_stmt><expr><call><name><name>verbHandlers</name>.<name>put</name></name><argument_list>(<argument><expr><name>verb</name></expr></argument>, <argument><expr><name>verbHandler</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * This method returns the verb handler associated with the registered
+     * verb. If no handler has been registered then null is returned.
+     *
+     * @param type for which the verb handler is sought
+     * @return a reference to IVerbHandler which is the handler for the specified verb
+     */</comment>
+    <function><type><specifier>public</specifier> <name>IVerbHandler</name></type> <name>getVerbHandler</name><parameter_list>(<param><decl><type><name>Verb</name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>verbHandlers</name>.<name>get</name></name><argument_list>(<argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>addCallback</name><parameter_list>(<param><decl><type><name>IMessageCallback</name></type> <name>cb</name></decl></param>, <param><decl><type><name>MessageOut</name></type> <name>message</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>, <param><decl><type><name>long</name></type> <name>timeout</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>messageId</name> <init>= <expr><call><name>nextId</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>CallbackInfo</name></type> <name>previous</name></decl>;</decl_stmt>
+
+        <comment type="line">// If HH is enabled and this is a mutation message =&gt; store the message to track for potential hints.</comment>
+        <if>if <condition>(<expr><call><name><name>DatabaseDescriptor</name>.<name>hintedHandoffEnabled</name></name><argument_list>()</argument_list></call> &amp;&amp; <name><name>message</name>.<name>verb</name></name> == <name><name>Verb</name>.<name>MUTATION</name></name></expr>)</condition><then>
+            <expr_stmt><expr><name>previous</name> = <call><name><name>callbacks</name>.<name>put</name></name><argument_list>(<argument><expr><name>messageId</name></expr></argument>, <argument><expr>new <call><name>CallbackInfo</name><argument_list>(<argument><expr><name>to</name></expr></argument>, <argument><expr><name>cb</name></expr></argument>, <argument><expr><name>message</name></expr></argument>, <argument><expr><call><name><name>callbackDeserializers</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>message</name>.<name>verb</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timeout</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><name>previous</name> = <call><name><name>callbacks</name>.<name>put</name></name><argument_list>(<argument><expr><name>messageId</name></expr></argument>, <argument><expr>new <call><name>CallbackInfo</name><argument_list>(<argument><expr><name>to</name></expr></argument>, <argument><expr><name>cb</name></expr></argument>, <argument><expr><call><name><name>callbackDeserializers</name>.<name>get</name></name><argument_list>(<argument><expr><name><name>message</name>.<name>verb</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>timeout</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+
+        <assert>assert <expr><name>previous</name> == null</expr>;</assert>
+        <return>return <expr><name>messageId</name></expr>;</return>
+    }</block></function>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>AtomicInteger</name></type> <name>idGen</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// TODO make these integers to avoid unnecessary int -&gt; string -&gt; int conversions</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>String</name></type> <name>nextId</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>Integer</name>.<name>toString</name></name><argument_list>(<argument><expr><call><name><name>idGen</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     * @see #sendRR(Message message, InetAddress to, IMessageCallback cb, long timeout)
+     */</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>sendRR</name><parameter_list>(<param><decl><type><name>MessageOut</name></type> <name>message</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>, <param><decl><type><name>IMessageCallback</name></type> <name>cb</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>sendRR</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>to</name></expr></argument>, <argument><expr><name>cb</name></expr></argument>, <argument><expr><call><name><name>message</name>.<name>getTimeout</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Send a message to a given endpoint. This method specifies a callback
+     * which is invoked with the actual response.
+     * Also holds the message (only mutation messages) to determine if it
+     * needs to trigger a hint (uses StorageProxy for that).
+     *
+     * @param message message to be sent.
+     * @param to      endpoint to which the message needs to be sent
+     * @param cb      callback interface which is used to pass the responses or
+     *                suggest that a timeout occurred to the invoker of the send().
+     *                suggest that a timeout occurred to the invoker of the send().
+     * @param timeout the timeout used for expiration
+     * @return an reference to message id used to match with the result
+     */</comment>
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>sendRR</name><parameter_list>(<param><decl><type><name>MessageOut</name></type> <name>message</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>, <param><decl><type><name>IMessageCallback</name></type> <name>cb</name></decl></param>, <param><decl><type><name>long</name></type> <name>timeout</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>id</name> <init>= <expr><call><name>addCallback</name><argument_list>(<argument><expr><name>cb</name></expr></argument>, <argument><expr><name>message</name></expr></argument>, <argument><expr><name>to</name></expr></argument>, <argument><expr><name>timeout</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>cb</name> instanceof <name>AbstractWriteResponseHandler</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>PBSPredictor</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>startWriteOperation</name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else <if>if <condition>(<expr><name>cb</name> instanceof <name>ReadCallback</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>PBSPredictor</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>startReadOperation</name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if></else></if>
+
+        <expr_stmt><expr><call><name>sendOneWay</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>id</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>sendOneWay</name><parameter_list>(<param><decl><type><name>MessageOut</name></type> <name>message</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>sendOneWay</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><call><name>nextId</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>sendReply</name><parameter_list>(<param><decl><type><name>MessageOut</name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>sendOneWay</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Send a message to a given endpoint. This method adheres to the fire and forget
+     * style messaging.
+     *
+     * @param message messages to be sent.
+     * @param to      endpoint to which the message needs to be sent
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>sendOneWay</name><parameter_list>(<param><decl><type><name>MessageOut</name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call> + " sending " + <name><name>message</name>.<name>verb</name></name> + " to " + <name>id</name> + "@" + <name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><call><name><name>to</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Message-to-self {} going over MessagingService"</expr></argument>, <argument><expr><name>message</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <comment type="line">// message sinks are a testing hook</comment>
+        <decl_stmt><decl><type><name>MessageOut</name></type> <name>processedMessage</name> <init>= <expr><call><name><name>SinkManager</name>.<name>processOutboundMessage</name></name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>processedMessage</name> == null</expr>)</condition><then>
+        <block>{
+            <return>return;</return>
+        }</block></then></if>
+
+        <comment type="line">// get pooled connection (really, connection queue)</comment>
+        <decl_stmt><decl><type><name>OutboundTcpConnection</name></type> <name>connection</name> <init>= <expr><call><name>getConnection</name><argument_list>(<argument><expr><name>to</name></expr></argument>, <argument><expr><name>processedMessage</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// write it</comment>
+        <expr_stmt><expr><call><name><name>connection</name>.<name>enqueue</name></name><argument_list>(<argument><expr><name>processedMessage</name></expr></argument>, <argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list> <name><name>IAsyncResult</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>sendRR</name><parameter_list>(<param><decl><type><name>MessageOut</name></type> <name>message</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>IAsyncResult</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>iar</name> <init>= <expr>new <call><name>AsyncResult</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>sendRR</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>to</name></expr></argument>, <argument><expr><name>iar</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>iar</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Stream a file from source to destination. This is highly optimized
+     * to not hold any of the contents of the file in memory.
+     *
+     * @param header Header contains file to stream and other metadata.
+     * @param to     endpoint to which we need to stream the file.
+     */</comment>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>stream</name><parameter_list>(<param><decl><type><name>StreamHeader</name></type> <name>header</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>to</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>DebuggableThreadPoolExecutor</name></type> <name>executor</name> <init>= <expr><call><name><name>streamExecutors</name>.<name>get</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>executor</name> == null</expr>)</condition><then>
+        <block>{
+            <comment type="line">// Using a core pool size of 0 is important. See documentation of streamExecutors.</comment>
+            <expr_stmt><expr><name>executor</name> = <call><name><name>DebuggableThreadPoolExecutor</name>.<name>createWithMaximumPoolSize</name></name><argument_list>(<argument><expr>"Streaming to " + <name>to</name></expr></argument>, <argument><expr>1</expr></argument>, <argument><expr>1</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>SECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>DebuggableThreadPoolExecutor</name></type> <name>old</name> <init>= <expr><call><name><name>streamExecutors</name>.<name>putIfAbsent</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>, <argument><expr><name>executor</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>old</name> != null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>executor</name>.<name>shutdown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>executor</name> = <name>old</name></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>executor</name>.<name>execute</name></name><argument_list>(<argument><expr><name><name>header</name>.<name>file</name></name> == null || <name><name>header</name>.<name>file</name>.<name>compressionInfo</name></name> == null
+                         ? new <call><name>FileStreamTask</name><argument_list>(<argument><expr><name>header</name></expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call>
+                         : new <call><name>CompressedFileStreamTask</name><argument_list>(<argument><expr><name>header</name></expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>register</name><parameter_list>(<param><decl><type><name>ILatencySubscriber</name></type> <name>subcriber</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>subscribers</name>.<name>add</name></name><argument_list>(<argument><expr><name>subcriber</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>clearCallbacksUnsafe</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>callbacks</name>.<name>reset</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>waitForStreaming</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>InterruptedException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// this does not prevent new streams from beginning after a drain begins, but since streams are only</comment>
+        <comment type="line">// started in response to explicit operator action (bootstrap/move/repair/etc) that feels like a feature.</comment>
+        <for>for (<init><decl><type><name>DebuggableThreadPoolExecutor</name></type> <name>e</name> <range>: <expr><call><name><name>streamExecutors</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>e</name>.<name>shutdown</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+
+        <for>for (<init><decl><type><name>DebuggableThreadPoolExecutor</name></type> <name>e</name> <range>: <expr><call><name><name>streamExecutors</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>e</name>.<name>awaitTermination</name></name><argument_list>(<argument><expr>24</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>HOURS</name></name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Stream took more than 24H to complete; skipping"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Wait for callbacks and don't allow any more to be created (since they could require writing hints)
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>shutdown</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Waiting for messaging service to quiesce"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// We may need to schedule hints on the mutation stage, so it's erroneous to shut down the mutation stage first</comment>
+        <assert>assert <expr>!<call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><name><name>Stage</name>.<name>MUTATION</name></name></expr></argument>)</argument_list></call>.<call><name>isShutdown</name><argument_list>()</argument_list></call></expr>;</assert>
+
+        <comment type="line">// the important part</comment>
+        <expr_stmt><expr><call><name><name>callbacks</name>.<name>shutdownBlocking</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// attempt to humor tests that try to stop and restart MS</comment>
+        <try>try
+        <block>{
+            <for>for (<init><decl><type><name>SocketThread</name></type> <name>th</name> <range>: <expr><name>socketThreads</name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>th</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>receive</name><parameter_list>(<param><decl><type><name>MessageIn</name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>, <param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>Tracing</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>initializeFromMessage</name><argument_list>(<argument><expr><name>message</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>Tracing</name>.<name>trace</name></name><argument_list>(<argument><expr>"Message received from {}"</expr></argument>, <argument><expr><name><name>message</name>.<name>from</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><name>message</name> = <call><name><name>SinkManager</name>.<name>processInboundMessage</name></name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>id</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>message</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <call><name>MessageDeliveryTask</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ExecutorService</name></type> <name>stage</name> <init>= <expr><call><name><name>StageManager</name>.<name>getStage</name></name><argument_list>(<argument><expr><call><name><name>message</name>.<name>getMessageType</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>stage</name> != null : "No stage for message type " + <name><name>message</name>.<name>verb</name></name></expr>;</assert>
+
+        <if>if <condition>(<expr><name><name>message</name>.<name>verb</name></name> == <name><name>Verb</name>.<name>REQUEST_RESPONSE</name></name> &amp;&amp; <call><name><name>PBSPredictor</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>isLoggingEnabled</name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>IMessageCallback</name></type> <name>cb</name> <init>= <expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getRegisteredCallback</name><argument_list>(<argument><expr><name>id</name></expr></argument>)</argument_list></call>.<name>callback</name></expr></init></decl>;</decl_stmt>
+
+            <if>if <condition>(<expr><name>cb</name> instanceof <name>AbstractWriteResponseHandler</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>PBSPredictor</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>logWriteResponse</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else <if>if <condition>(<expr><name>cb</name> instanceof <name>ReadCallback</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>PBSPredictor</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>logReadResponse</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if></else></if>
+        }</block></then></if>
+
+        <expr_stmt><expr><call><name><name>stage</name>.<name>execute</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>setCallbackForTests</name><parameter_list>(<param><decl><type><name>String</name></type> <name>messageId</name></decl></param>, <param><decl><type><name>CallbackInfo</name></type> <name>callback</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>callbacks</name>.<name>put</name></name><argument_list>(<argument><expr><name>messageId</name></expr></argument>, <argument><expr><name>callback</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>CallbackInfo</name></type> <name>getRegisteredCallback</name><parameter_list>(<param><decl><type><name>String</name></type> <name>messageId</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>callbacks</name>.<name>get</name></name><argument_list>(<argument><expr><name>messageId</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>CallbackInfo</name></type> <name>removeRegisteredCallback</name><parameter_list>(<param><decl><type><name>String</name></type> <name>messageId</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>callbacks</name>.<name>remove</name></name><argument_list>(<argument><expr><name>messageId</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getRegisteredCallbackAge</name><parameter_list>(<param><decl><type><name>String</name></type> <name>messageId</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>callbacks</name>.<name>getAge</name></name><argument_list>(<argument><expr><name>messageId</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>validateMagic</name><parameter_list>(<param><decl><type><name>int</name></type> <name>magic</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <if>if <condition>(<expr><name>magic</name> != <name>PROTOCOL_MAGIC</name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>IOException</name><argument_list>(<argument><expr>"invalid protocol header"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>int</name></type> <name>getBits</name><parameter_list>(<param><decl><type><name>int</name></type> <name>packed</name></decl></param>, <param><decl><type><name>int</name></type> <name>start</name></decl></param>, <param><decl><type><name>int</name></type> <name>count</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><name>packed</name> &gt;&gt;&gt; (<name>start</name> + 1) - <name>count</name> &amp; ~(-1 &lt;&lt; <name>count</name>)</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>ByteBuffer</name></type> <name>constructStreamHeader</name><parameter_list>(<param><decl><type><name>StreamHeader</name></type> <name>streamHeader</name></decl></param>, <param><decl><type><name>boolean</name></type> <name>compress</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>header</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <comment type="line">// set compression bit.</comment>
+        <if>if <condition>(<expr><name>compress</name></expr>)</condition><then>
+            <expr_stmt><expr><name>header</name> |= 4</expr>;</expr_stmt></then></if>
+        <comment type="line">// set streaming bit</comment>
+        <expr_stmt><expr><name>header</name> |= 8</expr>;</expr_stmt>
+        <comment type="line">// Setting up the version bit</comment>
+        <expr_stmt><expr><name>header</name> |= (<name>version</name> &lt;&lt; 8)</expr>;</expr_stmt>
+
+        <comment type="block">/* Adding the StreamHeader which contains the session Id along
+         * with the pendingfile info for the stream.
+         * | Session Id | Pending File Size | Pending File | Bool more files |
+         * | No. of Pending files | Pending Files ... |
+         */</comment>
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>bytes</name></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>DataOutputBuffer</name></type> <name>buffer</name> <init>= <expr>new <call><name>DataOutputBuffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>StreamHeader</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>streamHeader</name></expr></argument>, <argument><expr><name>buffer</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>bytes</name> = <call><name><name>buffer</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <assert>assert <expr><name><name>bytes</name>.<name>length</name></name> &gt; 0</expr>;</assert>
+
+        <decl_stmt><decl><type><name>ByteBuffer</name></type> <name>buffer</name> <init>= <expr><call><name><name>ByteBuffer</name>.<name>allocate</name></name><argument_list>(<argument><expr>4 + 4 + 4 + <name><name>bytes</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>putInt</name></name><argument_list>(<argument><expr><name>PROTOCOL_MAGIC</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>putInt</name></name><argument_list>(<argument><expr><name>header</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>putInt</name></name><argument_list>(<argument><expr><name><name>bytes</name>.<name>length</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>put</name></name><argument_list>(<argument><expr><name>bytes</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>buffer</name>.<name>flip</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>buffer</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the last version associated with address, or @param version if this is the first such version
+     */</comment>
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>setVersion</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>address</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Setting version {} for {}"</expr></argument>, <argument><expr><name>version</name></expr></argument>, <argument><expr><name>address</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>Integer</name></type> <name>v</name> <init>= <expr><call><name><name>versions</name>.<name>put</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>v</name> == null ? <name>version</name> : <name>v</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>resetVersion</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Reseting version for {}"</expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>versions</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>Integer</name></type> <name>getVersion</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>address</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Integer</name></type> <name>v</name> <init>= <expr><call><name><name>versions</name>.<name>get</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>v</name> == null</expr>)</condition><then>
+        <block>{
+            <comment type="line">// we don't know the version. assume current. we'll know soon enough if that was incorrect.</comment>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Assuming current protocol version for {}"</expr></argument>, <argument><expr><name>address</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr><name><name>MessagingService</name>.<name>current_version</name></name></expr>;</return>
+        }</block></then>
+        <else>else
+            <return>return <expr><name>v</name></expr>;</return></else></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getVersion</name><parameter_list>(<param><decl><type><name>String</name></type> <name>address</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnknownHostException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>getVersion</name><argument_list>(<argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>knowsVersion</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>versions</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> != null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>incrementDroppedMessages</name><parameter_list>(<param><decl><type><name>Verb</name></type> <name>verb</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><call><name><name>DROPPABLE_VERBS</name>.<name>contains</name></name><argument_list>(<argument><expr><name>verb</name></expr></argument>)</argument_list></call> : "Verb " + <name>verb</name> + " should not legally be dropped"</expr>;</assert>
+        <expr_stmt><expr><call><name><name>droppedMessages</name>.<name>get</name></name><argument_list>(<argument><expr><name>verb</name></expr></argument>)</argument_list></call>.<call><name><name>dropped</name>.<name>mark</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>logDroppedMessages</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>boolean</name></type> <name>logTpstats</name> <init>= <expr>false</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name>DroppedMessageMetrics</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>droppedMessages</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>dropped</name> <init>= <expr>(<name>int</name>) <call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name><name>dropped</name>.<name>count</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>Verb</name></type> <name>verb</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>recent</name> <init>= <expr><name>dropped</name> - <call><name><name>lastDroppedInternal</name>.<name>get</name></name><argument_list>(<argument><expr><name>verb</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>recent</name> &gt; 0</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>logTpstats</name> = true</expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"{} {} messages dropped in last {}ms"</expr></argument>,
+                             <argument><expr>new <name><name>Object</name><index>[]</index></name> <block>{<expr><name>recent</name></expr>, <expr><name>verb</name></expr>, <expr><name>LOG_DROPPED_INTERVAL_IN_MS</name></expr>}</block></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>lastDroppedInternal</name>.<name>put</name></name><argument_list>(<argument><expr><name>verb</name></expr></argument>, <argument><expr><name>dropped</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+        }</block></for>
+
+        <if>if <condition>(<expr><name>logTpstats</name></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>StatusLogger</name>.<name>log</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>SocketThread</name> <super><extends>extends <name>Thread</name></extends></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>ServerSocket</name></type> <name>server</name></decl>;</decl_stmt>
+
+        <constructor><name>SocketThread</name><parameter_list>(<param><decl><type><name>ServerSocket</name></type> <name>server</name></decl></param>, <param><decl><type><name>String</name></type> <name>name</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>name</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name><name>this</name>.<name>server</name></name> = <name>server</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+        <block>{
+            <while>while <condition>(<expr>true</expr>)</condition>
+            <block>{
+                <try>try
+                <block>{
+                    <decl_stmt><decl><type><name>Socket</name></type> <name>socket</name> <init>= <expr><call><name><name>server</name>.<name>accept</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr>new <call><name>IncomingTcpConnection</name><argument_list>(<argument><expr><name>socket</name></expr></argument>)</argument_list></call>.<call><name>start</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block>
+                <catch>catch <parameter_list>(<param><decl><type><name>AsynchronousCloseException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <comment type="line">// this happens when another thread calls close().</comment>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"MessagingService shutting down server thread."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <break>break;</break>
+                }</block></catch>
+                <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+                <block>{
+                    <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+                }</block></catch></try>
+            }</block></while>
+        }</block></function>
+
+        <function><type><name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>server</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>getCommandPendingTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>pendingTasks</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>OutboundTcpConnectionPool</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>connectionManagers</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>pendingTasks</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>getHostAddress</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name><name>cmdCon</name>.<name>getPendingMessages</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>pendingTasks</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getCommandPendingTasks</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>address</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>OutboundTcpConnectionPool</name></type> <name>connection</name> <init>= <expr><call><name><name>connectionManagers</name>.<name>get</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>connection</name> == null ? 0 : <call><name><name>connection</name>.<name>cmdCon</name>.<name>getPendingMessages</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>getCommandCompletedTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>completedTasks</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>OutboundTcpConnectionPool</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>connectionManagers</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>completedTasks</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>getHostAddress</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name><name>cmdCon</name>.<name>getCompletedMesssages</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>completedTasks</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>getCommandDroppedTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>droppedTasks</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>OutboundTcpConnectionPool</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>connectionManagers</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>droppedTasks</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>getHostAddress</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name><name>cmdCon</name>.<name>getDroppedMessages</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>droppedTasks</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>getResponsePendingTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>pendingTasks</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>OutboundTcpConnectionPool</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>connectionManagers</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>pendingTasks</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>getHostAddress</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name><name>ackCon</name>.<name>getPendingMessages</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>pendingTasks</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>getResponseCompletedTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>completedTasks</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>OutboundTcpConnectionPool</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>connectionManagers</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>completedTasks</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>getHostAddress</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name><name>ackCon</name>.<name>getCompletedMesssages</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>completedTasks</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>getDroppedMessages</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name>DroppedMessageMetrics</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>droppedMessages</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>map</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>(<name>int</name>) <call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name><name>dropped</name>.<name>count</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>map</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>getRecentlyDroppedMessages</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name></type> <name>map</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Integer</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>Verb</name></argument>, <argument><name>DroppedMessageMetrics</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>droppedMessages</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>map</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>toString</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getRecentlyDropped</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>map</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getTotalTimeouts</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ConnectionMetrics</name>.<name>totalTimeouts</name>.<name>count</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getRecentTotalTimouts</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>ConnectionMetrics</name>.<name>getRecentTotalTimeout</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>getTimeoutsPerHost</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>result</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>OutboundTcpConnectionPool</name></argument>&gt;</argument_list></name></name></type> <name>entry</name><range>: <expr><call><name><name>connectionManagers</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>ip</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>getHostAddress</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>recent</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getTimeouts</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>result</name>.<name>put</name></name><argument_list>(<argument><expr><name>ip</name></expr></argument>, <argument><expr><name>recent</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>result</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>getRecentTimeoutsPerHost</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>result</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>OutboundTcpConnectionPool</name></argument>&gt;</argument_list></name></name></type> <name>entry</name><range>: <expr><call><name><name>connectionManagers</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>ip</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call>.<call><name>getHostAddress</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>recent</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>.<call><name>getRecentTimeouts</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>result</name>.<name>put</name></name><argument_list>(<argument><expr><name>ip</name></expr></argument>, <argument><expr><name>recent</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <return>return <expr><name>result</name></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\service\CassandraDaemon.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>File</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>MalformedURLException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>URL</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Arrays</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicInteger</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>log4j</name>.<name>PropertyConfigurator</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>auth</name>.<name>Auth</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>exceptions</name>.<name>ConfigurationException</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>commitlog</name>.<name>CommitLog</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name>.<name>CompactionManager</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>FSError</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FileUtils</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>thrift</name>.<name>ThriftServer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>CLibrary</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Mx4jTool</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * The &lt;code&gt;CassandraDaemon&lt;/code&gt; is an abstraction for a Cassandra daemon
+ * service, which defines not only a way to activate and deactivate it, but also
+ * hooks into its lifecycle methods (see {@link #setup()}, {@link #start()},
+ * {@link #stop()} and {@link #setup()}).
+ */</comment>
+<class><specifier>public</specifier> class <name>CassandraDaemon</name>
+<block>{
+    <expr_stmt><expr>static
+    <block>{
+        <expr><call><name>initLog4j</name><argument_list>()</argument_list></call></expr>;
+    }</block>
+
+    <comment type="block" format="javadoc">/**
+     * Initialize logging in such a way that it checks for config changes every 10 seconds.
+     */</comment>
+    public static <name>void</name> <call><name>initLog4j</name><argument_list>()</argument_list></call>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"log4j.defaultInitOverride"</expr></argument>,<argument><expr>"false"</expr></argument>)</argument_list></call>.<call><name>equalsIgnoreCase</name><argument_list>(<argument><expr>"true"</expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>String</name></type> <name>config</name> <init>= <expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"log4j.configuration"</expr></argument>, <argument><expr>"log4j-server.properties"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>URL</name></type> <name>configLocation</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <comment type="line">// try loading from a physical location first.</comment>
+                <expr_stmt><expr><name>configLocation</name> = new <call><name>URL</name><argument_list>(<argument><expr><name>config</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt/></block></try></block></then></if>}</block></expr></expr_stmt>
+            <catch>catch <parameter_list>(<param><decl><type><name>MalformedURLException</name></type> <name>ex</name></decl></param>)</parameter_list>
+            <block>{
+                <comment type="line">// then try loading from the classpath.</comment>
+                <expr_stmt><expr><name>configLocation</name> = <call><name><name>CassandraDaemon</name>.<name><name>class</name>.<name>getClassLoader</name></name></name><argument_list>()</argument_list></call>.<call><name>getResource</name><argument_list>(<argument><expr><name>config</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></catch>
+
+            <if>if <condition>(<expr><name>configLocation</name> == null</expr>)</condition><then>
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Couldn't figure out log4j configuration: "+<name>config</name></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+            <comment type="line">// Now convert URL to a filename</comment>
+            <decl_stmt><decl><type><name>String</name></type> <name>configFileName</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+            <try>try
+            <block>{
+                <comment type="line">// first try URL.getFile() which works for opaque URLs (file:foo) and paths without spaces</comment>
+                <expr_stmt><expr><name>configFileName</name> = <call><name><name>configLocation</name>.<name>getFile</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <decl_stmt><decl><type><name>File</name></type> <name>configFile</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>configFileName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <comment type="line">// then try alternative approach which works for all hierarchical URLs with or without spaces</comment>
+                <if>if <condition>(<expr>!<call><name><name>configFile</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><name>configFileName</name> = new <call><name>File</name><argument_list>(<argument><expr><call><name><name>configLocation</name>.<name>toURI</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>getCanonicalPath</name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Couldn't convert log4j configuration location to a valid file"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+
+            <expr_stmt><expr><call><name><name>PropertyConfigurator</name>.<name>configureAndWatch</name></name><argument_list>(<argument><expr><name>configFileName</name></expr></argument>, <argument><expr>10000</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>org</name>.<name>apache</name>.<name>log4j</name>.<name>Logger</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CassandraDaemon</name>.<name>class</name></name></expr></argument>)</argument_list></call>.<call><name>info</name><argument_list>(<argument><expr>"Logging initialized"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></class>
+    }
+
+    private <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>CassandraDaemon</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>CassandraDaemon</name></type> <name>instance</name> <init>= <expr>new <call><name>CassandraDaemon</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>AtomicInteger</name></type> <name>exceptions</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <name>Server</name></type> <name>thriftServer</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <name>Server</name></type> <name>nativeServer</name></decl>;</decl_stmt>
+
+    <comment type="block" format="javadoc">/**
+     * This is a hook for concrete daemons to initialize themselves suitably.
+     *
+     * Subclasses should override this to finish the job (listening on ports, etc.)
+     *
+     * @throws IOException
+     */</comment>
+    <function><type><specifier>protected</specifier> <name>void</name></type> <name>setup</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"JVM vendor/version: {}/{}"</expr></argument>, <argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"java.vm.name"</expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"java.version"</expr></argument>)</argument_list></call></expr></argument> )</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Heap size: {}/{}"</expr></argument>, <argument><expr><call><name><name>Runtime</name>.<name>getRuntime</name></name><argument_list>()</argument_list></call>.<call><name>totalMemory</name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>Runtime</name>.<name>getRuntime</name></name><argument_list>()</argument_list></call>.<call><name>maxMemory</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Classpath: {}"</expr></argument>, <argument><expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"java.class.path"</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>CLibrary</name>.<name>tryMlockall</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>Thread</name>.<name>setDefaultUncaughtExceptionHandler</name></name><argument_list>(<argument><expr>new <class><super><name><name>Thread</name>.<name>UncaughtExceptionHandler</name></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>uncaughtException</name><parameter_list>(<param><decl><type><name>Thread</name></type> <name>t</name></decl></param>, <param><decl><type><name>Throwable</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>exceptions</name>.<name>incrementAndGet</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Exception in thread " + <name>t</name></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name>Throwable</name></type> <name>e2</name> <init>= <expr><name>e</name></expr></init></decl>;</init> <condition><expr><name>e2</name> != null</expr>;</condition> <incr><expr><name>e2</name> = <call><name><name>e2</name>.<name>getCause</name></name><argument_list>()</argument_list></call></expr></incr>)
+                <block>{
+                    <comment type="line">// some code, like FileChannel.map, will wrap an OutOfMemoryError in another exception</comment>
+                    <if>if <condition>(<expr><name>e2</name> instanceof <name>OutOfMemoryError</name></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>100</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                    <if>if <condition>(<expr><name>e2</name> instanceof <name>FSError</name></expr>)</condition><then>
+                    <block>{
+                        <if>if <condition>(<expr><name>e2</name> != <name>e</name></expr>)</condition><then> <comment type="line">// make sure FSError gets logged exactly once.</comment>
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Exception in thread " + <name>t</name></expr></argument>, <argument><expr><name>e2</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>handleFSError</name></name><argument_list>(<argument><expr>(<name>FSError</name>) <name>e2</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                }</block></for>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// check all directories(data, commitlog, saved cache) for existence and permission</comment>
+        <decl_stmt><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>dirs</name> <init>= <expr><call><name><name>Iterables</name>.<name>concat</name></name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getAllDataFileLocations</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+                                                 <argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getCommitLogLocation</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                               <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getSavedCachesLocation</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>String</name></type> <name>dataDir</name> <range>: <expr><name>dirs</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Checking directory {}"</expr></argument>, <argument><expr><name>dataDir</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>File</name></type> <name>dir</name> <init>= <expr>new <call><name>File</name><argument_list>(<argument><expr><name>dataDir</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>dir</name>.<name>exists</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <assert>assert <expr><call><name><name>dir</name>.<name>isDirectory</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>dir</name>.<name>canRead</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>dir</name>.<name>canWrite</name></name><argument_list>()</argument_list></call> &amp;&amp; <call><name><name>dir</name>.<name>canExecute</name></name><argument_list>()</argument_list></call>
+                    : <call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Directory %s is not accessible."</expr></argument>, <argument><expr><name>dataDir</name></expr></argument>)</argument_list></call></expr>;</assert></then></if>
+        }</block></for>
+
+        <comment type="line">// Migrate sstables from pre-#2749 to the correct location</comment>
+        <if>if <condition>(<expr><call><name><name>Directories</name>.<name>sstablesNeedsMigration</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>Directories</name>.<name>migrateSSTables</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><name><name>CacheService</name>.<name>instance</name></name> == null</expr>)</condition><then> <comment type="line">// should never happen</comment>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Failed to initialize Cache Service."</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+
+        <comment type="line">// check the system table to keep user from shooting self in foot by changing partitioner, cluster name, etc.</comment>
+        <comment type="line">// we do a one-off scrub of the system table first; we can't load the list of the rest of the tables,</comment>
+        <comment type="line">// until system table is opened.</comment>
+        <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfm</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableMetaData</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_KS</name></name></expr></argument>)</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>ColumnFamilyStore</name>.<name>scrubDataDirectories</name></name><argument_list>(<argument><expr><name><name>Table</name>.<name>SYSTEM_KS</name></name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>SystemTable</name>.<name>checkHealth</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Fatal exception during initialization"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>100</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+
+        <comment type="line">// load keyspace descriptions.</comment>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>loadSchemas</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Fatal exception during initialization"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>100</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+
+        <comment type="line">// setup Authenticator and Authorizer.</comment>
+        <expr_stmt><expr><call><name><name>Auth</name>.<name>setup</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// clean up debris in the rest of the tables</comment>
+        <for>for (<init><decl><type><name>String</name></type> <name>table</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTables</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <for>for (<init><decl><type><name>CFMetaData</name></type> <name>cfm</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTableMetaData</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <expr_stmt><expr><call><name><name>ColumnFamilyStore</name>.<name>scrubDataDirectories</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><name><name>cfm</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+        }</block></for>
+
+        <comment type="line">// initialize keyspaces</comment>
+        <for>for (<init><decl><type><name>String</name></type> <name>table</name> <range>: <expr><call><name><name>Schema</name>.<name>instance</name>.<name>getTables</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"opening keyspace " + <name>table</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            <comment type="line">// disable auto compaction until commit log replay ends</comment>
+            <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStores</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>store</name> <range>: <expr><call><name><name>cfs</name>.<name>concatWithIndexes</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <expr_stmt><expr><call><name><name>store</name>.<name>disableAutoCompaction</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></for>
+        }</block></for>
+
+        <if>if <condition>(<expr><call><name><name>CacheService</name>.<name>instance</name>.<name>keyCache</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"completed pre-loading ({} keys) key cache."</expr></argument>, <argument><expr><call><name><name>CacheService</name>.<name>instance</name>.<name>keyCache</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><call><name><name>CacheService</name>.<name>instance</name>.<name>rowCache</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"completed pre-loading ({} keys) row cache."</expr></argument>, <argument><expr><call><name><name>CacheService</name>.<name>instance</name>.<name>rowCache</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>GCInspector</name>.<name>instance</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>t</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Unable to start GCInspector (currently only supported on the Sun JVM)"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+
+        <comment type="line">// replay the log if necessary</comment>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>CommitLog</name>.<name>instance</name>.<name>recover</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+
+        <comment type="line">// enable auto compaction</comment>
+        <for>for (<init><decl><type><name>Table</name></type> <name>table</name> <range>: <expr><call><name><name>Table</name>.<name>all</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><call><name><name>table</name>.<name>getColumnFamilyStores</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <for>for (<init><decl><type><specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>store</name> <range>: <expr><call><name><name>cfs</name>.<name>concatWithIndexes</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <expr_stmt><expr><call><name><name>store</name>.<name>enableAutoCompaction</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+            }</block></for>
+        }</block></for>
+        <comment type="line">// start compactions in five minutes (if no flushes have occurred by then to do so)</comment>
+        <decl_stmt><decl><type><name>Runnable</name></type> <name>runnable</name> <init>= <expr>new <class><super><name>Runnable</name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+            <block>{
+                <for>for (<init><decl><type><name>Table</name></type> <name>table</name> <range>: <expr><call><name><name>Table</name>.<name>all</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cf</name> <range>: <expr><call><name><name>table</name>.<name>getColumnFamilyStores</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                    <block>{
+                        <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>store</name> <range>: <expr><call><name><name>cf</name>.<name>concatWithIndexes</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                            <expr_stmt><expr><call><name><name>CompactionManager</name>.<name>instance</name>.<name>submitBackground</name></name><argument_list>(<argument><expr><name>store</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                    }</block></for>
+                }</block></for>
+            }</block></function>
+        }</block></class></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>optionalTasks</name>.<name>schedule</name></name><argument_list>(<argument><expr><name>runnable</name></expr></argument>, <argument><expr>5 * 60</expr></argument>, <argument><expr><name><name>TimeUnit</name>.<name>SECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>SystemTable</name>.<name>finishStartup</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// start server internals</comment>
+        <expr_stmt><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>registerDaemon</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>initServer</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>ConfigurationException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Fatal configuration error"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>println</name></name><argument_list>(<argument><expr><call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call> + "\nFatal configuration error; unable to start server.  See log for stacktrace."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>1</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+
+        <expr_stmt><expr><call><name><name>Mx4jTool</name>.<name>maybeLoad</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// Thift</comment>
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>rpcAddr</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getRpcAddress</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>rpcPort</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getRpcPort</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>thriftServer</name> = new <call><name>ThriftServer</name><argument_list>(<argument><expr><name>rpcAddr</name></expr></argument>, <argument><expr><name>rpcPort</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// Native transport</comment>
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>nativeAddr</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getNativeTransportAddress</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>nativePort</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getNativeTransportPort</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>nativeServer</name> = new <call><name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>transport</name>.<name>Server</name></name><argument_list>(<argument><expr><name>nativeAddr</name></expr></argument>, <argument><expr><name>nativePort</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Initialize the Cassandra Daemon based on the given &lt;a
+     * href="http://commons.apache.org/daemon/jsvc.html"&gt;Commons
+     * Daemon&lt;/a&gt;-specific arguments. To clarify, this is a hook for JSVC.
+     *
+     * @param arguments
+     *            the arguments passed in from JSVC
+     * @throws IOException
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>init</name><parameter_list>(<param><decl><type><name><name>String</name><index>[]</index></name></type> <name>arguments</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>setup</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Start the Cassandra Daemon, assuming that it has already been
+     * initialized via {@link #init(String[])}
+     *
+     * Hook for JSVC
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>nativeFlag</name> <init>= <expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"cassandra.start_native_transport"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>(<name>nativeFlag</name> != null &amp;&amp; <call><name><name>Boolean</name>.<name>parseBoolean</name></name><argument_list>(<argument><expr><name>nativeFlag</name></expr></argument>)</argument_list></call>) || (<name>nativeFlag</name> == null &amp;&amp; <call><name><name>DatabaseDescriptor</name>.<name>startNativeTransport</name></name><argument_list>()</argument_list></call>)</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>nativeServer</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Not starting native transport as requested. Use JMX (StorageService-&gt;startNativeTransport()) to start it"</expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+
+        <decl_stmt><decl><type><name>String</name></type> <name>rpcFlag</name> <init>= <expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"cassandra.start_rpc"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>(<name>rpcFlag</name> != null &amp;&amp; <call><name><name>Boolean</name>.<name>parseBoolean</name></name><argument_list>(<argument><expr><name>rpcFlag</name></expr></argument>)</argument_list></call>) || (<name>rpcFlag</name> == null &amp;&amp; <call><name><name>DatabaseDescriptor</name>.<name>startRpc</name></name><argument_list>()</argument_list></call>)</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>thriftServer</name>.<name>start</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Not starting RPC server as requested. Use JMX (StorageService-&gt;startRPCServer()) to start it"</expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Stop the daemon, ideally in an idempotent manner.
+     *
+     * Hook for JSVC
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>stop</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// this doesn't entirely shut down Cassandra, just the RPC server.</comment>
+        <comment type="line">// jsvc takes care of taking the rest down</comment>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Cassandra shutting down..."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>thriftServer</name>.<name>stop</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>nativeServer</name>.<name>stop</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+
+    <comment type="block" format="javadoc">/**
+     * Clean up all resources obtained during the lifetime of the daemon. This
+     * is a hook for JSVC.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>destroy</name><parameter_list>()</parameter_list>
+    <block>{}</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * A convenience method to initialize and start the daemon in one shot.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>activate</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>String</name></type> <name>pidFile</name> <init>= <expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"cassandra-pidfile"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>setup</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>pidFile</name> != null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr>new <call><name>File</name><argument_list>(<argument><expr><name>pidFile</name></expr></argument>)</argument_list></call>.<call><name>deleteOnExit</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <if>if <condition>(<expr><call><name><name>System</name>.<name>getProperty</name></name><argument_list>(<argument><expr>"cassandra-foreground"</expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>System</name>.<name>out</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>System</name>.<name>err</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <expr_stmt><expr><call><name>start</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Throwable</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Exception encountered during startup"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// try to warn user on stdout too, if we haven't already detached</comment>
+            <expr_stmt><expr><call><name><name>e</name>.<name>printStackTrace</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>System</name>.<name>out</name>.<name>println</name></name><argument_list>(<argument><expr>"Exception encountered during startup: " + <call><name><name>e</name>.<name>getMessage</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>System</name>.<name>exit</name></name><argument_list>(<argument><expr>3</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * A convenience method to stop and destroy the daemon in one shot.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>deactivate</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>stop</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>destroy</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>stop</name><parameter_list>(<param><decl><type><name><name>String</name><index>[]</index></name></type> <name>args</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>instance</name>.<name>deactivate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>main</name><parameter_list>(<param><decl><type><name><name>String</name><index>[]</index></name></type> <name>args</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>instance</name>.<name>activate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <class type="interface"><specifier>public</specifier> interface <name>Server</name>
+    <block>{
+        <comment type="block" format="javadoc">/**
+         * Start the server.
+         * This method shoud be able to restart a server stopped through stop().
+         * Should throw a RuntimeException if the server cannot be started
+         */</comment>
+        <function_decl><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>()</parameter_list>;</function_decl>
+
+        <comment type="block" format="javadoc">/**
+         * Stop the server.
+         * This method should be able to stop server started through start().
+         * Should throw a RuntimeException if the server cannot be stopped
+         */</comment>
+        <function_decl><type><specifier>public</specifier> <name>void</name></type> <name>stop</name><parameter_list>()</parameter_list>;</function_decl>
+
+        <comment type="block" format="javadoc">/**
+         * Returns whether the server is currently running.
+         */</comment>
+        <function_decl><type><specifier>public</specifier> <name>boolean</name></type> <name>isRunning</name><parameter_list>()</parameter_list>;</function_decl>
+    }</block></class>
+}
+</unit>

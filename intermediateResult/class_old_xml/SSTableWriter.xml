@@ -1,0 +1,477 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\io\sstable\SSTableWriter.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>nio</name>.<name>ByteBuffer</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>regex</name>.<name>Pattern</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Sets</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>Schema</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>CFMetaData</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>IPartitioner</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IColumnSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>compress</name>.<name>CompressedSequentialWriter</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name></name>.*;</import>
+
+<class><specifier>public</specifier> class <name>SSTableWriter</name> <super><extends>extends <name>SSTable</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SSTableWriter</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name>IndexWriter</name></type> <name>iwriter</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>SegmentedFile</name>.<name>Builder</name></name></type> <name>dbuilder</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>SequentialWriter</name></type> <name>dataFile</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>lastWrittenKey</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>FileMark</name></type> <name>dataMark</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>SSTableMetadata</name>.<name>Collector</name></name></type> <name>sstableMetadataCollector</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>SSTableWriter</name><parameter_list>(<param><decl><type><name>String</name></type> <name>filename</name></decl></param>, <param><decl><type><name>long</name></type> <name>keyCount</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>this</name><argument_list>(<argument><expr><name>filename</name></expr></argument>,
+             <argument><expr><name>keyCount</name></expr></argument>,
+             <argument><expr><call><name><name>Schema</name>.<name>instance</name>.<name>getCFMetaData</name></name><argument_list>(<argument><expr><call><name><name>Descriptor</name>.<name>fromFilename</name></name><argument_list>(<argument><expr><name>filename</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+             <argument><expr><call><name><name>StorageService</name>.<name>getPartitioner</name></name><argument_list>()</argument_list></call></expr></argument>,
+             <argument><expr><call><name><name>SSTableMetadata</name>.<name>createCollector</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name><parameter_list>(<param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>, <argument><expr><name><name>Component</name>.<name>FILTER</name></name></expr></argument>, <argument><expr><name><name>Component</name>.<name>PRIMARY_INDEX</name></name></expr></argument>, <argument><expr><name><name>Component</name>.<name>STATS</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>metadata</name>.<name>compressionParameters</name></name><argument_list>()</argument_list></call>.<name>sstableCompressor</name> != null</expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>components</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>COMPRESSION_INFO</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+            <comment type="line">// it would feel safer to actually add this component later in maybeWriteDigest(),</comment>
+            <comment type="line">// but the components are unmodifiable after construction</comment>
+            <expr_stmt><expr><call><name><name>components</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DIGEST</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        <return>return <expr><name>components</name></expr>;</return>
+    }</block></function>
+
+    <constructor><specifier>public</specifier> <name>SSTableWriter</name><parameter_list>(<param><decl><type><name>String</name></type> <name>filename</name></decl></param>,
+                         <param><decl><type><name>long</name></type> <name>keyCount</name></decl></param>,
+                         <param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>,
+                         <param><decl><type><name><name>IPartitioner</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>partitioner</name></decl></param>,
+                         <param><decl><type><name><name>SSTableMetadata</name>.<name>Collector</name></name></type> <name>sstableMetadataCollector</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><call><name><name>Descriptor</name>.<name>fromFilename</name></name><argument_list>(<argument><expr><name>filename</name></expr></argument>)</argument_list></call></expr></argument>,
+              <argument><expr><call><name>components</name><argument_list>(<argument><expr><name>metadata</name></expr></argument>)</argument_list></call></expr></argument>,
+              <argument><expr><name>metadata</name></expr></argument>,
+              <argument><expr><name>partitioner</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>iwriter</name> = new <call><name>IndexWriter</name><argument_list>(<argument><expr><name>keyCount</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <if>if <condition>(<expr><name>compression</name></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>dbuilder</name> = <call><name><name>SegmentedFile</name>.<name>getCompressedBuilder</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>dataFile</name> = <call><name><name>CompressedSequentialWriter</name>.<name>open</name></name><argument_list>(<argument><expr><call><name>getFilename</name><argument_list>()</argument_list></call></expr></argument>,
+                                                       <argument><expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>COMPRESSION_INFO</name></name></expr></argument>)</argument_list></call></expr></argument>,
+                                                       <argument><expr>!<call><name><name>DatabaseDescriptor</name>.<name>populateIOCacheOnFlush</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                       <argument><expr><call><name><name>metadata</name>.<name>compressionParameters</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                       <argument><expr><name>sstableMetadataCollector</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><name>dbuilder</name> = <call><name><name>SegmentedFile</name>.<name>getBuilder</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getDiskAccessMode</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>dataFile</name> = <call><name><name>SequentialWriter</name>.<name>open</name></name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name>getFilename</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, 
+			                      <argument><expr>!<call><name><name>DatabaseDescriptor</name>.<name>populateIOCacheOnFlush</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>dataFile</name>.<name>setComputeDigest</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+
+        <expr_stmt><expr><name><name>this</name>.<name>sstableMetadataCollector</name></name> = <name>sstableMetadataCollector</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>mark</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><name>dataMark</name> = <call><name><name>dataFile</name>.<name>mark</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>iwriter</name>.<name>mark</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>resetAndTruncate</name><parameter_list>()</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>dataFile</name>.<name>resetAndTruncate</name></name><argument_list>(<argument><expr><name>dataMark</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>iwriter</name>.<name>resetAndTruncate</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Perform sanity checks on @param decoratedKey and @return the position in the data file before any data is written
+     */</comment>
+    <function><type><specifier>private</specifier> <name>long</name></type> <name>beforeAppend</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>decoratedKey</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><name>decoratedKey</name> != null : "Keys must not be null"</expr>;</assert> <comment type="line">// empty keys ARE allowed b/c of indexed column values</comment>
+        <if>if <condition>(<expr><name>lastWrittenKey</name> != null &amp;&amp; <call><name><name>lastWrittenKey</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name>decoratedKey</name></expr></argument>)</argument_list></call> &gt;= 0</expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Last written key " + <name>lastWrittenKey</name> + " &gt;= current key " + <name>decoratedKey</name> + " writing into " + <call><name>getFilename</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr>(<name>lastWrittenKey</name> == null) ? 0 : <call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>afterAppend</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>decoratedKey</name></decl></param>, <param><decl><type><name>long</name></type> <name>dataPosition</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <expr_stmt><expr><name>lastWrittenKey</name> = <name>decoratedKey</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>last</name></name> = <name>lastWrittenKey</name></expr>;</expr_stmt>
+        <if>if<condition>(<expr>null == <name><name>this</name>.<name>first</name></name></expr>)</condition><then>
+            <expr_stmt><expr><name><name>this</name>.<name>first</name></name> = <name>lastWrittenKey</name></expr>;</expr_stmt></then></if>
+
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"wrote " + <name>decoratedKey</name> + " at " + <name>dataPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><call><name><name>iwriter</name>.<name>afterAppend</name></name><argument_list>(<argument><expr><name>decoratedKey</name></expr></argument>, <argument><expr><name>dataPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>dbuilder</name>.<name>addPotentialBoundary</name></name><argument_list>(<argument><expr><name>dataPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>append</name><parameter_list>(<param><decl><type><name>AbstractCompactedRow</name></type> <name>row</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>currentPosition</name> <init>= <expr><call><name>beforeAppend</name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>writeWithShortLength</name></name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name>.<name>key</name></name></expr></argument>, <argument><expr><name><name>dataFile</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>dataStart</name> <init>= <expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>dataSize</name> <init>= <expr><call><name><name>row</name>.<name>write</name></name><argument_list>(<argument><expr><name><name>dataFile</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>dataSize</name> == <call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> - (<name>dataStart</name> + 8)
+                : "incorrect row data size " + <name>dataSize</name> + " written to " + <call><name><name>dataFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call> + "; correct is " + (<call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> - (<name>dataStart</name> + 8))</expr>;</assert>
+        <comment type="block">/*
+         * The max timestamp is not always collected here (more precisely, row.maxTimestamp() may return Long.MIN_VALUE),
+         * to avoid deserializing an EchoedRow.
+         * This is the reason why it is collected first when calling ColumnFamilyStore.createCompactionWriter
+         * However, for old sstables without timestamp, we still want to update the timestamp (and we know
+         * that in this case we will not use EchoedRow, since CompactionControler.needsDeserialize() will be true).
+        */</comment>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>updateMaxTimestamp</name></name><argument_list>(<argument><expr><call><name><name>row</name>.<name>maxTimestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>addRowSize</name></name><argument_list>(<argument><expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> - <name>currentPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>addColumnCount</name></name><argument_list>(<argument><expr><call><name><name>row</name>.<name>columnCount</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>afterAppend</name><argument_list>(<argument><expr><name><name>row</name>.<name>key</name></name></expr></argument>, <argument><expr><name>currentPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>currentPosition</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>append</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>decoratedKey</name></decl></param>, <param><decl><type><name>ColumnFamily</name></type> <name>cf</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>startPosition</name> <init>= <expr><call><name>beforeAppend</name><argument_list>(<argument><expr><name>decoratedKey</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>writeWithShortLength</name></name><argument_list>(<argument><expr><name><name>decoratedKey</name>.<name>key</name></name></expr></argument>, <argument><expr><name><name>dataFile</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// serialize index and bloom filter into in-memory structure</comment>
+        <decl_stmt><decl><type><name><name>ColumnIndexer</name>.<name>RowHeader</name></name></type> <name>header</name> <init>= <expr><call><name><name>ColumnIndexer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>cf</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// write out row size</comment>
+        <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeLong</name></name><argument_list>(<argument><expr><call><name><name>header</name>.<name>serializedSize</name></name><argument_list>()</argument_list></call> + <call><name><name>cf</name>.<name>serializedSizeForSSTable</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// write out row header and data</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>columnCount</name> <init>= <expr><call><name><name>ColumnFamily</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serializeWithIndexes</name><argument_list>(<argument><expr><name>cf</name></expr></argument>, <argument><expr><name>header</name></expr></argument>, <argument><expr><name><name>dataFile</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>afterAppend</name><argument_list>(<argument><expr><name>decoratedKey</name></expr></argument>, <argument><expr><name>startPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// track max column timestamp</comment>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>updateMaxTimestamp</name></name><argument_list>(<argument><expr><call><name><name>cf</name>.<name>maxTimestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>addRowSize</name></name><argument_list>(<argument><expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> - <name>startPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>addColumnCount</name></name><argument_list>(<argument><expr><name>columnCount</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>append</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>decoratedKey</name></decl></param>, <param><decl><type><name>ByteBuffer</name></type> <name>value</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>currentPosition</name> <init>= <expr><call><name>beforeAppend</name><argument_list>(<argument><expr><name>decoratedKey</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>writeWithShortLength</name></name><argument_list>(<argument><expr><name><name>decoratedKey</name>.<name>key</name></name></expr></argument>, <argument><expr><name><name>dataFile</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <assert>assert <expr><call><name><name>value</name>.<name>remaining</name></name><argument_list>()</argument_list></call> &gt; 0</expr>;</assert>
+        <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeLong</name></name><argument_list>(<argument><expr><call><name><name>value</name>.<name>remaining</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>write</name></name><argument_list>(<argument><expr><name>value</name></expr></argument>, <argument><expr><name><name>dataFile</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>afterAppend</name><argument_list>(<argument><expr><name>decoratedKey</name></expr></argument>, <argument><expr><name>currentPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>appendFromStream</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>, <param><decl><type><name>CFMetaData</name></type> <name>metadata</name></decl></param>, <param><decl><type><name>long</name></type> <name>dataSize</name></decl></param>, <param><decl><type><name>DataInput</name></type> <name>in</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>currentPosition</name> <init>= <expr><call><name>beforeAppend</name><argument_list>(<argument><expr><name>key</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>writeWithShortLength</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>, <argument><expr><name><name>dataFile</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>dataStart</name> <init>= <expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// write row size</comment>
+        <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name>dataSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// write BF</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>bfSize</name> <init>= <expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name>bfSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>bfSize</name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeByte</name></name><argument_list>(<argument><expr><call><name><name>in</name>.<name>readByte</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <comment type="line">// write index</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>indexSize</name> <init>= <expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name>indexSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>indexSize</name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+            <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeByte</name></name><argument_list>(<argument><expr><call><name><name>in</name>.<name>readByte</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <comment type="line">// cf data</comment>
+        <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeInt</name></name><argument_list>(<argument><expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeLong</name></name><argument_list>(<argument><expr><call><name><name>in</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// column size</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>columnCount</name> <init>= <expr><call><name><name>in</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>dataFile</name>.<name>stream</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name>columnCount</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// deserialize each column to obtain maxTimestamp and immediately serialize it.</comment>
+        <decl_stmt><decl><type><name>long</name></type> <name>maxTimestamp</name> <init>= <expr><name><name>Long</name>.<name>MIN_VALUE</name></name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>ColumnFamily</name></type> <name>cf</name> <init>= <expr><call><name><name>ColumnFamily</name>.<name>create</name></name><argument_list>(<argument><expr><name>metadata</name></expr></argument>, <argument><expr><call><name><name>ArrayBackedSortedColumns</name>.<name>factory</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>columnCount</name></expr>;</condition> <incr><expr><name>i</name>++</expr></incr>)
+        <block>{
+            <comment type="line">// deserialize column with PRESERVE_SIZE because we've written the dataSize based on the</comment>
+            <comment type="line">// data size received, so we must reserialize the exact same data</comment>
+            <decl_stmt><decl><type><name>IColumn</name></type> <name>column</name> <init>= <expr><call><name><name>cf</name>.<name>getColumnSerializer</name></name><argument_list>()</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr><name>in</name></expr></argument>, <argument><expr><name><name>IColumnSerializer</name>.<name>Flag</name>.<name>PRESERVE_SIZE</name></name></expr></argument>, <argument><expr><name><name>Integer</name>.<name>MIN_VALUE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>column</name> instanceof <name>CounterColumn</name></expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>column</name> = ((<name>CounterColumn</name>) <name>column</name>).<call><name>markDeltaToBeCleared</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else <if>if <condition>(<expr><name>column</name> instanceof <name>SuperColumn</name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>SuperColumn</name></type> <name>sc</name> <init>= <expr>(<name>SuperColumn</name>) <name>column</name></expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>IColumn</name></type> <name>subColumn</name> <range>: <expr><call><name><name>sc</name>.<name>getSubColumns</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+                <block>{
+                    <if>if <condition>(<expr><name>subColumn</name> instanceof <name>CounterColumn</name></expr>)</condition><then>
+                    <block>{
+                        <decl_stmt><decl><type><name>IColumn</name></type> <name>marked</name> <init>= <expr>((<name>CounterColumn</name>) <name>subColumn</name>).<call><name>markDeltaToBeCleared</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                        <expr_stmt><expr><call><name><name>sc</name>.<name>replace</name></name><argument_list>(<argument><expr><name>subColumn</name></expr></argument>, <argument><expr><name>marked</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                }</block></for>
+            }</block></then></if></else></if>
+            <expr_stmt><expr><name>maxTimestamp</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>maxTimestamp</name></expr></argument>, <argument><expr><call><name><name>column</name>.<name>maxTimestamp</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>cf</name>.<name>getColumnSerializer</name></name><argument_list>()</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><name>column</name></expr></argument>, <argument><expr><name><name>dataFile</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <assert>assert <expr><name>dataSize</name> == <call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> - (<name>dataStart</name> + 8)
+                : "incorrect row data size " + <name>dataSize</name> + " written to " + <call><name><name>dataFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call> + "; correct is " + (<call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> - (<name>dataStart</name> + 8))</expr>;</assert>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>updateMaxTimestamp</name></name><argument_list>(<argument><expr><name>maxTimestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>addRowSize</name></name><argument_list>(<argument><expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call> - <name>currentPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>addColumnCount</name></name><argument_list>(<argument><expr><name>columnCount</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>afterAppend</name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>currentPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>currentPosition</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>updateMaxTimestamp</name><parameter_list>(<param><decl><type><name>long</name></type> <name>timestamp</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>sstableMetadataCollector</name>.<name>updateMaxTimestamp</name></name><argument_list>(<argument><expr><name>timestamp</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * After failure, attempt to close the index writer and data file before deleting all temp components for the sstable
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>abort</name><parameter_list>()</parameter_list>
+    <block>{
+        <assert>assert <expr><name><name>descriptor</name>.<name>temporary</name></name></expr>;</assert>
+        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>iwriter</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>FileUtils</name>.<name>closeQuietly</name></name><argument_list>(<argument><expr><name>dataFile</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name> <init>= <expr><call><name><name>SSTable</name>.<name>componentsFor</name></name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr>!<call><name><name>components</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>SSTable</name>.<name>delete</name></name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>, <argument><expr><name>components</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Failed deleting temp components for %s"</expr></argument>, <argument><expr><name>descriptor</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>SSTableReader</name></type> <name>closeAndOpenReader</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>closeAndOpenReader</name><argument_list>(<argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>SSTableReader</name></type> <name>closeAndOpenReader</name><parameter_list>(<param><decl><type><name>long</name></type> <name>maxDataAge</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <comment type="line">// index and filter</comment>
+        <expr_stmt><expr><call><name><name>iwriter</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// main data, close will truncate if necessary</comment>
+        <expr_stmt><expr><call><name><name>dataFile</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// write sstable statistics</comment>
+        <decl_stmt><decl><type><name>SSTableMetadata</name></type> <name>sstableMetadata</name> <init>= <expr><call><name><name>sstableMetadataCollector</name>.<name>finalizeMetadata</name></name><argument_list>(<argument><expr><call><name><name>partitioner</name>.<name>getClass</name></name><argument_list>()</argument_list></call>.<call><name>getCanonicalName</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>writeMetadata</name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>, <argument><expr><name>sstableMetadata</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>maybeWriteDigest</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// remove the 'tmp' marker from all components</comment>
+        <decl_stmt><decl><type><specifier>final</specifier> <name>Descriptor</name></type> <name>newdesc</name> <init>= <expr><call><name>rename</name><argument_list>(<argument><expr><name>descriptor</name></expr></argument>, <argument><expr><name>components</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// finalize in-memory state for the reader</comment>
+        <decl_stmt><decl><type><name>SegmentedFile</name></type> <name>ifile</name> <init>= <expr><call><name><name>iwriter</name>.<name>builder</name>.<name>complete</name></name><argument_list>(<argument><expr><call><name><name>newdesc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>COMPONENT_INDEX</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SegmentedFile</name></type> <name>dfile</name> <init>= <expr><call><name><name>dbuilder</name>.<name>complete</name></name><argument_list>(<argument><expr><call><name><name>newdesc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>COMPONENT_DATA</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>SSTableReader</name></type> <name>sstable</name> <init>= <expr><call><name><name>SSTableReader</name>.<name>internalOpen</name></name><argument_list>(<argument><expr><name>newdesc</name></expr></argument>,
+                                                           <argument><expr><name>components</name></expr></argument>,
+                                                           <argument><expr><name>metadata</name></expr></argument>,
+                                                           <argument><expr><name>partitioner</name></expr></argument>,
+                                                           <argument><expr><name>ifile</name></expr></argument>,
+                                                           <argument><expr><name>dfile</name></expr></argument>,
+                                                           <argument><expr><name><name>iwriter</name>.<name>summary</name></name></expr></argument>,
+                                                           <argument><expr><name><name>iwriter</name>.<name>bf</name></name></expr></argument>,
+                                                           <argument><expr><name>maxDataAge</name></expr></argument>,
+                                                           <argument><expr><name>sstableMetadata</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name><name>sstable</name>.<name>first</name></name> = <call><name>getMinimalKey</name><argument_list>(<argument><expr><name>first</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>sstable</name>.<name>last</name></name> = <call><name>getMinimalKey</name><argument_list>(<argument><expr><name>last</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name>iwriter</name> = null</expr>;</expr_stmt>
+        <expr_stmt><expr><name>dbuilder</name> = null</expr>;</expr_stmt>
+        <return>return <expr><name>sstable</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>maybeWriteDigest</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>byte</name><index>[]</index></type> <name>digest</name> <init>= <expr><call><name><name>dataFile</name>.<name>digest</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>digest</name> == null</expr>)</condition><then>
+            <return>return;</return></then></if>
+
+        <decl_stmt><decl><type><name>SequentialWriter</name></type> <name>out</name> <init>= <expr><call><name><name>SequentialWriter</name>.<name>open</name></name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>COMPONENT_DIGEST</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// Writting output compatible with sha1sum</comment>
+        <decl_stmt><decl><type><name>Descriptor</name></type> <name>newdesc</name> <init>= <expr><call><name><name>descriptor</name>.<name>asTemporary</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>tmp</name> <init>= <expr><call><name><name>newdesc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>COMPONENT_DATA</name></name></expr></argument>)</argument_list></call>.<call><name>split</name><argument_list>(<argument><expr><call><name><name>Pattern</name>.<name>quote</name></name><argument_list>(<argument><expr><name><name>File</name>.<name>separator</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>dataFileName</name> <init>= <expr><name><name>tmp</name><index>[<expr><name><name>tmp</name>.<name>length</name></name> - 1</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>write</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"%s  %s"</expr></argument>, <argument><expr><call><name><name>Hex</name>.<name>bytesToHex</name></name><argument_list>(<argument><expr><name>digest</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>dataFileName</name></expr></argument>)</argument_list></call>.<call><name>getBytes</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>writeMetadata</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>desc</name></decl></param>, <param><decl><type><name>SSTableMetadata</name></type> <name>sstableMetadata</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>SequentialWriter</name></type> <name>out</name> <init>= <expr><call><name><name>SequentialWriter</name>.<name>open</name></name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>desc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>COMPONENT_STATS</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr>true</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>SSTableMetadata</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>sstableMetadata</name></expr></argument>, <argument><expr><name><name>out</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>out</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>static</specifier> <name>Descriptor</name></type> <name>rename</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>tmpdesc</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Descriptor</name></type> <name>newdesc</name> <init>= <expr><call><name><name>tmpdesc</name>.<name>asTemporary</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name>rename</name><argument_list>(<argument><expr><name>tmpdesc</name></expr></argument>, <argument><expr><name>newdesc</name></expr></argument>, <argument><expr><name>components</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>newdesc</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>rename</name><parameter_list>(<param><decl><type><name>Descriptor</name></type> <name>tmpdesc</name></decl></param>, <param><decl><type><name>Descriptor</name></type> <name>newdesc</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>Component</name></argument>&gt;</argument_list></name></type> <name>components</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <comment type="line">// do -Data last because -Data present should mean the sstable was completely renamed before crash</comment>
+            <for>for (<init><decl><type><name>Component</name></type> <name>component</name> <range>: <expr><call><name><name>Sets</name>.<name>difference</name></name><argument_list>(<argument><expr><name>components</name></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>renameWithConfirm</name></name><argument_list>(<argument><expr><call><name><name>tmpdesc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>newdesc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name>component</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <expr_stmt><expr><call><name><name>FBUtilities</name>.<name>renameWithConfirm</name></name><argument_list>(<argument><expr><call><name><name>tmpdesc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><call><name><name>newdesc</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>Component</name>.<name>DATA</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getFilePointer</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>dataFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getOnDiskFilePointer</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name><name>dataFile</name>.<name>getOnDiskFilePointer</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Encapsulates writing the index and filter for an SSTable. The state of this object is not valid until it has been closed.
+     */</comment>
+    <class>class <name>IndexWriter</name> <super><implements>implements <name>Closeable</name></implements></super>
+    <block>{
+        <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>SequentialWriter</name></type> <name>indexFile</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>SegmentedFile</name>.<name>Builder</name></name></type> <name>builder</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>IndexSummary</name></type> <name>summary</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>BloomFilter</name></type> <name>bf</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>private</specifier> <name>FileMark</name></type> <name>mark</name></decl>;</decl_stmt>
+
+        <constructor><name>IndexWriter</name><parameter_list>(<param><decl><type><name>long</name></type> <name>keyCount</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><name>indexFile</name> = <call><name><name>SequentialWriter</name>.<name>open</name></name><argument_list>(<argument><expr>new <call><name>File</name><argument_list>(<argument><expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>COMPONENT_INDEX</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>,
+                                              <argument><expr>!<call><name><name>DatabaseDescriptor</name>.<name>populateIOCacheOnFlush</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>builder</name> = <call><name><name>SegmentedFile</name>.<name>getBuilder</name></name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getIndexAccessMode</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>summary</name> = new <call><name>IndexSummary</name><argument_list>(<argument><expr><name>keyCount</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <decl_stmt><decl><type><name>Double</name></type> <name>fpChance</name> <init>= <expr><call><name><name>metadata</name>.<name>getBloomFilterFpChance</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>fpChance</name> != null &amp;&amp; <name>fpChance</name> == 0</expr>)</condition><then>
+            <block>{
+                <comment type="line">// paranoia -- we've had bugs in the thrift &lt;-&gt; avro &lt;-&gt; CfDef dance before, let's not let that break things</comment>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Bloom filter FP chance of zero isn't supposed to happen"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>fpChance</name> = null</expr>;</expr_stmt>
+            }</block></then></if>
+            <expr_stmt><expr><name>bf</name> = <name>fpChance</name> == null
+               ? <call><name><name>BloomFilter</name>.<name>getFilter</name></name><argument_list>(<argument><expr><name>keyCount</name></expr></argument>, <argument><expr>15</expr></argument>)</argument_list></call>
+               : <call><name><name>BloomFilter</name>.<name>getFilter</name></name><argument_list>(<argument><expr><name>keyCount</name></expr></argument>, <argument><expr><name>fpChance</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>afterAppend</name><parameter_list>(<param><decl><type><name><name>DecoratedKey</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>key</name></decl></param>, <param><decl><type><name>long</name></type> <name>dataPosition</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>bf</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>long</name></type> <name>indexPosition</name> <init>= <expr><call><name><name>indexFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>ByteBufferUtil</name>.<name>writeWithShortLength</name></name><argument_list>(<argument><expr><name><name>key</name>.<name>key</name></name></expr></argument>, <argument><expr><name><name>indexFile</name>.<name>stream</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>indexFile</name>.<name>stream</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name>dataPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"wrote index of " + <name>key</name> + " at " + <name>indexPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+            <expr_stmt><expr><call><name><name>summary</name>.<name>maybeAddEntry</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>indexPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>builder</name>.<name>addPotentialBoundary</name></name><argument_list>(<argument><expr><name>indexPosition</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <comment type="block" format="javadoc">/**
+         * Closes the index and bloomfilter, making the public state of this writer valid for consumption.
+         */</comment>
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>close</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <comment type="line">// bloom filter</comment>
+            <decl_stmt><decl><type><name>FileOutputStream</name></type> <name>fos</name> <init>= <expr>new <call><name>FileOutputStream</name><argument_list>(<argument><expr><call><name><name>descriptor</name>.<name>filenameFor</name></name><argument_list>(<argument><expr><name><name>SSTable</name>.<name>COMPONENT_FILTER</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>DataOutputStream</name></type> <name>stream</name> <init>= <expr>new <call><name>DataOutputStream</name><argument_list>(<argument><expr><name>fos</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>BloomFilter</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><name>bf</name></expr></argument>, <argument><expr><name>stream</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>stream</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>fos</name>.<name>getFD</name></name><argument_list>()</argument_list></call>.<call><name>sync</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>stream</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// index</comment>
+            <decl_stmt><decl><type><name>long</name></type> <name>position</name> <init>= <expr><call><name><name>indexFile</name>.<name>getFilePointer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>indexFile</name>.<name>close</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// calls force</comment>
+            <expr_stmt><expr><call><name><name>FileUtils</name>.<name>truncate</name></name><argument_list>(<argument><expr><call><name><name>indexFile</name>.<name>getPath</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>position</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// finalize in-memory index state</comment>
+            <expr_stmt><expr><call><name><name>summary</name>.<name>complete</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>mark</name><parameter_list>()</parameter_list>
+        <block>{
+            <expr_stmt><expr><name>mark</name> = <call><name><name>indexFile</name>.<name>mark</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>resetAndTruncate</name><parameter_list>()</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <comment type="line">// we can't un-set the bloom filter addition, but extra keys in there are harmless.</comment>
+            <comment type="line">// we can't reset dbuilder either, but that is the last thing called in afterappend so</comment>
+            <comment type="line">// we assume that if that worked then we won't be trying to reset.</comment>
+            <expr_stmt><expr><call><name><name>indexFile</name>.<name>resetAndTruncate</name></name><argument_list>(<argument><expr><name>mark</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+        <function><type><annotation>@<name>Override</name></annotation>
+        <specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr>"IndexWriter(" + <name>descriptor</name> + ")"</expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

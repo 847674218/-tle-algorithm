@@ -1,0 +1,1138 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\gms\Gossiper.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>gms</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>lang</name>.<name>management</name>.<name>ManagementFactory</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>UnknownHostException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name>.<name>Entry</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name></name>.*;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>MBeanServer</name></name>;</import>
+<import>import <name><name>javax</name>.<name>management</name>.<name>ObjectName</name></name>;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>annotations</name>.<name>VisibleForTesting</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>concurrent</name>.<name>DebuggableScheduledThreadPoolExecutor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessageOut</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * This module is responsible for Gossiping information for the local endpoint. This abstraction
+ * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module
+ * chooses a random node and initiates a round of Gossip with it. A round of Gossip involves 3
+ * rounds of messaging. For instance if node A wants to initiate a round of Gossip with node B
+ * it starts off by sending node B a GossipDigestSynMessage. Node B on receipt of this message
+ * sends node A a GossipDigestAckMessage. On receipt of this message node A sends node B a
+ * GossipDigestAck2Message which completes a round of Gossip. This module as and when it hears one
+ * of the three above mentioned messages updates the Failure Detector with the liveness information.
+ * Upon hearing a GossipShutdownMessage, this module will instantly mark the remote node as down in
+ * the Failure Detector.
+ */</comment>
+
+<class><specifier>public</specifier> class <name>Gossiper</name> <super><implements>implements <name>IFailureDetectionEventListener</name>, <name>GossiperMBean</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>MBEAN_NAME</name> <init>= <expr>"org.apache.cassandra.net:type=Gossiper"</expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>DebuggableScheduledThreadPoolExecutor</name></type> <name>executor</name> <init>= <expr>new <call><name>DebuggableScheduledThreadPoolExecutor</name><argument_list>(<argument><expr>"GossipTasks"</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name>ApplicationState</name><index>[]</index></type> <name>STATES</name> <init>= <expr><call><name><name>ApplicationState</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>static</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>String</name></argument>&gt;</argument_list></name></type> <name>DEAD_STATES</name> <init>= <expr><call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><name><name>VersionedValue</name>.<name>REMOVING_TOKEN</name></name></expr></argument>, <argument><expr><name><name>VersionedValue</name>.<name>REMOVED_TOKEN</name></name></expr></argument>,
+                                                          <argument><expr><name><name>VersionedValue</name>.<name>STATUS_LEFT</name></name></expr></argument>, <argument><expr><name><name>VersionedValue</name>.<name>HIBERNATE</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <name><name>ScheduledFuture</name><argument_list>&lt;<argument><name>?</name></argument>&gt;</argument_list></name></type> <name>scheduledGossipTask</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>int</name></type> <name>intervalInMillis</name> <init>= <expr>1000</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <specifier>static</specifier> <name>int</name></type> <name>QUARANTINE_DELAY</name> <init>= <expr><name><name>StorageService</name>.<name>RING_DELAY</name></name> * 2</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>Gossiper</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Gossiper</name></type> <name>instance</name> <init>= <expr>new <call><name>Gossiper</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>aVeryLongTime</name> <init>= <expr>259200 * 1000</expr></init></decl>;</decl_stmt> <comment type="line">// 3 days</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <name>long</name></type> <name>FatClientTimeout</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>Random</name></type> <name>random</name> <init>= <expr>new <call><name>Random</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Comparator</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>inetcomparator</name> <init>= <expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+    <block>{
+        <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>addr1</name></decl></param>,  <param><decl><type><name>InetAddress</name></type> <name>addr2</name></decl></param>)</parameter_list>
+        <block>{
+            <return>return <expr><call><name><name>addr1</name>.<name>getHostAddress</name></name><argument_list>()</argument_list></call>.<call><name>compareTo</name><argument_list>(<argument><expr><call><name><name>addr2</name>.<name>getHostAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+    }</block></class></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* subscribers for interest in EndpointState change */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>IEndpointStateChangeSubscriber</name></argument>&gt;</argument_list></name></type> <name>subscribers</name> <init>= <expr>new <call><name><name>CopyOnWriteArrayList</name><argument_list>&lt;<argument><name>IEndpointStateChangeSubscriber</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* live member set */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>liveEndpoints</name> <init>= <expr>new <call><name><name>ConcurrentSkipListSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>inetcomparator</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* unreachable member set */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>unreachableEndpoints</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* initial seeds for joining the cluster */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>seeds</name> <init>= <expr>new <call><name><name>ConcurrentSkipListSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>inetcomparator</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* map where key is the endpoint and value is the state associated with the endpoint */</comment>
+    <decl_stmt><decl><type><specifier>final</specifier> <name><name>ConcurrentMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></type> <name>endpointStateMap</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="block">/* map where key is endpoint and value is timestamp when this endpoint was removed from
+     * gossip. We will ignore any gossip regarding these endpoints for QUARANTINE_DELAY time
+     * after removal to prevent nodes from falsely reincarnating during the time when removal
+     * gossip gets propagated to all nodes */</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>justRemovedEndpoints</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>expireTimeEndpointMap</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <class><specifier>private</specifier> class <name>GossipTask</name> <super><implements>implements <name>Runnable</name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+        <block>{
+            <try>try
+            <block>{
+                <comment type="line">//wait on messaging service to start listening</comment>
+                <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>waitUntilListening</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+                <comment type="block">/* Update the local heartbeat counter. */</comment>
+                <expr_stmt><expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>getHeartBeatState</name><argument_list>()</argument_list></call>.<call><name>updateHeartBeat</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"My heartbeat is now " + <call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call>.<call><name>getHeartBeatState</name><argument_list>()</argument_list></call>.<call><name>getHeartBeatVersion</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <decl_stmt><decl><type><specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name>GossipDigest</name></argument>&gt;</argument_list></name></type> <name>gDigests</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>GossipDigest</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>Gossiper</name>.<name>instance</name>.<name>makeRandomGossipDigest</name></name><argument_list>(<argument><expr><name>gDigests</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                <if>if <condition>( <expr><call><name><name>gDigests</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr> )</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name>GossipDigestSyn</name></type> <name>digestSynMessage</name> <init>= <expr>new <call><name>GossipDigestSyn</name><argument_list>(<argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getClusterName</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                           <argument><expr><call><name><name>DatabaseDescriptor</name>.<name>getPartitionerName</name></name><argument_list>()</argument_list></call></expr></argument>,
+                                                                           <argument><expr><name>gDigests</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>GossipDigestSyn</name></argument>&gt;</argument_list></name></type> <name>message</name> <init>= <expr>new <call><name><name>MessageOut</name><argument_list>&lt;<argument><name>GossipDigestSyn</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>GOSSIP_DIGEST_SYN</name></name></expr></argument>,
+                                                                                                        <argument><expr><name>digestSynMessage</name></expr></argument>,
+                                                                                                        <argument><expr><name><name>GossipDigestSyn</name>.<name>serializer</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <comment type="block">/* Gossip to some random live member */</comment>
+                    <decl_stmt><decl><type><name>boolean</name></type> <name>gossipedToSeed</name> <init>= <expr><call><name>doGossipToLiveMember</name><argument_list>(<argument><expr><name>message</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                    <comment type="block">/* Gossip to some unreachable member with some probability to check if he is back up */</comment>
+                    <expr_stmt><expr><call><name>doGossipToUnreachableMember</name><argument_list>(<argument><expr><name>message</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+                    <comment type="block">/* Gossip to a seed if we did not do so above, or we have seen less nodes
+                       than there are seeds.  This prevents partitions where each group of nodes
+                       is only gossiping to a subset of the seeds.
+
+                       The most straightforward check would be to check that all the seeds have been
+                       verified either as live or unreachable.  To avoid that computation each round,
+                       we reason that:
+
+                       either all the live nodes are seeds, in which case non-seeds that come online
+                       will introduce themselves to a member of the ring by definition,
+
+                       or there is at least one non-seed node in the list, in which case eventually
+                       someone will gossip to it, and then do a gossip to a random seed from the
+                       gossipedToSeed check.
+
+                       See CASSANDRA-150 for more exposition. */</comment>
+                    <if>if <condition>(<expr>!<name>gossipedToSeed</name> || <call><name><name>liveEndpoints</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; <call><name><name>seeds</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name>doGossipToSeed</name><argument_list>(<argument><expr><name>message</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                    <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Performing status check ..."</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    <expr_stmt><expr><call><name>doStatusCheck</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr>"Gossip error"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></catch></try>
+        }</block></function>
+    }</block></class>
+
+    <constructor><specifier>private</specifier> <name>Gossiper</name><parameter_list>()</parameter_list>
+    <block>{
+        <comment type="line">// half of QUARATINE_DELAY, to ensure justRemovedEndpoints has enough leeway to prevent re-gossip</comment>
+        <expr_stmt><expr><name>FatClientTimeout</name> = <call>(<name>long</name>)<argument_list>(<argument><expr><name>QUARANTINE_DELAY</name> / 2</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="block">/* register with the Failure Detector for receiving Failure detector events */</comment>
+        <expr_stmt><expr><call><name><name>FailureDetector</name>.<name>instance</name>.<name>registerFailureDetectionEventListener</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// Register this instance with JMX</comment>
+        <try>try
+        <block>{
+            <decl_stmt><decl><type><name>MBeanServer</name></type> <name>mbs</name> <init>= <expr><call><name><name>ManagementFactory</name>.<name>getPlatformMBeanServer</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>mbs</name>.<name>registerMBean</name></name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr>new <call><name>ObjectName</name><argument_list>(<argument><expr><name>MBEAN_NAME</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></constructor>
+
+    <comment type="block" format="javadoc">/**
+     * Register for interesting state changes.
+     * @param subscriber module which implements the IEndpointStateChangeSubscriber
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>register</name><parameter_list>(<param><decl><type><name>IEndpointStateChangeSubscriber</name></type> <name>subscriber</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>subscribers</name>.<name>add</name></name><argument_list>(<argument><expr><name>subscriber</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Unregister interest for state changes.
+     * @param subscriber module which implements the IEndpointStateChangeSubscriber
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>unregister</name><parameter_list>(<param><decl><type><name>IEndpointStateChangeSubscriber</name></type> <name>subscriber</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>subscribers</name>.<name>remove</name></name><argument_list>(<argument><expr><name>subscriber</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getLiveMembers</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>liveMbrs</name> <init>= <expr>new <call><name><name>HashSet</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>liveEndpoints</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr>!<call><name><name>liveMbrs</name>.<name>contains</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>liveMbrs</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <return>return <expr><name>liveMbrs</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>getUnreachableMembers</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>unreachableEndpoints</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getEndpointDowntime</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>Long</name></type> <name>downtime</name> <init>= <expr><call><name><name>unreachableEndpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>downtime</name> != null</expr>)</condition><then>
+            <return>return <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> - <name>downtime</name></expr>;</return></then>
+        <else>else
+            <return>return <expr>0L</expr>;</return></else></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * This method is part of IFailureDetectionEventListener interface. This is invoked
+     * by the Failure Detector when it convicts an end point.
+     *
+     * @param endpoint end point that is convicted.
+    */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>convict</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>double</name></type> <name>phi</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>epState</name>.<name>isAlive</name></name><argument_list>()</argument_list></call> &amp;&amp; !<call><name>isDeadState</name><argument_list>(<argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>markDead</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Return either: the greatest heartbeat or application state
+     * @param epState
+     * @return
+     */</comment>
+    <function><type><name>int</name></type> <name>getMaxEndpointStateVersion</name><parameter_list>(<param><decl><type><name>EndpointState</name></type> <name>epState</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>maxVersion</name> <init>= <expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getHeartBeatVersion</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>VersionedValue</name></type> <name>value</name> <range>: <expr><call><name><name>epState</name>.<name>getApplicationStateMap</name></name><argument_list>()</argument_list></call>.<call><name>values</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><name>maxVersion</name> = <call><name><name>Math</name>.<name>max</name></name><argument_list>(<argument><expr><name>maxVersion</name></expr></argument>,  <argument><expr><name><name>value</name>.<name>version</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>maxVersion</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Removes the endpoint from gossip completely
+     *
+     * @param endpoint endpoint to be removed from the current membership.
+    */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>evictFromMembership</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>unreachableEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>endpointStateMap</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>expireTimeEndpointMap</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>quarantineEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"evicting " + <name>endpoint</name> + " from gossip"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Removes the endpoint from Gossip but retains endpoint state
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>removeEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// do subscribers first so anything in the subscriber that depends on gossiper state won't get confused</comment>
+        <for>for (<init><decl><type><name>IEndpointStateChangeSubscriber</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>onRemove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <expr_stmt><expr><call><name><name>liveEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>unreachableEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// do not remove endpointState until the quarantine expires</comment>
+        <expr_stmt><expr><call><name><name>FailureDetector</name>.<name>instance</name>.<name>remove</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>resetVersion</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>quarantineEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>destroyConnectionPool</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"removing endpoint " + <name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Quarantines the endpoint for QUARANTINE_DELAY
+     * @param endpoint
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>quarantineEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>justRemovedEndpoints</name>.<name>put</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Remove the Endpoint and evict immediately, to avoid gossiping about this node.
+     * This should only be called when a token is taken over by a new IP address.
+     * @param endpoint The endpoint that has been replaced
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>replacedEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>removeEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>evictFromMembership</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * The gossip digest is built based on randomization
+     * rather than just looping through the collection of live endpoints.
+     *
+     * @param gDigests list of Gossip Digests.
+    */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>makeRandomGossipDigest</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>GossipDigest</name></argument>&gt;</argument_list></name></type> <name>gDigests</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>generation</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>maxVersion</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// local epstate will be part of endpointStateMap</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>endpoints</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>endpointStateMap</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>Collections</name>.<name>shuffle</name></name><argument_list>(<argument><expr><name>endpoints</name></expr></argument>, <argument><expr><name>random</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>endpoints</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><name>epState</name> = <call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name>epState</name> != null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>generation</name> = <call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>maxVersion</name> = <call><name>getMaxEndpointStateVersion</name><argument_list>(<argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then></if>
+            <expr_stmt><expr><call><name><name>gDigests</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name>GossipDigest</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>generation</name></expr></argument>, <argument><expr><name>maxVersion</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for ( <init><decl><type><name>GossipDigest</name></type> <name>gDigest</name> <range>: <expr><name>gDigests</name></expr></range></decl></init> )
+            <block>{
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>gDigest</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>" "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Gossip Digests are : " + <call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * This method will begin removing an existing endpoint from the cluster by spoofing its state
+     * This should never be called unless this coordinator has had 'removetoken' invoked
+     *
+     * @param endpoint - the endpoint being removed
+     * @param hostId - the ID of the host being removed
+     * @param localHostId - my own host ID for replication coordination
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>advertiseRemoving</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>UUID</name></type> <name>hostId</name></decl></param>, <param><decl><type><name>UUID</name></type> <name>localHostId</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// remember this node's generation</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>generation</name> <init>= <expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Removing host: {}"</expr></argument>, <argument><expr><name>hostId</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Sleeping for " + <name><name>StorageService</name>.<name>RING_DELAY</name></name> + "ms to ensure " + <name>endpoint</name> + " does not change"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr><name><name>StorageService</name>.<name>RING_DELAY</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <comment type="line">// make sure it did not change</comment>
+        <expr_stmt><expr><name>epState</name> = <call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call> != <name>generation</name></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Endpoint " + <name>endpoint</name> + " generation changed while trying to remove it"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <comment type="line">// update the other node's generation to mimic it as if it had changed it itself</comment>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Advertising removal for " + <name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>updateTimestamp</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// make sure we don't evict it too soon</comment>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>forceNewerGenerationUnsafe</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>STATUS</name></name></expr></argument>, <argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>valueFactory</name>.<name>removingNonlocal</name></name><argument_list>(<argument><expr><name>hostId</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>REMOVAL_COORDINATOR</name></name></expr></argument>, <argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>valueFactory</name>.<name>removalCoordinator</name></name><argument_list>(<argument><expr><name>localHostId</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>endpointStateMap</name>.<name>put</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
+     * This should only be called after advertiseRemoving
+     * @param endpoint
+     * @param hostId
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>advertiseTokenRemoved</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>UUID</name></type> <name>hostId</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>updateTimestamp</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// make sure we don't evict it too soon</comment>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>forceNewerGenerationUnsafe</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>STATUS</name></name></expr></argument>, <argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>valueFactory</name>.<name>removedNonlocal</name></name><argument_list>(<argument><expr><name>hostId</name></expr></argument>, <argument><expr><call><name>computeExpireTime</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Completing removal of " + <name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>endpointStateMap</name>.<name>put</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <comment type="line">// ensure at least one gossip round occurs before returning</comment>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr><name>intervalInMillis</name> * 2</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Do not call this method unless you know what you are doing.
+     * It will try extremely hard to obliterate any endpoint from the ring,
+     * even if it does not know about it.
+     * This should only ever be called by human via JMX.
+     * @param  address
+     * @throws UnknownHostException
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>unsafeAssassinateEndpoint</name><parameter_list>(<param><decl><type><name>String</name></type> <name>address</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnknownHostException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>endpoint</name> <init>= <expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>tokens</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Assassinating {} via gossip"</expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><name>epState</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><name>epState</name> = new <call><name>EndpointState</name><argument_list>(<argument><expr>new <call><name>HeartBeatState</name><argument_list>(<argument><expr><call>(<name>int</name>)<argument_list>(<argument><expr>(<call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> + 60000) / 1000</expr></argument>)</argument_list></call></expr></argument>, <argument><expr>9999</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <try>try
+            <block>{
+                <expr_stmt><expr><name>tokens</name> = <call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call>.<call><name>getTokens</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>AssertionError</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+            }</block></catch></try>
+            <decl_stmt><decl><type><name>int</name></type> <name>generation</name> <init>= <expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Sleeping for " + <name><name>StorageService</name>.<name>RING_DELAY</name></name> + "ms to ensure " + <name>endpoint</name> + " does not change"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <try>try
+            <block>{
+                <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr><name><name>StorageService</name>.<name>RING_DELAY</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block>
+            <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+            <block>{
+                <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+            }</block></catch></try>
+            <comment type="line">// make sure it did not change</comment>
+            <expr_stmt><expr><name>epState</name> = <call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call> != <name>generation</name></expr>)</condition><then>
+                <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Endpoint " + <name>endpoint</name> + " generation changed while trying to remove it"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+            <expr_stmt><expr><call><name><name>epState</name>.<name>updateTimestamp</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// make sure we don't evict it too soon</comment>
+            <expr_stmt><expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>forceNewerGenerationUnsafe</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <if>if <condition>(<expr><name>tokens</name> == null</expr>)</condition><then>
+            <expr_stmt><expr><name>tokens</name> = <call><name><name>Arrays</name>.<name>asList</name></name><argument_list>(<argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>getBootstrapToken</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <comment type="line">// do not pass go, do not collect 200 dollars, just gtfo</comment>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>STATUS</name></name></expr></argument>, <argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>valueFactory</name>.<name>left</name></name><argument_list>(<argument><expr><name>tokens</name></expr></argument>, <argument><expr><call><name>computeExpireTime</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>handleMajorStateChange</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr><name>intervalInMillis</name> * 4</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>AssertionError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>warn</name></name><argument_list>(<argument><expr>"Finished killing {}"</expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isKnownEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>endpointStateMap</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getCurrentGenerationNumber</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>getHeartBeatState</name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns true if the chosen target was also a seed. False otherwise
+     *
+     *
+     * @param message
+     * @param epSet a set of endpoint from which a random endpoint is chosen.
+     *  @return true if the chosen endpoint is also a seed.
+     */</comment>
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>sendGossip</name><parameter_list>(<param><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>GossipDigestSyn</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>, <param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>epSet</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>size</name> <init>= <expr><call><name><name>epSet</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>size</name> &lt; 1</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+        <comment type="block">/* Generate a random number from 0 -&gt; size */</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>liveEndpoints</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>epSet</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>int</name></type> <name>index</name> <init>= <expr>(<name>size</name> == 1) ? 0 : <call><name><name>random</name>.<name>nextInt</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>to</name> <init>= <expr><call><name><name>liveEndpoints</name>.<name>get</name></name><argument_list>(<argument><expr><name>index</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Sending a GossipDigestSyn to {} ..."</expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendOneWay</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><call><name><name>seeds</name>.<name>contains</name></name><argument_list>(<argument><expr><name>to</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/* Sends a Gossip message to a live member and returns true if the recipient was a seed */</comment>
+    <function><type><specifier>private</specifier> <name>boolean</name></type> <name>doGossipToLiveMember</name><parameter_list>(<param><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>GossipDigestSyn</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>size</name> <init>= <expr><call><name><name>liveEndpoints</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>( <expr><name>size</name> == 0</expr> )</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+        <return>return <expr><call><name>sendGossip</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>liveEndpoints</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/* Sends a Gossip message to an unreachable member */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>doGossipToUnreachableMember</name><parameter_list>(<param><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>GossipDigestSyn</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>double</name></type> <name>liveEndpointCount</name> <init>= <expr><call><name><name>liveEndpoints</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>double</name></type> <name>unreachableEndpointCount</name> <init>= <expr><call><name><name>unreachableEndpoints</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>( <expr><name>unreachableEndpointCount</name> &gt; 0</expr> )</condition><then>
+        <block>{
+            <comment type="block">/* based on some probability */</comment>
+            <decl_stmt><decl><type><name>double</name></type> <name>prob</name> <init>= <expr><name>unreachableEndpointCount</name> / (<name>liveEndpointCount</name> + 1)</expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>double</name></type> <name>randDbl</name> <init>= <expr><call><name><name>random</name>.<name>nextDouble</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>( <expr><name>randDbl</name> &lt; <name>prob</name></expr> )</condition><then>
+                <expr_stmt><expr><call><name>sendGossip</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><call><name><name>unreachableEndpoints</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block">/* Gossip to a seed for facilitating partition healing */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>doGossipToSeed</name><parameter_list>(<param><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>GossipDigestSyn</name></argument>&gt;</argument_list></name></type> <name>prod</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>size</name> <init>= <expr><call><name><name>seeds</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>( <expr><name>size</name> &gt; 0</expr> )</condition><then>
+        <block>{
+            <if>if <condition>( <expr><name>size</name> == 1 &amp;&amp; <call><name><name>seeds</name>.<name>contains</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr> )</condition><then>
+            <block>{
+                <return>return;</return>
+            }</block></then></if>
+
+            <if>if <condition>( <expr><call><name><name>liveEndpoints</name>.<name>size</name></name><argument_list>()</argument_list></call> == 0</expr> )</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name>sendGossip</name><argument_list>(<argument><expr><name>prod</name></expr></argument>, <argument><expr><name>seeds</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <comment type="block">/* Gossip with the seed with some probability. */</comment>
+                <decl_stmt><decl><type><name>double</name></type> <name>probability</name> <init>= <expr><call><name><name>seeds</name>.<name>size</name></name><argument_list>()</argument_list></call> / <call>(<name>double</name>)<argument_list>( <argument><expr><call><name><name>liveEndpoints</name>.<name>size</name></name><argument_list>()</argument_list></call> + <call><name><name>unreachableEndpoints</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument> )</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>double</name></type> <name>randDbl</name> <init>= <expr><call><name><name>random</name>.<name>nextDouble</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>( <expr><name>randDbl</name> &lt;= <name>probability</name></expr> )</condition><then>
+                    <expr_stmt><expr><call><name>sendGossip</name><argument_list>(<argument><expr><name>prod</name></expr></argument>, <argument><expr><name>seeds</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></else></if>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>doStatusCheck</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>long</name></type> <name>now</name> <init>= <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>eps</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>keySet</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for ( <init><decl><type><name>InetAddress</name></type> <name>endpoint</name> <range>: <expr><name>eps</name></expr></range></decl></init> )
+        <block>{
+            <if>if <condition>( <expr><call><name><name>endpoint</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr> )</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <expr_stmt><expr><call><name><name>FailureDetector</name>.<name>instance</name>.<name>interpret</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>( <expr><name>epState</name> != null</expr> )</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>duration</name> <init>= <expr><name>now</name> - <call><name><name>epState</name>.<name>getUpdateTimestamp</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+                <comment type="line">// check if this is a fat client. fat clients are removed automatically from</comment>
+                <comment type="line">// gossip after FatClientTimeout.  Do not remove dead states here.</comment>
+                <if>if <condition>(<expr>!<call><name>isDeadState</name><argument_list>(<argument><expr><name>epState</name></expr></argument>)</argument_list></call> &amp;&amp; !<call><name><name>epState</name>.<name>isAlive</name></name><argument_list>()</argument_list></call> &amp;&amp; !<call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call>.<call><name>isMember</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &amp;&amp; !<call><name><name>justRemovedEndpoints</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &amp;&amp; (<name>duration</name> &gt; <name>FatClientTimeout</name>)</expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"FatClient " + <name>endpoint</name> + " has been silent for " + <name>FatClientTimeout</name> + "ms, removing from gossip"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name>removeEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// will put it in justRemovedEndpoints to respect quarantine delay</comment>
+                    <expr_stmt><expr><call><name>evictFromMembership</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt> <comment type="line">// can get rid of the state immediately</comment>
+                }</block></then></if>
+
+                <comment type="line">// check for dead state removal</comment>
+                <decl_stmt><decl><type><name>long</name></type> <name>expireTime</name> <init>= <expr><call><name>getExpireTimeForEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr>!<call><name><name>epState</name>.<name>isAlive</name></name><argument_list>()</argument_list></call> &amp;&amp; (<name>now</name> &gt; <name>expireTime</name>)
+                        &amp;&amp; (!<call><name><name>StorageService</name>.<name>instance</name>.<name>getTokenMetadata</name></name><argument_list>()</argument_list></call>.<call><name>isMember</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>)</expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"time is expiring for endpoint : " + <name>endpoint</name> + " (" + <name>expireTime</name> + ")"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                    <expr_stmt><expr><call><name>evictFromMembership</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></then></if>
+        }</block></for>
+
+        <if>if <condition>(<expr>!<call><name><name>justRemovedEndpoints</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>entry</name> <range>: <expr><call><name><name>justRemovedEndpoints</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <if>if <condition>(<expr>(<name>now</name> - <call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call>) &gt; <name>QUARANTINE_DELAY</name></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr><name>QUARANTINE_DELAY</name> + " elapsed, " + <call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call> + " gossip quarantine over"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    <expr_stmt><expr><call><name><name>justRemovedEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></for>
+        }</block></then></if>
+    }</block></function>
+
+    <function><type><specifier>protected</specifier> <name>long</name></type> <name>getExpireTimeForEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="block">/* default expireTime is aVeryLongTime */</comment>
+        <decl_stmt><decl><type><name>Long</name></type> <name>storedTime</name> <init>= <expr><call><name><name>expireTimeEndpointMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr><name>storedTime</name> == null ? <call><name>computeExpireTime</name><argument_list>()</argument_list></call> : <name>storedTime</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>EndpointState</name></type> <name>getEndpointStateForEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>Set</name><argument_list>&lt;<argument><name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getEndpointStates</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>endpointStateMap</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>usesHostId</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>knowsVersion</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &amp;&amp; <call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>getVersion</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &gt;= <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then>
+        <else>else  <if>if <condition>(<expr><call><name>getEndpointStateForEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>getApplicationState</name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>NET_VERSION</name></name></expr></argument>)</argument_list></call> != null &amp;&amp; <call><name><name>Integer</name>.<name>parseInt</name></name><argument_list>(<argument><expr><call><name>getEndpointStateForEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>getApplicationState</name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>NET_VERSION</name></name></expr></argument>)</argument_list></call>.<name>value</name></expr></argument>)</argument_list></call> &gt;= <name><name>MessagingService</name>.<name>VERSION_12</name></name></expr>)</condition><then>
+            <return>return <expr>true</expr>;</return></then></if></else></if>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>usesVnodes</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name>usesHostId</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call> &amp;&amp; <call><name>getEndpointStateForEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>getApplicationState</name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>TOKENS</name></name></expr></argument>)</argument_list></call> != null</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>UUID</name></type> <name>getHostId</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name>usesHostId</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Host " + <name>endpoint</name> + " does not use new-style tokens!"</expr></argument>)</argument_list></call></expr>;</throw></then></if>
+        <return>return <expr><call><name><name>UUID</name>.<name>fromString</name></name><argument_list>(<argument><expr><call><name>getEndpointStateForEndpoint</name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call>.<call><name>getApplicationState</name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>HOST_ID</name></name></expr></argument>)</argument_list></call>.<name>value</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><name>EndpointState</name></type> <name>getStateForVersionBiggerThan</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>forEndpoint</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>forEndpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>reqdEndpointState</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>( <expr><name>epState</name> != null</expr> )</condition><then>
+        <block>{
+            <comment type="block">/*
+             * Here we try to include the Heart Beat state only if it is
+             * greater than the version passed in. It might happen that
+             * the heart beat version maybe lesser than the version passed
+             * in and some application state has a version that is greater
+             * than the version passed in. In this case we also send the old
+             * heart beat and throw it away on the receiver if it is redundant.
+            */</comment>
+            <decl_stmt><decl><type><name>int</name></type> <name>localHbVersion</name> <init>= <expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getHeartBeatVersion</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>( <expr><name>localHbVersion</name> &gt; <name>version</name></expr> )</condition><then>
+            <block>{
+                <expr_stmt><expr><name>reqdEndpointState</name> = new <call><name>EndpointState</name><argument_list>(<argument><expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"local heartbeat version " + <name>localHbVersion</name> + " greater than " + <name>version</name> + " for " + <name>forEndpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></then></if>
+            <comment type="block">/* Accumulate all application states whose versions are greater than "version" variable */</comment>
+            <for>for (<init><decl><type><name><name>Entry</name><argument_list>&lt;<argument><name>ApplicationState</name></argument>, <argument><name>VersionedValue</name></argument>&gt;</argument_list></name></type> <name>entry</name> <range>: <expr><call><name><name>epState</name>.<name>getApplicationStateMap</name></name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name>VersionedValue</name></type> <name>value</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>( <expr><name><name>value</name>.<name>version</name></name> &gt; <name>version</name></expr> )</condition><then>
+                <block>{
+                    <if>if <condition>( <expr><name>reqdEndpointState</name> == null</expr> )</condition><then>
+                    <block>{
+                        <expr_stmt><expr><name>reqdEndpointState</name> = new <call><name>EndpointState</name><argument_list>(<argument><expr><call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if>
+                    <decl_stmt><decl><type><specifier>final</specifier> <name>ApplicationState</name></type> <name>key</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Adding state " + <name>key</name> + ": " + <name><name>value</name>.<name>value</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    <expr_stmt><expr><call><name><name>reqdEndpointState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name>key</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></for>
+        }</block></then></if>
+        <return>return <expr><name>reqdEndpointState</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/** determine which endpoint started up earlier */</comment>
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>compareEndpointStartup</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>addr1</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>addr2</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>ep1</name> <init>= <expr><call><name>getEndpointStateForEndpoint</name><argument_list>(<argument><expr><name>addr1</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>ep2</name> <init>= <expr><call><name>getEndpointStateForEndpoint</name><argument_list>(<argument><expr><name>addr2</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>ep1</name> != null &amp;&amp; <name>ep2</name> != null</expr>;</assert>
+        <return>return <expr><call><name><name>ep1</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call> - <call><name><name>ep2</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>notifyFailureDetector</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></type> <name>remoteEpStateMap</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></type> <name>entry</name> <range>: <expr><call><name><name>remoteEpStateMap</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name>notifyFailureDetector</name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>notifyFailureDetector</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>remoteEndpointState</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>localEndpointState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="block">/*
+         * If the local endpoint state exists then report to the FD only
+         * if the versions workout.
+        */</comment>
+        <if>if <condition>( <expr><name>localEndpointState</name> != null</expr> )</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name>IFailureDetector</name></type> <name>fd</name> <init>= <expr><name><name>FailureDetector</name>.<name>instance</name></name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>localGeneration</name> <init>= <expr><call><name><name>localEndpointState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>remoteGeneration</name> <init>= <expr><call><name><name>remoteEndpointState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>( <expr><name>remoteGeneration</name> &gt; <name>localGeneration</name></expr> )</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>localEndpointState</name>.<name>updateTimestamp</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                <comment type="line">// this node was dead and the generation changed, this indicates a reboot, or possibly a takeover</comment>
+                <comment type="line">// we will clean the fd intervals for it and relearn them</comment>
+                <if>if <condition>(<expr>!<call><name><name>localEndpointState</name>.<name>isAlive</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Clearing interval times for {} due to generation change"</expr></argument>, <argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>fd</name>.<name>clear</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+                <expr_stmt><expr><call><name><name>fd</name>.<name>report</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+
+            <if>if <condition>( <expr><name>remoteGeneration</name> == <name>localGeneration</name></expr> )</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>localVersion</name> <init>= <expr><call><name>getMaxEndpointStateVersion</name><argument_list>(<argument><expr><name>localEndpointState</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>remoteVersion</name> <init>= <expr><call><name><name>remoteEndpointState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getHeartBeatVersion</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>( <expr><name>remoteVersion</name> &gt; <name>localVersion</name></expr> )</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>localEndpointState</name>.<name>updateTimestamp</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+                    <comment type="line">// just a version change, report to the fd</comment>
+                    <expr_stmt><expr><call><name><name>fd</name>.<name>report</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then></if>
+            }</block></then></if>
+        }</block></then></if>
+
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>markAlive</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>addr</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>localState</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"marking as alive {}"</expr></argument>, <argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><call><name><name>localState</name>.<name>markAlive</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>localState</name>.<name>updateTimestamp</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt> <comment type="line">// prevents doStatusCheck from racing us and evicting if it was down &gt; aVeryLongTime</comment>
+        <expr_stmt><expr><call><name><name>liveEndpoints</name>.<name>add</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>unreachableEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>expireTimeEndpointMap</name>.<name>remove</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"removing expire time for endpoint : " + <name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"InetAddress {} is now UP"</expr></argument>, <argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>IEndpointStateChangeSubscriber</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>onAlive</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>, <argument><expr><name>localState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Notified " + <name>subscribers</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>markDead</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>addr</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>localState</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"marking as dead {}"</expr></argument>, <argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><call><name><name>localState</name>.<name>markDead</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>liveEndpoints</name>.<name>remove</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>unreachableEndpoints</name>.<name>put</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"InetAddress {} is now dead."</expr></argument>, <argument><expr><name>addr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <for>for (<init><decl><type><name>IEndpointStateChangeSubscriber</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>onDead</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>, <argument><expr><name>localState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Notified " + <name>subscribers</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * This method is called whenever there is a "big" change in ep state (a generation change for a known node).
+     *
+     * @param ep endpoint
+     * @param epState EndpointState for the endpoint
+     */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>handleMajorStateChange</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>epState</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr>!<call><name>isDeadState</name><argument_list>(<argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <if>if <condition>(<expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Node {} has restarted, now UP"</expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+            <else>else
+                <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Node {} is now part of the cluster"</expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></else></if>
+        }</block></then></if>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Adding endpoint state for " + <name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        <expr_stmt><expr><call><name><name>endpointStateMap</name>.<name>put</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <comment type="line">// the node restarted: it is up to the subscriber to take whatever action is necessary</comment>
+        <for>for (<init><decl><type><name>IEndpointStateChangeSubscriber</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>onRestart</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <if>if <condition>(<expr>!<call><name>isDeadState</name><argument_list>(<argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name>markAlive</name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Not marking " + <name>ep</name> + " alive due to dead state"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name>markDead</name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <for>for (<init><decl><type><name>IEndpointStateChangeSubscriber</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>onJoin</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>Boolean</name></type> <name>isDeadState</name><parameter_list>(<param><decl><type><name>EndpointState</name></type> <name>epState</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>epState</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>STATUS</name></name></expr></argument>)</argument_list></call> == null</expr>)</condition><then>
+            <return>return <expr>false</expr>;</return></then></if>
+        <decl_stmt><decl><type><name>String</name></type> <name>value</name> <init>= <expr><call><name><name>epState</name>.<name>getApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>STATUS</name></name></expr></argument>)</argument_list></call>.<name>value</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>String</name><index>[]</index></type> <name>pieces</name> <init>= <expr><call><name><name>value</name>.<name>split</name></name><argument_list>(<argument><expr><name><name>VersionedValue</name>.<name>DELIMITER_STR</name></name></expr></argument>, <argument><expr>-1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr>(<name><name>pieces</name>.<name>length</name></name> &gt; 0)</expr>;</assert>
+        <decl_stmt><decl><type><name>String</name></type> <name>state</name> <init>= <expr><name><name>pieces</name><index>[<expr>0</expr>]</index></name></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>String</name></type> <name>deadstate</name> <range>: <expr><name>DEAD_STATES</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>state</name>.<name>equals</name></name><argument_list>(<argument><expr><name>deadstate</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <return>return <expr>true</expr>;</return></then></if>
+        }</block></for>
+        <return>return <expr>false</expr>;</return>
+    }</block></function>
+
+    <function><type><name>void</name></type> <name>applyStateLocally</name><parameter_list>(<param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></type> <name>epStateMap</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name><name>Entry</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></type> <name>entry</name> <range>: <expr><call><name><name>epStateMap</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>ep</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>( <expr><call><name><name>ep</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+            <if>if <condition>(<expr><call><name><name>justRemovedEndpoints</name>.<name>containsKey</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>)</condition><then>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Ignoring gossip for " + <name>ep</name> + " because it is quarantined"</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                <continue>continue;</continue>
+            }</block></then></if>
+
+            <decl_stmt><decl><type><name>EndpointState</name></type> <name>localEpStatePtr</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>EndpointState</name></type> <name>remoteState</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="block">/*
+                If state does not exist just add it. If it does then add it if the remote generation is greater.
+                If there is a generation tie, attempt to break it by heartbeat version.
+            */</comment>
+            <if>if <condition>( <expr><name>localEpStatePtr</name> != null</expr> )</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>localGeneration</name> <init>= <expr><call><name><name>localEpStatePtr</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>remoteGeneration</name> <init>= <expr><call><name><name>remoteState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr><name>ep</name> + "local generation " + <name>localGeneration</name> + ", remote generation " + <name>remoteGeneration</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><name>remoteGeneration</name> &gt; <name>localGeneration</name></expr>)</condition><then>
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Updating heartbeat state generation to " + <name>remoteGeneration</name> + " from " + <name>localGeneration</name> + " for " + <name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                    <comment type="line">// major state change will handle the update by inserting the remote state directly</comment>
+                    <expr_stmt><expr><call><name>handleMajorStateChange</name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>remoteState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else <if>if <condition>( <expr><name>remoteGeneration</name> == <name>localGeneration</name></expr> )</condition><then> <comment type="line">// generation has not changed, apply new states</comment>
+                <block>{
+                    <comment type="block">/* find maximum state */</comment>
+                    <decl_stmt><decl><type><name>int</name></type> <name>localMaxVersion</name> <init>= <expr><call><name>getMaxEndpointStateVersion</name><argument_list>(<argument><expr><name>localEpStatePtr</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>int</name></type> <name>remoteMaxVersion</name> <init>= <expr><call><name>getMaxEndpointStateVersion</name><argument_list>(<argument><expr><name>remoteState</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <if>if <condition>( <expr><name>remoteMaxVersion</name> &gt; <name>localMaxVersion</name></expr> )</condition><then>
+                    <block>{
+                        <comment type="line">// apply states, but do not notify since there is no major change</comment>
+                        <expr_stmt><expr><call><name>applyNewStates</name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>localEpStatePtr</name></expr></argument>, <argument><expr><name>remoteState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then>
+                    <else>else <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Ignoring remote version " + <name>remoteMaxVersion</name> + " &lt;= " + <name>localMaxVersion</name> + " for " + <name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if></else></if>
+                    <if>if <condition>(<expr>!<call><name><name>localEpStatePtr</name>.<name>isAlive</name></name><argument_list>()</argument_list></call> &amp;&amp; !<call><name>isDeadState</name><argument_list>(<argument><expr><name>localEpStatePtr</name></expr></argument>)</argument_list></call></expr>)</condition><then> <comment type="line">// unless of course, it was dead</comment>
+                        <expr_stmt><expr><call><name>markAlive</name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>localEpStatePtr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                }</block></then>
+                <else>else
+                <block>{
+                    <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                        <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Ignoring remote generation " + <name>remoteGeneration</name> + " &lt; " + <name>localGeneration</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+                }</block></else></if></else></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <comment type="line">// this is a new node, report it to the FD in case it is the first time we are seeing it AND it's not alive</comment>
+                <expr_stmt><expr><call><name><name>FailureDetector</name>.<name>instance</name>.<name>report</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name>handleMajorStateChange</name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>remoteState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>applyNewStates</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>addr</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>localState</name></decl></param>, <param><decl><type><name>EndpointState</name></type> <name>remoteState</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// don't assert here, since if the node restarts the version will go back to zero</comment>
+        <decl_stmt><decl><type><name>int</name></type> <name>oldVersion</name> <init>= <expr><call><name><name>localState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getHeartBeatVersion</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <expr_stmt><expr><call><name><name>localState</name>.<name>setHeartBeatState</name></name><argument_list>(<argument><expr><call><name><name>remoteState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Updating heartbeat state version to " + <call><name><name>localState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getHeartBeatVersion</name><argument_list>()</argument_list></call> + " from " + <name>oldVersion</name> + " for " + <name>addr</name> + " ..."</expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <comment type="line">// we need to make two loops here, one to apply, then another to notify, this way all states in an update are present and current when the notifications are received</comment>
+        <for>for (<init><decl><type><name><name>Entry</name><argument_list>&lt;<argument><name>ApplicationState</name></argument>, <argument><name>VersionedValue</name></argument>&gt;</argument_list></name></type> <name>remoteEntry</name> <range>: <expr><call><name><name>remoteState</name>.<name>getApplicationStateMap</name></name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>ApplicationState</name></type> <name>remoteKey</name> <init>= <expr><call><name><name>remoteEntry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>VersionedValue</name></type> <name>remoteValue</name> <init>= <expr><call><name><name>remoteEntry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <assert>assert <expr><call><name><name>remoteState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call> == <call><name><name>localState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr>;</assert>
+            <expr_stmt><expr><call><name><name>localState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name>remoteKey</name></expr></argument>, <argument><expr><name>remoteValue</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+        <for>for (<init><decl><type><name><name>Entry</name><argument_list>&lt;<argument><name>ApplicationState</name></argument>, <argument><name>VersionedValue</name></argument>&gt;</argument_list></name></type> <name>remoteEntry</name> <range>: <expr><call><name><name>remoteState</name>.<name>getApplicationStateMap</name></name><argument_list>()</argument_list></call>.<call><name>entrySet</name><argument_list>()</argument_list></call></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name>doNotifications</name><argument_list>(<argument><expr><name>addr</name></expr></argument>, <argument><expr><call><name><name>remoteEntry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>remoteEntry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <comment type="line">// notify that an application state has changed</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>doNotifications</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>addr</name></decl></param>, <param><decl><type><name>ApplicationState</name></type> <name>state</name></decl></param>, <param><decl><type><name>VersionedValue</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for (<init><decl><type><name>IEndpointStateChangeSubscriber</name></type> <name>subscriber</name> <range>: <expr><name>subscribers</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>subscriber</name>.<name>onChange</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>, <argument><expr><name>state</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+    }</block></function>
+
+    <comment type="block">/* Request all the state for the endpoint in the gDigest */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>requestAll</name><parameter_list>(<param><decl><type><name>GossipDigest</name></type> <name>gDigest</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>GossipDigest</name></argument>&gt;</argument_list></name></type> <name>deltaGossipDigestList</name></decl></param>, <param><decl><type><name>int</name></type> <name>remoteGeneration</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="block">/* We are here since we have no data for this endpoint locally so request everthing. */</comment>
+        <expr_stmt><expr><call><name><name>deltaGossipDigestList</name>.<name>add</name></name><argument_list>( <argument><expr>new <call><name>GossipDigest</name><argument_list>(<argument><expr><call><name><name>gDigest</name>.<name>getEndpoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>remoteGeneration</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr></argument> )</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"requestAll for " + <call><name><name>gDigest</name>.<name>getEndpoint</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <comment type="block">/* Send all the data with version greater than maxRemoteVersion */</comment>
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>sendAll</name><parameter_list>(<param><decl><type><name>GossipDigest</name></type> <name>gDigest</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></type> <name>deltaEpStateMap</name></decl></param>, <param><decl><type><name>int</name></type> <name>maxRemoteVersion</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>localEpStatePtr</name> <init>= <expr><call><name>getStateForVersionBiggerThan</name><argument_list>(<argument><expr><call><name><name>gDigest</name>.<name>getEndpoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>maxRemoteVersion</name></expr></argument>)</argument_list></call></expr></init></decl> ;</decl_stmt>
+        <if>if <condition>( <expr><name>localEpStatePtr</name> != null</expr> )</condition><then>
+            <expr_stmt><expr><call><name><name>deltaEpStateMap</name>.<name>put</name></name><argument_list>(<argument><expr><call><name><name>gDigest</name>.<name>getEndpoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>localEpStatePtr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <comment type="block">/*
+        This method is used to figure the state that the Gossiper has but Gossipee doesn't. The delta digests
+        and the delta state are built up.
+    */</comment>
+    <function><type><name>void</name></type> <name>examineGossiper</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>GossipDigest</name></argument>&gt;</argument_list></name></type> <name>gDigestList</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>GossipDigest</name></argument>&gt;</argument_list></name></type> <name>deltaGossipDigestList</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>InetAddress</name></argument>, <argument><name>EndpointState</name></argument>&gt;</argument_list></name></type> <name>deltaEpStateMap</name></decl></param>)</parameter_list>
+    <block>{
+        <for>for ( <init><decl><type><name>GossipDigest</name></type> <name>gDigest</name> <range>: <expr><name>gDigestList</name></expr></range></decl></init> )
+        <block>{
+            <decl_stmt><decl><type><name>int</name></type> <name>remoteGeneration</name> <init>= <expr><call><name><name>gDigest</name>.<name>getGeneration</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>maxRemoteVersion</name> <init>= <expr><call><name><name>gDigest</name>.<name>getMaxVersion</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="block">/* Get state associated with the end point in digest */</comment>
+            <decl_stmt><decl><type><name>EndpointState</name></type> <name>epStatePtr</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>gDigest</name>.<name>getEndpoint</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="block">/*
+                Here we need to fire a GossipDigestAckMessage. If we have some data associated with this endpoint locally
+                then we follow the "if" path of the logic. If we have absolutely nothing for this endpoint we need to
+                request all the data for this endpoint.
+            */</comment>
+            <if>if <condition>( <expr><name>epStatePtr</name> != null</expr> )</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>int</name></type> <name>localGeneration</name> <init>= <expr><call><name><name>epStatePtr</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <comment type="block">/* get the max version of all keys in the state associated with this endpoint */</comment>
+                <decl_stmt><decl><type><name>int</name></type> <name>maxLocalVersion</name> <init>= <expr><call><name>getMaxEndpointStateVersion</name><argument_list>(<argument><expr><name>epStatePtr</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>( <expr><name>remoteGeneration</name> == <name>localGeneration</name> &amp;&amp; <name>maxRemoteVersion</name> == <name>maxLocalVersion</name></expr> )</condition><then>
+                    <continue>continue;</continue></then></if>
+
+                <if>if <condition>( <expr><name>remoteGeneration</name> &gt; <name>localGeneration</name></expr> )</condition><then>
+                <block>{
+                    <comment type="block">/* we request everything from the gossiper */</comment>
+                    <expr_stmt><expr><call><name>requestAll</name><argument_list>(<argument><expr><name>gDigest</name></expr></argument>, <argument><expr><name>deltaGossipDigestList</name></expr></argument>, <argument><expr><name>remoteGeneration</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else <if>if <condition>( <expr><name>remoteGeneration</name> &lt; <name>localGeneration</name></expr> )</condition><then>
+                <block>{
+                    <comment type="block">/* send all data with generation = localgeneration and version &gt; 0 */</comment>
+                    <expr_stmt><expr><call><name>sendAll</name><argument_list>(<argument><expr><name>gDigest</name></expr></argument>, <argument><expr><name>deltaEpStateMap</name></expr></argument>, <argument><expr>0</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></then>
+                <else>else <if>if <condition>( <expr><name>remoteGeneration</name> == <name>localGeneration</name></expr> )</condition><then>
+                <block>{
+                    <comment type="block">/*
+                        If the max remote version is greater then we request the remote endpoint send us all the data
+                        for this endpoint with version greater than the max version number we have locally for this
+                        endpoint.
+                        If the max remote version is lesser, then we send all the data we have locally for this endpoint
+                        with version greater than the max remote version.
+                    */</comment>
+                    <if>if <condition>( <expr><name>maxRemoteVersion</name> &gt; <name>maxLocalVersion</name></expr> )</condition><then>
+                    <block>{
+                        <expr_stmt><expr><call><name><name>deltaGossipDigestList</name>.<name>add</name></name><argument_list>( <argument><expr>new <call><name>GossipDigest</name><argument_list>(<argument><expr><call><name><name>gDigest</name>.<name>getEndpoint</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>remoteGeneration</name></expr></argument>, <argument><expr><name>maxLocalVersion</name></expr></argument>)</argument_list></call></expr></argument> )</argument_list></call></expr>;</expr_stmt>
+                    }</block></then>
+                    <else>else <if>if <condition>( <expr><name>maxRemoteVersion</name> &lt; <name>maxLocalVersion</name></expr> )</condition><then>
+                    <block>{
+                        <comment type="block">/* send all data with generation = localgeneration and version &gt; maxRemoteVersion */</comment>
+                        <expr_stmt><expr><call><name>sendAll</name><argument_list>(<argument><expr><name>gDigest</name></expr></argument>, <argument><expr><name>deltaEpStateMap</name></expr></argument>, <argument><expr><name>maxRemoteVersion</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    }</block></then></if></else></if>
+                }</block></then></if></else></if></else></if>
+            }</block></then>
+            <else>else
+            <block>{
+                <comment type="block">/* We are here since we have no data for this endpoint locally so request everything. */</comment>
+                <expr_stmt><expr><call><name>requestAll</name><argument_list>(<argument><expr><name>gDigest</name></expr></argument>, <argument><expr><name>deltaGossipDigestList</name></expr></argument>, <argument><expr><name>remoteGeneration</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></else></if>
+        }</block></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>(<param><decl><type><name>int</name></type> <name>generationNumber</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>start</name><argument_list>(<argument><expr><name>generationNumber</name></expr></argument>, <argument><expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>ApplicationState</name></argument>, <argument><name>VersionedValue</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Start the gossiper with the generation number, preloading the map of application states before starting
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>start</name><parameter_list>(<param><decl><type><name>int</name></type> <name>generationNbr</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>ApplicationState</name></argument>, <argument><name>VersionedValue</name></argument>&gt;</argument_list></name></type> <name>preloadLocalStates</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="block">/* Get the seeds from the config and initialize them. */</comment>
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>InetAddress</name></argument>&gt;</argument_list></name></type> <name>seedHosts</name> <init>= <expr><call><name><name>DatabaseDescriptor</name>.<name>getSeeds</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>InetAddress</name></type> <name>seed</name> <range>: <expr><name>seedHosts</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>seed</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+            <expr_stmt><expr><call><name><name>seeds</name>.<name>add</name></name><argument_list>(<argument><expr><name>seed</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <comment type="block">/* initialize the heartbeat state for this localEndpoint */</comment>
+        <expr_stmt><expr><call><name>maybeInitializeLocalState</name><argument_list>(<argument><expr><name>generationNbr</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>localState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>Map</name>.<name><name>Entry</name><argument_list>&lt;<argument><name>ApplicationState</name></argument>, <argument><name>VersionedValue</name></argument>&gt;</argument_list></name></name></type> <name>entry</name> <range>: <expr><call><name><name>preloadLocalStates</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>localState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+
+        <comment type="line">//notify snitches that Gossiper is about to start</comment>
+        <expr_stmt><expr><call><name><name>DatabaseDescriptor</name>.<name>getEndpointSnitch</name></name><argument_list>()</argument_list></call>.<call><name>gossiperStarting</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"gossip started with generation " + <call><name><name>localState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+        <expr_stmt><expr><name>scheduledGossipTask</name> = <call><name><name>executor</name>.<name>scheduleWithFixedDelay</name></name><argument_list>(<argument><expr>new <call><name>GossipTask</name><argument_list>()</argument_list></call></expr></argument>,
+                                                              <argument><expr><name><name>Gossiper</name>.<name>intervalInMillis</name></name></expr></argument>,
+                                                              <argument><expr><name><name>Gossiper</name>.<name>intervalInMillis</name></name></expr></argument>,
+                                                              <argument><expr><name><name>TimeUnit</name>.<name>MILLISECONDS</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="line">// initialize local HB state if needed, i.e., if gossiper has never been started before.</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>maybeInitializeLocalState</name><parameter_list>(<param><decl><type><name>int</name></type> <name>generationNbr</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>HeartBeatState</name></type> <name>hbState</name> <init>= <expr>new <call><name>HeartBeatState</name><argument_list>(<argument><expr><name>generationNbr</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>localState</name> <init>= <expr>new <call><name>EndpointState</name><argument_list>(<argument><expr><name>hbState</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>localState</name>.<name>markAlive</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>endpointStateMap</name>.<name>putIfAbsent</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>localState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+
+    <comment type="block" format="javadoc">/**
+     * Add an endpoint we knew about previously, but whose state is unknown
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addSavedEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>ep</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Attempt to add self as saved endpoint"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return;</return>
+        }</block></then></if>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr>new <call><name>EndpointState</name><argument_list>(<argument><expr>new <call><name>HeartBeatState</name><argument_list>(<argument><expr>0</expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>markDead</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>endpointStateMap</name>.<name>put</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><name>epState</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>unreachableEndpoints</name>.<name>put</name></name><argument_list>(<argument><expr><name>ep</name></expr></argument>, <argument><expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isTraceEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <expr_stmt><expr><call><name><name>logger</name>.<name>trace</name></name><argument_list>(<argument><expr>"Adding saved endpoint " + <name>ep</name> + " " + <call><name><name>epState</name>.<name>getHeartBeatState</name></name><argument_list>()</argument_list></call>.<call><name>getGeneration</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addLocalApplicationState</name><parameter_list>(<param><decl><type><name>ApplicationState</name></type> <name>state</name></decl></param>, <param><decl><type><name>VersionedValue</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>epState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <assert>assert <expr><name>epState</name> != null</expr>;</assert>
+        <expr_stmt><expr><call><name><name>epState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name>state</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>doNotifications</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>state</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>stop</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>scheduledGossipTask</name>.<name>cancel</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr>"Announcing shutdown"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>Thread</name>.<name>sleep</name></name><argument_list>(<argument><expr><name>intervalInMillis</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>InterruptedException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <decl_stmt><decl><type><name>MessageOut</name></type> <name>message</name> <init>= <expr>new <call><name>MessageOut</name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>GOSSIP_SHUTDOWN</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>InetAddress</name></type> <name>ep</name> <range>: <expr><name>liveEndpoints</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendOneWay</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>ep</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isEnabled</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr>(<name>scheduledGossipTask</name> != null) &amp;&amp; (!<call><name><name>scheduledGossipTask</name>.<name>isCancelled</name></name><argument_list>()</argument_list></call>)</expr>;</return>
+    }</block></function>
+
+    <function><type><annotation>@<name>VisibleForTesting</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>initializeNodeUnsafe</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>addr</name></decl></param>, <param><decl><type><name>UUID</name></type> <name>uuid</name></decl></param>, <param><decl><type><name>int</name></type> <name>generationNbr</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>HeartBeatState</name></type> <name>hbState</name> <init>= <expr>new <call><name>HeartBeatState</name><argument_list>(<argument><expr><name>generationNbr</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>newState</name> <init>= <expr>new <call><name>EndpointState</name><argument_list>(<argument><expr><name>hbState</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>newState</name>.<name>markAlive</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>oldState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>putIfAbsent</name></name><argument_list>(<argument><expr><name>addr</name></expr></argument>, <argument><expr><name>newState</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>localState</name> <init>= <expr><name>oldState</name> == null ? <name>newState</name> : <name>oldState</name></expr></init></decl>;</decl_stmt>
+
+        <comment type="line">// always add the version state</comment>
+        <expr_stmt><expr><call><name><name>localState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>NET_VERSION</name></name></expr></argument>, <argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>valueFactory</name>.<name>networkVersion</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>localState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name><name>ApplicationState</name>.<name>HOST_ID</name></name></expr></argument>, <argument><expr><call><name><name>StorageService</name>.<name>instance</name>.<name>valueFactory</name>.<name>hostId</name></name><argument_list>(<argument><expr><name>uuid</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><annotation>@<name>VisibleForTesting</name></annotation>
+    <specifier>public</specifier> <name>void</name></type> <name>injectApplicationState</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>ApplicationState</name></type> <name>state</name></decl></param>, <param><decl><type><name>VersionedValue</name></type> <name>value</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>EndpointState</name></type> <name>localState</name> <init>= <expr><call><name><name>endpointStateMap</name>.<name>get</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>localState</name>.<name>addApplicationState</name></name><argument_list>(<argument><expr><name>state</name></expr></argument>, <argument><expr><name>value</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getEndpointDowntime</name><parameter_list>(<param><decl><type><name>String</name></type> <name>address</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnknownHostException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>getEndpointDowntime</name><argument_list>(<argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getCurrentGenerationNumber</name><parameter_list>(<param><decl><type><name>String</name></type> <name>address</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>UnknownHostException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>getCurrentGenerationNumber</name><argument_list>(<argument><expr><call><name><name>InetAddress</name>.<name>getByName</name></name><argument_list>(<argument><expr><name>address</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>addExpireTimeForEndpoint</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>endpoint</name></decl></param>, <param><decl><type><name>long</name></type> <name>expireTime</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>logger</name>.<name>isDebugEnabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"adding expire time for endpoint : " + <name>endpoint</name> + " (" + <name>expireTime</name> + ")"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+        <expr_stmt><expr><call><name><name>expireTimeEndpointMap</name>.<name>put</name></name><argument_list>(<argument><expr><name>endpoint</name></expr></argument>, <argument><expr><name>expireTime</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>long</name></type> <name>computeExpireTime</name><parameter_list>()</parameter_list> <block>{
+        <return>return <expr><call><name><name>System</name>.<name>currentTimeMillis</name></name><argument_list>()</argument_list></call> + <name><name>Gossiper</name>.<name>aVeryLongTime</name></name></expr>;</return>
+    }</block></function>
+
+}</block></class>
+</unit>

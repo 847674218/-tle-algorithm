@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\streaming\StreamRequestMessage.java"><package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name></name>;</package>
+<comment type="block">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */</comment>
+
+
+<import>import <name><name>java</name>.<name>io</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+
+<import>import <name><name>com</name>.<name>google</name>.<name>common</name>.<name>collect</name>.<name>Iterables</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>AbstractBounds</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IVersionedSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>FastByteArrayOutputStream</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>CompactEndpointSerializationHelper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>Message</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessageProducer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+* This class encapsulates the message that needs to be sent to nodes
+* that handoff data. The message contains information about ranges
+* that need to be transferred and the target node.
+*
+* If a file is specified, ranges and table will not. vice-versa should hold as well.
+*/</comment>
+<class>class <name>StreamRequestMessage</name> <super><implements>implements <name>MessageProducer</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>StreamRequestMessage</name></argument>&gt;</argument_list></name></type> <name>serializer_</name></decl>;</decl_stmt>
+    <expr_stmt><expr>static
+    <block>{
+        <expr><name>serializer_</name> = new <call><name>StreamRequestMessageSerializer</name><argument_list>()</argument_list></call></expr>;
+    }</block>
+
+    protected static <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>StreamRequestMessage</name></argument>&gt;</argument_list></name> <call><name>serializer</name><argument_list>()</argument_list></call>
+    <block>{
+        <return>return <expr><name>serializer_</name></expr>;</return>
+    }</block></expr></expr_stmt>
+
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>long</name></type> <name>sessionId</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>target</name></decl>;</decl_stmt>
+
+    <comment type="line">// if this is specified, ranges and table should not be.</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>PendingFile</name></type> <name>file</name></decl>;</decl_stmt>
+
+    <comment type="line">// if these are specified, file shoud not be.</comment>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>String</name></type> <name>table</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>Iterable</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>columnFamilies</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>OperationType</name></type> <name>type</name></decl>;</decl_stmt>
+
+    <constructor><name>StreamRequestMessage</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>target</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl></param>, <param><decl><type><name>String</name></type> <name>table</name></decl></param>, <param><decl><type><name><name>Iterable</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>columnFamilies</name></decl></param>, <param><decl><type><name>long</name></type> <name>sessionId</name></decl></param>, <param><decl><type><name>OperationType</name></type> <name>type</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>target</name></name> = <name>target</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>ranges</name></name> = <name>ranges</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>table</name></name> = <name>table</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>columnFamilies</name></name> = <name>columnFamilies</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>sessionId</name></name> = <name>sessionId</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>type</name></name> = <name>type</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>file</name> = null</expr>;</expr_stmt>
+    }</block></constructor>
+
+    <constructor><name>StreamRequestMessage</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>target</name></decl></param>, <param><decl><type><name>PendingFile</name></type> <name>file</name></decl></param>, <param><decl><type><name>long</name></type> <name>sessionId</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>target</name></name> = <name>target</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>file</name></name> = <name>file</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>sessionId</name></name> = <name>sessionId</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>type</name></name> = <name><name>file</name>.<name>type</name></name></expr>;</expr_stmt>
+        <expr_stmt><expr><name>ranges</name> = null</expr>;</expr_stmt>
+        <expr_stmt><expr><name>table</name> = null</expr>;</expr_stmt>
+        <expr_stmt><expr><name>columnFamilies</name> = null</expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>Message</name></type> <name>getMessage</name><parameter_list>(<param><decl><type><name>Integer</name></type> <name>version</name></decl></param>)</parameter_list>
+    <block>{
+    	<decl_stmt><decl><type><name>FastByteArrayOutputStream</name></type> <name>bos</name> <init>= <expr>new <call><name>FastByteArrayOutputStream</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>DataOutputStream</name></type> <name>dos</name> <init>= <expr>new <call><name>DataOutputStream</name><argument_list>(<argument><expr><name>bos</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>StreamRequestMessage</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><name>this</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+        <return>return <expr>new <call><name>Message</name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>StorageService</name>.<name>Verb</name>.<name>STREAM_REQUEST</name></name></expr></argument>, <argument><expr><call><name><name>bos</name>.<name>toByteArray</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>StringBuilder</name></type> <name>sb</name> <init>= <expr>new <call><name>StringBuilder</name><argument_list>(<argument><expr>""</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <if>if <condition>(<expr><name>file</name> == null</expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"@"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>columnFamilies</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"@"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>target</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>"-------&gt;"</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for ( <init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><name>ranges</name></expr></range></decl></init> )
+            <block>{
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr>" "</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></for>
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name><name>sb</name>.<name>append</name></name><argument_list>(<argument><expr><call><name><name>file</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+        <return>return <expr><call><name><name>sb</name>.<name>toString</name></name><argument_list>()</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>StreamRequestMessageSerializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>StreamRequestMessage</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>StreamRequestMessage</name></type> <name>srm</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeLong</name></name><argument_list>(<argument><expr><name><name>srm</name>.<name>sessionId</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>srm</name>.<name>target</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name><name>srm</name>.<name>file</name></name> != null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeBoolean</name></name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>PendingFile</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><name><name>srm</name>.<name>file</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></then>
+            <else>else
+            <block>{
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeBoolean</name></name><argument_list>(<argument><expr>false</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><name><name>srm</name>.<name>table</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><call><name><name>srm</name>.<name>ranges</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><name><name>srm</name>.<name>ranges</name></name></expr></range></decl></init>)
+                <block>{
+                    <expr_stmt><expr><call><name><name>AbstractBounds</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+
+                <if>if <condition>(<expr><name>version</name> &gt; <name><name>MessagingService</name>.<name>VERSION_07</name></name></expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><call><name><name>srm</name>.<name>type</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <if>if <condition>(<expr><name>version</name> &gt; <name><name>MessagingService</name>.<name>VERSION_080</name></name></expr>)</condition><then>
+                <block>{
+                    <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><call><name><name>Iterables</name>.<name>size</name></name><argument_list>(<argument><expr><name><name>srm</name>.<name>columnFamilies</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <for>for (<init><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name> <range>: <expr><name><name>srm</name>.<name>columnFamilies</name></name></expr></range></decl></init>)
+                        <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>cfs</name>.<name>metadata</name>.<name>cfId</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                }</block></then></if>
+            }</block></else></if>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>StreamRequestMessage</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>long</name></type> <name>sessionId</name> <init>= <expr><call><name><name>dis</name>.<name>readLong</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>target</name> <init>= <expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>boolean</name></type> <name>singleFile</name> <init>= <expr><call><name><name>dis</name>.<name>readBoolean</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>singleFile</name></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name>PendingFile</name></type> <name>file</name> <init>= <expr><call><name><name>PendingFile</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <return>return <expr>new <call><name>StreamRequestMessage</name><argument_list>(<argument><expr><name>target</name></expr></argument>, <argument><expr><name>file</name></expr></argument>, <argument><expr><name>sessionId</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></then>
+            <else>else
+            <block>{
+                <decl_stmt><decl><type><name>String</name></type> <name>table</name> <init>= <expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>int</name></type> <name>size</name> <init>= <expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name> <init>= <expr>(<name>size</name> == 0) ? null : new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>size</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <for>for( <init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>size</name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr> )
+                <block>{
+                    <expr_stmt><expr><call><name><name>ranges</name>.<name>add</name></name><argument_list>(<argument><expr>(<name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name>) <call><name><name>AbstractBounds</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>deserialize</name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call>.<call><name>toTokenBounds</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                }</block></for>
+                <decl_stmt><decl><type><name>OperationType</name></type> <name>type</name> <init>= <expr><name><name>OperationType</name>.<name>RESTORE_REPLICA_COUNT</name></name></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>version</name> &gt; <name><name>MessagingService</name>.<name>VERSION_07</name></name></expr>)</condition><then>
+                    <expr_stmt><expr><name>type</name> = <call><name><name>OperationType</name>.<name>valueOf</name></name><argument_list>(<argument><expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name></type> <name>stores</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ColumnFamilyStore</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>version</name> &gt; <name><name>MessagingService</name>.<name>VERSION_080</name></name></expr>)</condition><then>
+                <block>{
+                    <decl_stmt><decl><type><name>int</name></type> <name>cfsSize</name> <init>= <expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                    <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>cfsSize</name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+                        <expr_stmt><expr><call><name><name>stores</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>table</name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+                }</block></then></if>
+
+                <return>return <expr>new <call><name>StreamRequestMessage</name><argument_list>(<argument><expr><name>target</name></expr></argument>, <argument><expr><name>ranges</name></expr></argument>, <argument><expr><name>table</name></expr></argument>, <argument><expr><name>stores</name></expr></argument>, <argument><expr><name>sessionId</name></expr></argument>, <argument><expr><name>type</name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></else></if>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>StreamRequestMessage</name></type> <name>streamRequestMessage</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>UnsupportedOperationException</name><argument_list>()</argument_list></call></expr>;</throw>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

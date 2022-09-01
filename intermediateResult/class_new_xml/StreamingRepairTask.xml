@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.2.1\src\java\org\apache\cassandra\streaming\StreamingRepairTask.java"><comment type="block">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>streaming</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataInput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>net</name>.<name>InetAddress</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collection</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>UUID</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentHashMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>ConcurrentMap</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>atomic</name>.<name>AtomicInteger</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>Table</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>TypeSizes</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>AbstractBounds</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>IVersionedSerializer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>CompactEndpointSerializationHelper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>IVerbHandler</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessageIn</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessageOut</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>net</name>.<name>MessagingService</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>FBUtilities</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>UUIDGen</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>UUIDSerializer</name></name>;</import>
+
+
+<comment type="block" format="javadoc">/**
+ * Task that make two nodes exchange (stream) some ranges (for a given table/cf).
+ * This handle the case where the local node is neither of the two nodes that
+ * must stream their range, and allow to register a callback to be called on
+ * completion.
+ */</comment>
+<class><specifier>public</specifier> class <name>StreamingRepairTask</name> <super><implements>implements <name>Runnable</name></implements></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>StreamingRepairTask</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <comment type="line">// maps of tasks created on this node</comment>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name><name>ConcurrentMap</name><argument_list>&lt;<argument><name>UUID</name></argument>, <argument><name>StreamingRepairTask</name></argument>&gt;</argument_list></name></type> <name>tasks</name> <init>= <expr>new <call><name><name>ConcurrentHashMap</name><argument_list>&lt;<argument><name>UUID</name></argument>, <argument><name>StreamingRepairTask</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>StreamingRepairTaskSerializer</name></type> <name>serializer</name> <init>= <expr>new <call><name>StreamingRepairTaskSerializer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>UUID</name></type> <name>id</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>owner</name></decl>;</decl_stmt> <comment type="line">// the node where the task is created; can be == src but don't need to</comment>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>src</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>InetAddress</name></type> <name>dst</name></decl>;</decl_stmt>
+
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>tableName</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>String</name></type> <name>cfName</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>IStreamCallback</name></type> <name>callback</name></decl>;</decl_stmt>
+
+    <constructor><specifier>private</specifier> <name>StreamingRepairTask</name><parameter_list>(<param><decl><type><name>UUID</name></type> <name>id</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>owner</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>src</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>dst</name></decl></param>, <param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl></param>, <param><decl><type><name>IStreamCallback</name></type> <name>callback</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><name><name>this</name>.<name>id</name></name> = <name>id</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>owner</name></name> = <name>owner</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>src</name></name> = <name>src</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>dst</name></name> = <name>dst</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>tableName</name></name> = <name>tableName</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>cfName</name></name> = <name>cfName</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>ranges</name></name> = <name>ranges</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>callback</name></name> = <name>callback</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>StreamingRepairTask</name></type> <name>create</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>ep1</name></decl></param>, <param><decl><type><name>InetAddress</name></type> <name>ep2</name></decl></param>, <param><decl><type><name>String</name></type> <name>tableName</name></decl></param>, <param><decl><type><name>String</name></type> <name>cfName</name></decl></param>, <param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name></decl></param>, <param><decl><type><name>Runnable</name></type> <name>callback</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>local</name> <init>= <expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>UUID</name></type> <name>id</name> <init>= <expr><call><name><name>UUIDGen</name>.<name>getTimeUUID</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <comment type="line">// We can take anyone of the node as source or destination, however if one is localhost, we put at source to avoid a forwarding</comment>
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>src</name> <init>= <expr><call><name><name>ep2</name>.<name>equals</name></name><argument_list>(<argument><expr><name>local</name></expr></argument>)</argument_list></call> ? <name>ep2</name> : <name>ep1</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>InetAddress</name></type> <name>dst</name> <init>= <expr><call><name><name>ep2</name>.<name>equals</name></name><argument_list>(<argument><expr><name>local</name></expr></argument>)</argument_list></call> ? <name>ep1</name> : <name>ep2</name></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>StreamingRepairTask</name></type> <name>task</name> <init>= <expr>new <call><name>StreamingRepairTask</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>local</name></expr></argument>, <argument><expr><name>src</name></expr></argument>, <argument><expr><name>dst</name></expr></argument>, <argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>ranges</name></expr></argument>, <argument><expr><call><name>wrapCallback</name><argument_list>(<argument><expr><name>callback</name></expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>local</name>.<name>equals</name></name><argument_list>(<argument><expr><name>src</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>tasks</name>.<name>put</name></name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>task</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <return>return <expr><name>task</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns true if the task if the task can be executed locally, false if
+     * it has to be forwarded.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isLocalTask</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>owner</name>.<name>equals</name></name><argument_list>(<argument><expr><name>src</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>run</name><parameter_list>()</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>src</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name>initiateStreaming</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></then>
+        <else>else
+        <block>{
+            <expr_stmt><expr><call><name>forwardToSource</name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></else></if>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>initiateStreaming</name><parameter_list>()</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>ColumnFamilyStore</name></type> <name>cfstore</name> <init>= <expr><call><name><name>Table</name>.<name>open</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>)</argument_list></call>.<call><name>getColumnFamilyStore</name><argument_list>(<argument><expr><name>cfName</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[streaming task #%s] Performing streaming repair of %d ranges with %s"</expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>ranges</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>dst</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// We acquire references for transferSSTables</comment>
+            <decl_stmt><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name> <init>= <expr><call><name><name>cfstore</name>.<name>markCurrentSSTablesReferenced</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <comment type="line">// send ranges to the remote node</comment>
+            <decl_stmt><decl><type><name>StreamOutSession</name></type> <name>outsession</name> <init>= <expr><call><name><name>StreamOutSession</name>.<name>create</name></name><argument_list>(<argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>dst</name></expr></argument>, <argument><expr><name>callback</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>StreamOut</name>.<name>transferSSTables</name></name><argument_list>(<argument><expr><name>outsession</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>ranges</name></expr></argument>, <argument><expr><name><name>OperationType</name>.<name>AES</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <comment type="line">// request ranges from the remote node</comment>
+            <expr_stmt><expr><call><name><name>StreamIn</name>.<name>requestRanges</name></name><argument_list>(<argument><expr><name>dst</name></expr></argument>, <argument><expr><name>tableName</name></expr></argument>, <argument><expr><call><name><name>Collections</name>.<name>singleton</name></name><argument_list>(<argument><expr><name>cfstore</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>ranges</name></expr></argument>, <argument><expr><name>callback</name></expr></argument>, <argument><expr><name><name>OperationType</name>.<name>AES</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch<parameter_list>(<param><decl><type><name>Exception</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>RuntimeException</name><argument_list>(<argument><expr>"Streaming repair failed"</expr></argument>, <argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>forwardToSource</name><parameter_list>()</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[streaming task #%s] Forwarding streaming repair of %d ranges to %s (to be streamed with %s)"</expr></argument>, <argument><expr><name>id</name></expr></argument>, <argument><expr><call><name><name>ranges</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>src</name></expr></argument>, <argument><expr><name>dst</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <decl_stmt><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>StreamingRepairTask</name></argument>&gt;</argument_list></name></type> <name>msg</name> <init>= <expr>new <call><name><name>MessageOut</name><argument_list>&lt;<argument><name>StreamingRepairTask</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>STREAMING_REPAIR_REQUEST</name></name></expr></argument>,
+                                                                                  <argument><expr><name>this</name></expr></argument>,
+                                                                                  <argument><expr><name><name>StreamingRepairTask</name>.<name>serializer</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendOneWay</name><argument_list>(<argument><expr><name>msg</name></expr></argument>, <argument><expr><name>src</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>IStreamCallback</name></type> <name>makeReplyingCallback</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>InetAddress</name></type> <name>taskOwner</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>UUID</name></type> <name>taskId</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <class><super><name>IStreamCallback</name></super><argument_list>()</argument_list>
+        <block>{
+            <comment type="line">// we expect one callback for the receive, and one for the send</comment>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>AtomicInteger</name></type> <name>outstanding</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>(<argument><expr>2</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>onSuccess</name><parameter_list>()</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>outstanding</name>.<name>decrementAndGet</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+                    <return>return;</return></then></if> <comment type="line">// waiting on more calls</comment>
+
+                <expr_stmt><expr><call><name><name>StreamingRepairResponse</name>.<name>reply</name></name><argument_list>(<argument><expr><name>taskOwner</name></expr></argument>, <argument><expr><name>taskId</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>onFailure</name><parameter_list>()</parameter_list> <block>{}</block></function>
+        }</block></class></expr>;</return>
+    }</block></function>
+
+    <comment type="line">// wrap a given callback so as to unregister the streaming repair task on completion</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>IStreamCallback</name></type> <name>wrapCallback</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>Runnable</name></type> <name>callback</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>UUID</name></type> <name>taskid</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>boolean</name></type> <name>isLocalTask</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <class><super><name>IStreamCallback</name></super><argument_list>()</argument_list>
+        <block>{
+            <comment type="line">// we expect one callback for the receive, and one for the send</comment>
+            <decl_stmt><decl><type><specifier>private</specifier> <specifier>final</specifier> <name>AtomicInteger</name></type> <name>outstanding</name> <init>= <expr>new <call><name>AtomicInteger</name><argument_list>(<argument><expr><name>isLocalTask</name> ? 2 : 1</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>onSuccess</name><parameter_list>()</parameter_list>
+            <block>{
+                <if>if <condition>(<expr><call><name><name>outstanding</name>.<name>decrementAndGet</name></name><argument_list>()</argument_list></call> &gt; 0</expr>)</condition><then>
+                    <comment type="line">// waiting on more calls</comment>
+                    <return>return;</return></then></if>
+
+                <expr_stmt><expr><call><name><name>tasks</name>.<name>remove</name></name><argument_list>(<argument><expr><name>taskid</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <if>if <condition>(<expr><name>callback</name> != null</expr>)</condition><then>
+                    <expr_stmt><expr><call><name><name>callback</name>.<name>run</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+            }</block></function>
+
+            <function><type><specifier>public</specifier> <name>void</name></type> <name>onFailure</name><parameter_list>()</parameter_list> <block>{}</block></function>
+        }</block></class></expr>;</return>
+    }</block></function>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>StreamingRepairRequest</name> <super><implements>implements <name><name>IVerbHandler</name><argument_list>&lt;<argument><name>StreamingRepairTask</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>doVerb</name><parameter_list>(<param><decl><type><name><name>MessageIn</name><argument_list>&lt;<argument><name>StreamingRepairTask</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>StreamingRepairTask</name></type> <name>task</name> <init>= <expr><name><name>message</name>.<name>payload</name></name></expr></init></decl>;</decl_stmt>
+            <assert>assert <expr><call><name><name>task</name>.<name>src</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</assert>
+            <assert>assert <expr><call><name><name>task</name>.<name>owner</name>.<name>equals</name></name><argument_list>(<argument><expr><name><name>message</name>.<name>from</name></name></expr></argument>)</argument_list></call></expr>;</assert>
+
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[streaming task #%s] Received task from %s to stream %d ranges to %s"</expr></argument>, <argument><expr><name><name>task</name>.<name>id</name></name></expr></argument>, <argument><expr><name><name>message</name>.<name>from</name></name></expr></argument>, <argument><expr><call><name><name>task</name>.<name>ranges</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name><name>task</name>.<name>dst</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <expr_stmt><expr><call><name><name>task</name>.<name>run</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+
+    }</block></class>
+
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>StreamingRepairResponse</name> <super><implements>implements <name><name>IVerbHandler</name><argument_list>&lt;<argument><name>UUID</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>doVerb</name><parameter_list>(<param><decl><type><name><name>MessageIn</name><argument_list>&lt;<argument><name>UUID</name></argument>&gt;</argument_list></name></type> <name>message</name></decl></param>, <param><decl><type><name>String</name></type> <name>id</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>UUID</name></type> <name>taskid</name> <init>= <expr><name><name>message</name>.<name>payload</name></name></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>StreamingRepairTask</name></type> <name>task</name> <init>= <expr><call><name><name>tasks</name>.<name>get</name></name><argument_list>(<argument><expr><name>taskid</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><name>task</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><call><name><name>logger</name>.<name>error</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"Received a stream repair response from %s for unknow taks %s (have this node been restarted recently?)"</expr></argument>, <argument><expr><name><name>message</name>.<name>from</name></name></expr></argument>, <argument><expr><name>taskid</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <return>return;</return>
+            }</block></then></if>
+
+            <assert>assert <expr><call><name><name>task</name>.<name>owner</name>.<name>equals</name></name><argument_list>(<argument><expr><call><name><name>FBUtilities</name>.<name>getBroadcastAddress</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</assert>
+
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[streaming task #%s] task succeeded"</expr></argument>, <argument><expr><name><name>task</name>.<name>id</name></name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <if>if <condition>(<expr><name><name>task</name>.<name>callback</name></name> != null</expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>task</name>.<name>callback</name>.<name>onSuccess</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></function>
+
+        <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>reply</name><parameter_list>(<param><decl><type><name>InetAddress</name></type> <name>remote</name></decl></param>, <param><decl><type><name>UUID</name></type> <name>taskid</name></decl></param>)</parameter_list>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>info</name></name><argument_list>(<argument><expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"[streaming task #%s] task suceed, forwarding response to %s"</expr></argument>, <argument><expr><name>taskid</name></expr></argument>, <argument><expr><name>remote</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name><name>MessageOut</name><argument_list>&lt;<argument><name>UUID</name></argument>&gt;</argument_list></name></type> <name>message</name> <init>= <expr>new <call><name><name>MessageOut</name><argument_list>&lt;<argument><name>UUID</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name><name>MessagingService</name>.<name>Verb</name>.<name>STREAMING_REPAIR_RESPONSE</name></name></expr></argument>, <argument><expr><name>taskid</name></expr></argument>, <argument><expr><name><name>UUIDSerializer</name>.<name>serializer</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>MessagingService</name>.<name>instance</name></name><argument_list>()</argument_list></call>.<call><name>sendOneWay</name><argument_list>(<argument><expr><name>message</name></expr></argument>, <argument><expr><name>remote</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></function>
+    }</block></class>
+
+    <class><specifier>private</specifier> <specifier>static</specifier> class <name>StreamingRepairTaskSerializer</name> <super><implements>implements <name><name>IVersionedSerializer</name><argument_list>&lt;<argument><name>StreamingRepairTask</name></argument>&gt;</argument_list></name></implements></super>
+    <block>{
+        <function><type><specifier>public</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>StreamingRepairTask</name></type> <name>task</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <expr_stmt><expr><call><name><name>UUIDSerializer</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>id</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>owner</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>src</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>serialize</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>dst</name></name></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>tableName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeUTF</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><call><name><name>task</name>.<name>ranges</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><name><name>task</name>.<name>ranges</name></name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>AbstractBounds</name>.<name>serializer</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <comment type="line">// We don't serialize the callback on purpose</comment>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>StreamingRepairTask</name></type> <name>deserialize</name><parameter_list>(<param><decl><type><name>DataInput</name></type> <name>dis</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+        <block>{
+            <decl_stmt><decl><type><name>UUID</name></type> <name>id</name> <init>= <expr><call><name><name>UUIDSerializer</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>owner</name> <init>= <expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>src</name> <init>= <expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>InetAddress</name></type> <name>dst</name> <init>= <expr><call><name><name>CompactEndpointSerializationHelper</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>tableName</name> <init>= <expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>String</name></type> <name>cfName</name> <init>= <expr><call><name><name>dis</name>.<name>readUTF</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>rangesCount</name> <init>= <expr><call><name><name>dis</name>.<name>readInt</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>ranges</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>rangesCount</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <for>for (<init><decl><type><name>int</name></type> <name>i</name> <init>= <expr>0</expr></init></decl>;</init> <condition><expr><name>i</name> &lt; <name>rangesCount</name></expr>;</condition> <incr><expr>++<name>i</name></expr></incr>)
+                <expr_stmt><expr><call><name><name>ranges</name>.<name>add</name></name><argument_list>(<argument><expr>(<name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name>) <call><name><name>AbstractBounds</name>.<name>serializer</name>.<name>deserialize</name></name><argument_list>(<argument><expr><name>dis</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call>.<call><name>toTokenBounds</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <return>return <expr>new <call><name>StreamingRepairTask</name><argument_list>(<argument><expr><name>id</name></expr></argument>, <argument><expr><name>owner</name></expr></argument>, <argument><expr><name>src</name></expr></argument>, <argument><expr><name>dst</name></expr></argument>, <argument><expr><name>tableName</name></expr></argument>, <argument><expr><name>cfName</name></expr></argument>, <argument><expr><name>ranges</name></expr></argument>, <argument><expr><call><name>makeReplyingCallback</name><argument_list>(<argument><expr><name>owner</name></expr></argument>, <argument><expr><name>id</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+        }</block></function>
+
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>(<param><decl><type><name>StreamingRepairTask</name></type> <name>task</name></decl></param>, <param><decl><type><name>int</name></type> <name>version</name></decl></param>)</parameter_list>
+        <block>{
+            <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><call><name><name>UUIDSerializer</name>.<name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>id</name></name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><name>size</name> += 3 * <call><name><name>CompactEndpointSerializationHelper</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>owner</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>size</name> += <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>tableName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>size</name> += <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><name><name>task</name>.<name>cfName</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><name>size</name> += <call><name><name>TypeSizes</name>.<name>NATIVE</name>.<name>sizeof</name></name><argument_list>(<argument><expr><call><name><name>task</name>.<name>ranges</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <for>for (<init><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name> <range>: <expr><name><name>task</name>.<name>ranges</name></name></expr></range></decl></init>)
+                <expr_stmt><expr><name>size</name> += <call><name><name>AbstractBounds</name>.<name>serializer</name>.<name>serializedSize</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>, <argument><expr><name>version</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+            <return>return <expr><name>size</name></expr>;</return>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

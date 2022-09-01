@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\ColumnIndexer.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>DataOutput</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOError</name></name>;</import>
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>ArrayList</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Collections</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>List</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>config</name>.<name>DatabaseDescriptor</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>IndexHelper</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>DataOutputBuffer</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>util</name>.<name>IIterableColumns</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>BloomFilter</name></name>;</import>
+
+
+<comment type="block" format="javadoc">/**
+ * Help to create an index for a column family based on size of columns
+ */</comment>
+<class><specifier>public</specifier> class <name>ColumnIndexer</name>
+<block>{
+	<comment type="block" format="javadoc">/**
+	 * Given a column family this, function creates an in-memory structure that represents the
+	 * column index for the column family, and subsequently writes it to disk.
+     *
+	 * @param columns Column family to create index for
+	 * @param dos data output stream
+	 */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>IIterableColumns</name></type> <name>columns</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>writeIndex</name><argument_list>(<argument><expr><call><name>serialize</name><argument_list>(<argument><expr><name>columns</name></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>void</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>RowHeader</name></type> <name>indexInfo</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>)</parameter_list>
+    <block>{
+        <try>try
+        <block>{
+            <expr_stmt><expr><call><name>writeIndex</name><argument_list>(<argument><expr><name>indexInfo</name></expr></argument>, <argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block>
+        <catch>catch <parameter_list>(<param><decl><type><name>IOException</name></type> <name>e</name></decl></param>)</parameter_list>
+        <block>{
+            <throw>throw <expr>new <call><name>IOError</name><argument_list>(<argument><expr><name>e</name></expr></argument>)</argument_list></call></expr>;</throw>
+        }</block></catch></try>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Serializes the index into in-memory structure with all required components
+     * such as Bloom Filter, index block size, IndexInfo list
+     *
+     * @param columns Column family to create index for
+     *
+     * @return information about index - it's Bloom Filter, block size and IndexInfo list
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name>RowHeader</name></type> <name>serialize</name><parameter_list>(<param><decl><type><name>IIterableColumns</name></type> <name>columns</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>columnCount</name> <init>= <expr><call><name><name>columns</name>.<name>getEstimatedColumnCount</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <decl_stmt><decl><type><name>BloomFilter</name></type> <name>bf</name> <init>= <expr><call><name><name>BloomFilter</name>.<name>getFilter</name></name><argument_list>(<argument><expr><name>columnCount</name></expr></argument>, <argument><expr>4</expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <if>if <condition>(<expr><name>columnCount</name> == 0</expr>)</condition><then>
+            <return>return <expr>new <call><name>RowHeader</name><argument_list>(<argument><expr><name>bf</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name><name>IndexHelper</name>.<name>IndexInfo</name></name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return></then></if>
+
+        <comment type="line">// update bloom filter and create a list of IndexInfo objects marking the first and last column</comment>
+        <comment type="line">// in each block of ColumnIndexSize</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>IndexHelper</name>.<name>IndexInfo</name></name></argument>&gt;</argument_list></name></type> <name>indexList</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>IndexHelper</name>.<name>IndexInfo</name></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>long</name></type> <name>endPosition</name> <init>= <expr>0</expr></init>, <name>startPosition</name> <init>= <expr>-1</expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name>IColumn</name></type> <name>lastColumn</name> <init>= <expr>null</expr></init>, <name>firstColumn</name> <init>= <expr>null</expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>IColumn</name></type> <name>column</name> <range>: <expr><name>columns</name></expr></range></decl></init>)
+        <block>{
+            <expr_stmt><expr><call><name><name>bf</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+            <if>if <condition>(<expr><name>firstColumn</name> == null</expr>)</condition><then>
+            <block>{
+                <expr_stmt><expr><name>firstColumn</name> = <name>column</name></expr>;</expr_stmt>
+                <expr_stmt><expr><name>startPosition</name> = <name>endPosition</name></expr>;</expr_stmt>
+            }</block></then></if>
+
+            <expr_stmt><expr><name>endPosition</name> += <call><name><name>column</name>.<name>serializedSize</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+
+            <comment type="line">// if we hit the column index size that we have to index after, go ahead and index it.</comment>
+            <if>if <condition>(<expr><name>endPosition</name> - <name>startPosition</name> &gt;= <call><name><name>DatabaseDescriptor</name>.<name>getColumnIndexSize</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <block>{
+                <decl_stmt><decl><type><name><name>IndexHelper</name>.<name>IndexInfo</name></name></type> <name>cIndexInfo</name> <init>= <expr>new <call><name><name>IndexHelper</name>.<name>IndexInfo</name></name><argument_list>(<argument><expr><call><name><name>firstColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>column</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>startPosition</name></expr></argument>, <argument><expr><name>endPosition</name> - <name>startPosition</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <expr_stmt><expr><call><name><name>indexList</name>.<name>add</name></name><argument_list>(<argument><expr><name>cIndexInfo</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                <expr_stmt><expr><name>firstColumn</name> = null</expr>;</expr_stmt>
+            }</block></then></if>
+
+            <expr_stmt><expr><name>lastColumn</name> = <name>column</name></expr>;</expr_stmt>
+        }</block></for>
+
+        <comment type="line">// all columns were GC'd after all</comment>
+        <if>if <condition>(<expr><name>lastColumn</name> == null</expr>)</condition><then>
+            <return>return <expr>new <call><name>RowHeader</name><argument_list>(<argument><expr><name>bf</name></expr></argument>, <argument><expr><name><name>Collections</name>.</name>&lt;<name><name>IndexHelper</name>.<name>IndexInfo</name></name>&gt;<call><name>emptyList</name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return></then></if>
+
+        <comment type="line">// the last column may have fallen on an index boundary already.  if not, index it explicitly.</comment>
+        <if>if <condition>(<expr><call><name><name>indexList</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call> || <call><name><name>columns</name>.<name>getComparator</name></name><argument_list>()</argument_list></call>.<call><name>compare</name><argument_list>(<argument><expr><call><name><name>indexList</name>.<name>get</name></name><argument_list>(<argument><expr><call><name><name>indexList</name>.<name>size</name></name><argument_list>()</argument_list></call> - 1</expr></argument>)</argument_list></call>.<name>lastName</name></expr></argument>, <argument><expr><call><name><name>lastColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call> != 0</expr>)</condition><then>
+        <block>{
+            <decl_stmt><decl><type><name><name>IndexHelper</name>.<name>IndexInfo</name></name></type> <name>cIndexInfo</name> <init>= <expr>new <call><name><name>IndexHelper</name>.<name>IndexInfo</name></name><argument_list>(<argument><expr><call><name><name>firstColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>lastColumn</name>.<name>name</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><name>startPosition</name></expr></argument>, <argument><expr><name>endPosition</name> - <name>startPosition</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>indexList</name>.<name>add</name></name><argument_list>(<argument><expr><name>cIndexInfo</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></then></if>
+
+        <comment type="line">// we should always have at least one computed index block, but we only write it out if there is more than that.</comment>
+        <assert>assert <expr><call><name><name>indexList</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 0</expr>;</assert>
+        <return>return <expr>new <call><name>RowHeader</name><argument_list>(<argument><expr><name>bf</name></expr></argument>, <argument><expr><name>indexList</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>writeIndex</name><parameter_list>(<param><decl><type><name>RowHeader</name></type> <name>indexInfo</name></decl></param>, <param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <assert>assert <expr><name>indexInfo</name> != null</expr>;</assert>
+
+        <comment type="block">/* Write out the bloom filter. */</comment>
+        <expr_stmt><expr><call><name>writeBloomFilter</name><argument_list>(<argument><expr><name>dos</name></expr></argument>, <argument><expr><name><name>indexInfo</name>.<name>bloomFilter</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><name><name>indexInfo</name>.<name>entriesSize</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <if>if <condition>(<expr><call><name><name>indexInfo</name>.<name>indexEntries</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 1</expr>)</condition><then>
+        <block>{
+            <for>for (<init><decl><type><name><name>IndexHelper</name>.<name>IndexInfo</name></name></type> <name>cIndexInfo</name> <range>: <expr><name><name>indexInfo</name>.<name>indexEntries</name></name></expr></range></decl></init>)
+                <expr_stmt><expr><call><name><name>cIndexInfo</name>.<name>serialize</name></name><argument_list>(<argument><expr><name>dos</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        }</block></then></if>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Write a Bloom filter into file
+     *
+     * @param dos file to serialize Bloom Filter
+     * @param bf Bloom Filter
+     *
+     * @throws IOException on any I/O error.
+     */</comment>
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name>void</name></type> <name>writeBloomFilter</name><parameter_list>(<param><decl><type><name>DataOutput</name></type> <name>dos</name></decl></param>, <param><decl><type><name>BloomFilter</name></type> <name>bf</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name>DataOutputBuffer</name></type> <name>bufOut</name> <init>= <expr>new <call><name>DataOutputBuffer</name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>BloomFilter</name>.<name>serializer</name></name><argument_list>()</argument_list></call>.<call><name>serialize</name><argument_list>(<argument><expr><name>bf</name></expr></argument>, <argument><expr><name>bufOut</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>dos</name>.<name>writeInt</name></name><argument_list>(<argument><expr><call><name><name>bufOut</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>dos</name>.<name>write</name></name><argument_list>(<argument><expr><call><name><name>bufOut</name>.<name>getData</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr>0</expr></argument>, <argument><expr><call><name><name>bufOut</name>.<name>getLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>bufOut</name>.<name>flush</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Holds information about serialized index and bloom filter
+     */</comment>
+    <class><specifier>public</specifier> <specifier>static</specifier> class <name>RowHeader</name>
+    <block>{
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>BloomFilter</name></type> <name>bloomFilter</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>IndexHelper</name>.<name>IndexInfo</name></name></argument>&gt;</argument_list></name></type> <name>indexEntries</name></decl>;</decl_stmt>
+        <decl_stmt><decl><type><specifier>public</specifier> <specifier>final</specifier> <name>int</name></type> <name>entriesSize</name></decl>;</decl_stmt>
+
+        <constructor><specifier>public</specifier> <name>RowHeader</name><parameter_list>(<param><decl><type><name>BloomFilter</name></type> <name>bf</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>IndexHelper</name>.<name>IndexInfo</name></name></argument>&gt;</argument_list></name></type> <name>indexes</name></decl></param>)</parameter_list>
+        <block>{
+            <assert>assert <expr><name>bf</name> != null</expr>;</assert>
+            <assert>assert <expr><name>indexes</name> != null</expr>;</assert>
+            <expr_stmt><expr><name>bloomFilter</name> = <name>bf</name></expr>;</expr_stmt>
+            <expr_stmt><expr><name>indexEntries</name> = <name>indexes</name></expr>;</expr_stmt>
+            <decl_stmt><decl><type><name>int</name></type> <name>entriesSize</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+            <if>if <condition>(<expr><call><name><name>indexEntries</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 1</expr>)</condition><then>
+            <block>{
+                <for>for (<init><decl><type><name><name>IndexHelper</name>.<name>IndexInfo</name></name></type> <name>info</name> <range>: <expr><name>indexEntries</name></expr></range></decl></init>)
+                    <expr_stmt><expr><name>entriesSize</name> += <call><name><name>info</name>.<name>serializedSize</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+            }</block></then></if>
+            <expr_stmt><expr><name><name>this</name>.<name>entriesSize</name></name> = <name>entriesSize</name></expr>;</expr_stmt>
+        }</block></constructor>
+
+        <function><type><specifier>public</specifier> <name>long</name></type> <name>serializedSize</name><parameter_list>()</parameter_list>
+        <block>{
+            <return>return <expr><name><name>DBConstants</name>.<name>intSize</name></name>  <comment type="line">// length of Bloom Filter</comment>
+                   + <call><name><name>bloomFilter</name>.<name>serializedSize</name></name><argument_list>()</argument_list></call> <comment type="line">// BF data</comment>
+                   + <name><name>DBConstants</name>.<name>intSize</name></name> <comment type="line">// length of index block</comment>
+                   + <name>entriesSize</name></expr>;</return> <comment type="line">// index block</comment>
+        }</block></function>
+    }</block></class>
+}</block></class>
+</unit>

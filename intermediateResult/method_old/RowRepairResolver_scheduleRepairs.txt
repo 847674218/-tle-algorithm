@@ -1,0 +1,30 @@
+public static List<IAsyncResult> scheduleRepairs(ColumnFamily resolved, String table, DecoratedKey<?> key, List<ColumnFamily> versions, List<InetAddress> endpoints)
+    {
+        List<IAsyncResult> results = new ArrayList<IAsyncResult>(versions.size());
+
+        for (int i = 0; i < versions.size(); i++)
+        {
+            ColumnFamily diffCf = ColumnFamily.diff(versions.get(i), resolved);
+            if (diffCf == null) // no repair needs to happen
+                continue;
+
+            // create and send the row mutation message based on the diff
+            RowMutation rowMutation = new RowMutation(table, key.key);
+            rowMutation.add(diffCf);
+            Message repairMessage;
+            try
+            {
+                // use a separate verb here because we don't want these to be get the white glove hint-
+                // on-timeout behavior that a "real" mutation gets
+                repairMessage = rowMutation.getMessage(StorageService.Verb.READ_REPAIR,
+                                                       Gossiper.instance.getVersion(endpoints.get(i)));
+            }
+            catch (IOException e)
+            {
+                throw new IOError(e);
+            }
+            results.add(MessagingService.instance().sendRR(repairMessage, endpoints.get(i)));
+        }
+
+        return results;
+    }

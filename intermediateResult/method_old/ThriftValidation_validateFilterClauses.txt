@@ -1,0 +1,43 @@
+public static boolean validateFilterClauses(CFMetaData metadata, List<IndexExpression> index_clause)
+    throws InvalidRequestException
+    {
+        if (isEmpty(index_clause))
+            // no filter to apply
+            return false;
+
+        Set<ByteBuffer> indexedColumns = Table.open(metadata.ksName).getColumnFamilyStore(metadata.cfName).indexManager.getIndexedColumns();
+        AbstractType<?> nameValidator =  ColumnFamily.getComparatorFor(metadata.ksName, metadata.cfName, null);
+
+        boolean isIndexed = false;
+        for (IndexExpression expression : index_clause)
+        {
+            try
+            {
+                nameValidator.validate(expression.column_name);
+            }
+            catch (MarshalException me)
+            {
+                throw new InvalidRequestException(String.format("[%s]=[%s] failed name validation (%s)",
+                                                                ByteBufferUtil.bytesToHex(expression.column_name),
+                                                                ByteBufferUtil.bytesToHex(expression.value),
+                                                                me.getMessage()));
+            }
+
+            AbstractType<?> valueValidator = Schema.instance.getValueValidator(metadata.ksName, metadata.cfName, expression.column_name);
+            try
+            {
+                valueValidator.validate(expression.value);
+            }
+            catch (MarshalException me)
+            {
+                throw new InvalidRequestException(String.format("[%s]=[%s] failed value validation (%s)",
+                                                                ByteBufferUtil.bytesToHex(expression.column_name),
+                                                                ByteBufferUtil.bytesToHex(expression.value),
+                                                                me.getMessage()));
+            }
+
+            isIndexed |= (expression.op == IndexOperator.EQ) && indexedColumns.contains(expression.column_name);
+        }
+
+        return isIndexed;
+    }

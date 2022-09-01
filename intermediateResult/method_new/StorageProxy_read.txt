@@ -1,0 +1,33 @@
+public static List<Row> read(List<ReadCommand> commands, ConsistencyLevel consistency_level)
+    throws IOException, UnavailableException, IsBootstrappingException, ReadTimeoutException
+    {
+        if (StorageService.instance.isBootstrapMode() && !systemTableQuery(commands))
+        {
+            readMetrics.unavailables.mark();
+            ClientRequestMetrics.readUnavailables.inc();
+            throw new IsBootstrappingException();
+        }
+        long startTime = System.nanoTime();
+        List<Row> rows = null;
+        try
+        {
+            rows = fetchRows(commands, consistency_level);
+        }
+        catch (UnavailableException e)
+        {
+            readMetrics.unavailables.mark();
+            ClientRequestMetrics.readUnavailables.inc();
+            throw e;
+        }
+        catch (ReadTimeoutException e)
+        {
+            readMetrics.timeouts.mark();
+            ClientRequestMetrics.readTimeouts.inc();
+            throw e;
+        }
+        finally
+        {
+            readMetrics.addNano(System.nanoTime() - startTime);
+        }
+        return rows;
+    }

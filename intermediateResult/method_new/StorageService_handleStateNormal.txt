@@ -1,0 +1,138 @@
+private void handleStateNormal(final InetAddress endpoint, String[] pieces)
+    {
+        assert pieces.length >= 2;
+
+        // Parse versioned values according to end-point version:
+        //   versions  < 1.2 .....: STATUS,TOKEN
+        //   versions >= 1.2 .....: uses HOST_ID/TOKENS app states
+
+        Collection<Token> tokens;
+
+        tokens = getTokensFor(endpoint, pieces[1]);
+
+        if (logger.isDebugEnabled())
+            logger.debug("Node " + endpoint + " state normal, token " + tokens);
+
+        if (tokenMetadata.isMember(endpoint))
+        {
+            logger.info("Node " + endpoint + " state jump to normal");
+
+            if (!isClientMode)
+            {
+                for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
+                    subscriber.onUp(endpoint);
+            }
+        }
+        else if (!isClientMode)
+        {
+            for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
+                subscriber.onJoinCluster(endpoint);
+        }
+
+        // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
+        if (Gossiper.instance.usesHostId(endpoint))
+            tokenMetadata.updateHostId(Gossiper.instance.getHostId(endpoint), endpoint);
+
+        Set<Token> tokensToUpdateInMetadata = new HashSet<Token>();
+        Set<Token> tokensToUpdateInSystemTable = new HashSet<Token>();
+        Set<Token> localTokensToRemove = new HashSet<Token>();
+        Set<InetAddress> endpointsToRemove = new HashSet<InetAddress>();
+        Multimap<InetAddress, Token> epToTokenCopy = getTokenMetadata().getEndpointToTokenMapForReading();
+
+        for (final Token token : tokens)
+        {
+            // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
+            InetAddress currentOwner = tokenMetadata.getEndpoint(token);
+            if (currentOwner == null)
+            {
+                logger.debug("New node " + endpoint + " at token " + token);
+                tokensToUpdateInMetadata.add(token);
+                if (!isClientMode)
+                    tokensToUpdateInSystemTable.add(token);
+            }
+            else if (endpoint.equals(currentOwner))
+            {
+                // set state back to normal, since the node may have tried to leave, but failed and is now back up
+                // no need to persist, token/ip did not change
+                tokensToUpdateInMetadata.add(token);
+            }
+            else if (tokenMetadata.isRelocating(token) && tokenMetadata.getRelocatingRanges().get(token).equals(endpoint))
+            {
+                // Token was relocating, this is the bookkeeping that makes it official.
+                tokensToUpdateInMetadata.add(token);
+                if (!isClientMode)
+                    tokensToUpdateInSystemTable.add(token);
+
+                optionalTasks.schedule(new Runnable()
+                {
+                    public void run()
+                    {
+                        logger.info("Removing RELOCATION state for {} {}", endpoint, token);
+                        getTokenMetadata().removeFromRelocating(token, endpoint);
+                    }
+                }, RING_DELAY, TimeUnit.MILLISECONDS);
+
+                // We used to own this token; This token will need to be removed from system.local
+                if (currentOwner.equals(FBUtilities.getBroadcastAddress()))
+                    localTokensToRemove.add(token);
+
+                logger.info("Token {} relocated to {}", token, endpoint);
+            }
+            else if (tokenMetadata.isRelocating(token))
+            {
+                logger.info("Token {} is relocating to {}, ignoring update from {}",
+                        new Object[]{token, tokenMetadata.getRelocatingRanges().get(token), endpoint});
+            }
+            else if (Gossiper.instance.compareEndpointStartup(endpoint, currentOwner) > 0)
+            {
+                tokensToUpdateInMetadata.add(token);
+                if (!isClientMode)
+                    tokensToUpdateInSystemTable.add(token);
+
+                // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
+                // a host no longer has any tokens, we'll want to remove it.
+                epToTokenCopy.get(currentOwner).remove(token);
+                if (epToTokenCopy.get(currentOwner).size() < 1)
+                    endpointsToRemove.add(currentOwner);
+
+                logger.info(String.format("Nodes %s and %s have the same token %s.  %s is the new owner",
+                                          endpoint,
+                                          currentOwner,
+                                          token,
+                                          endpoint));
+                if (logger.isDebugEnabled())
+                    logger.debug("Relocating ranges: {}", tokenMetadata.printRelocatingRanges());
+            }
+            else
+            {
+                logger.info(String.format("Nodes %s and %s have the same token %s.  Ignoring %s",
+                                           endpoint,
+                                           currentOwner,
+                                           token,
+                                           endpoint));
+                if (logger.isDebugEnabled())
+                    logger.debug("Relocating ranges: {}", tokenMetadata.printRelocatingRanges());
+            }
+        }
+
+        tokenMetadata.updateNormalTokens(tokensToUpdateInMetadata, endpoint);
+        for (InetAddress ep : endpointsToRemove)
+            removeEndpoint(ep);
+        if (!tokensToUpdateInSystemTable.isEmpty())
+            SystemTable.updateTokens(endpoint, tokensToUpdateInSystemTable);
+        if (!localTokensToRemove.isEmpty())
+            SystemTable.updateLocalTokens(Collections.<Token>emptyList(), localTokensToRemove);
+
+        if (tokenMetadata.isMoving(endpoint)) // if endpoint was moving to a new token
+        {
+            tokenMetadata.removeFromMoving(endpoint);
+
+            if (!isClientMode)
+            {
+                for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
+                    subscriber.onMove(endpoint);
+            }
+        }
+
+        calculatePendingRanges();
+    }

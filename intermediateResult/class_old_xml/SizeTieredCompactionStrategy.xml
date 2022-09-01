@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\compaction\SizeTieredCompactionStrategy.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>Map</name>.<name>Entry</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>Logger</name></name>;</import>
+<import>import <name><name>org</name>.<name>slf4j</name>.<name>LoggerFactory</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>utils</name>.<name>Pair</name></name>;</import>
+
+<class><specifier>public</specifier> class <name>SizeTieredCompactionStrategy</name> <super><extends>extends <name>AbstractCompactionStrategy</name></extends></super>
+<block>{
+    <decl_stmt><decl><type><specifier>private</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>Logger</name></type> <name>logger</name> <init>= <expr><call><name><name>LoggerFactory</name>.<name>getLogger</name></name><argument_list>(<argument><expr><name><name>SizeTieredCompactionStrategy</name>.<name>class</name></name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>long</name></type> <name>DEFAULT_MIN_SSTABLE_SIZE</name> <init>= <expr>50L * 1024L * 1024L</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>static</specifier> <specifier>final</specifier> <name>String</name></type> <name>MIN_SSTABLE_SIZE_KEY</name> <init>= <expr>"min_sstable_size"</expr></init></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <name>long</name></type> <name>minSSTableSize</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>volatile</specifier> <name>int</name></type> <name>estimatedRemainingTasks</name></decl>;</decl_stmt>
+
+    <constructor><specifier>public</specifier> <name>SizeTieredCompactionStrategy</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>options</name></decl></param>)</parameter_list>
+    <block>{
+        <expr_stmt><expr><call><name>super</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>options</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>estimatedRemainingTasks</name></name> = 0</expr>;</expr_stmt>
+        <decl_stmt><decl><type><name>String</name></type> <name>optionValue</name> <init>= <expr><call><name><name>options</name>.<name>get</name></name><argument_list>(<argument><expr><name>MIN_SSTABLE_SIZE_KEY</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><name>minSSTableSize</name> = (null != <name>optionValue</name>) ? <call><name><name>Long</name>.<name>parseLong</name></name><argument_list>(<argument><expr><name>optionValue</name></expr></argument>)</argument_list></call> : <name>DEFAULT_MIN_SSTABLE_SIZE</name></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name><name>cfs</name>.<name>setCompactionThresholds</name></name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>metadata</name>.<name>getMinCompactionThreshold</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>cfs</name>.<name>metadata</name>.<name>getMaxCompactionThreshold</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name>AbstractCompactionTask</name></type> <name>getNextBackgroundTask</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <if>if <condition>(<expr><call><name><name>cfs</name>.<name>isCompactionDisabled</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+        <block>{
+            <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Compaction is currently disabled."</expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <return>return <expr>null</expr>;</return>
+        }</block></then></if>
+
+        <decl_stmt><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>candidates</name> <init>= <expr><call><name><name>cfs</name>.<name>getUncompactingSSTables</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>buckets</name> <init>= <expr><call><name>getBuckets</name><argument_list>(<argument><expr><call><name>createSSTableAndLengthPairs</name><argument_list>(<argument><expr><call><name>filterSuspectSSTables</name><argument_list>(<argument><expr><name>candidates</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>minSSTableSize</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>logger</name>.<name>debug</name></name><argument_list>(<argument><expr>"Compaction buckets are {}"</expr></argument>, <argument><expr><name>buckets</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        <expr_stmt><expr><call><name>updateEstimatedCompactionsByTasks</name><argument_list>(<argument><expr><name>buckets</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>prunedBuckets</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>bucket</name> <range>: <expr><name>buckets</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>bucket</name>.<name>size</name></name><argument_list>()</argument_list></call> &lt; <call><name><name>cfs</name>.<name>getMinimumCompactionThreshold</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <continue>continue;</continue></then></if>
+
+            <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>bucket</name></expr></argument>, <argument><expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+            <block>{
+                <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name>SSTableReader</name></type> <name>o1</name></decl></param>, <param><decl><type><name>SSTableReader</name></type> <name>o2</name></decl></param>)</parameter_list>
+                <block>{
+                    <return>return <expr><name><name>o1</name>.<name>descriptor</name>.<name>generation</name></name> - <name><name>o2</name>.<name>descriptor</name>.<name>generation</name></name></expr>;</return>
+                }</block></function>
+            }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>prunedBuckets</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>bucket</name>.<name>subList</name></name><argument_list>(<argument><expr>0</expr></argument>, <argument><expr><call><name><name>Math</name>.<name>min</name></name><argument_list>(<argument><expr><call><name><name>bucket</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>, <argument><expr><call><name><name>cfs</name>.<name>getMaximumCompactionThreshold</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <if>if <condition>(<expr><call><name><name>prunedBuckets</name>.<name>isEmpty</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+            <return>return <expr>null</expr>;</return></then></if>
+
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>smallestBucket</name> <init>= <expr><call><name><name>Collections</name>.<name>min</name></name><argument_list>(<argument><expr><name>prunedBuckets</name></expr></argument>, <argument><expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>o1</name></decl></param>, <param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>o2</name></decl></param>)</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>n</name> <init>= <expr><call><name>avgSize</name><argument_list>(<argument><expr><name>o1</name></expr></argument>)</argument_list></call> - <call><name>avgSize</name><argument_list>(<argument><expr><name>o2</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr><name>n</name> &lt; 0</expr>)</condition><then>
+                    <return>return <expr>-1</expr>;</return></then></if>
+                <if>if <condition>(<expr><name>n</name> &gt; 0</expr>)</condition><then>
+                    <return>return <expr>1</expr>;</return></then></if>
+                <return>return <expr>0</expr>;</return>
+            }</block></function>
+
+            <function><type><specifier>private</specifier> <name>long</name></type> <name>avgSize</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>)</parameter_list>
+            <block>{
+                <decl_stmt><decl><type><name>long</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+                <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+                    <expr_stmt><expr><name>n</name> += <call><name><name>sstable</name>.<name>bytesOnDisk</name></name><argument_list>()</argument_list></call></expr>;</expr_stmt></for>
+                <return>return <expr><name>n</name> / <call><name><name>sstables</name>.<name>size</name></name><argument_list>()</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <return>return <expr>new <call><name>CompactionTask</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>smallestBucket</name></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>AbstractCompactionTask</name></type> <name>getMaximalTask</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cfs</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call>.<call><name>isEmpty</name><argument_list>()</argument_list></call> ? null : new <call><name>CompactionTask</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><call><name>filterSuspectSSTables</name><argument_list>(<argument><expr><call><name><name>cfs</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>AbstractCompactionTask</name></type> <name>getUserDefinedTask</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr>new <call><name>CompactionTask</name><argument_list>(<argument><expr><name>cfs</name></expr></argument>, <argument><expr><name>sstables</name></expr></argument>, <argument><expr><name>gcBefore</name></expr></argument>)</argument_list></call>
+                .<call><name>isUserDefined</name><argument_list>(<argument><expr>true</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>int</name></type> <name>getEstimatedRemainingTasks</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>estimatedRemainingTasks</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <specifier>static</specifier> <name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>createSSTableAndLengthPairs</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>collection</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>tableLengthPairs</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>collection</name>.<name>size</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for(<init><decl><type><name>SSTableReader</name></type> <name>table</name><range>: <expr><name>collection</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>tableLengthPairs</name>.<name>add</name></name><argument_list>(<argument><expr>new <call><name><name>Pair</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>table</name></expr></argument>, <argument><expr><call><name><name>table</name>.<name>onDiskLength</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>tableLengthPairs</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block">/*
+     * Group files of similar size into buckets.
+     */</comment>
+    <function><type><specifier>static</specifier> <argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list> <name><name>List</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>getBuckets</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>T</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>files</name></decl></param>, <param><decl><type><name>long</name></type> <name>minSSTableSize</name></decl></param>)</parameter_list>
+    <block>{
+        <comment type="line">// Sort the list in order to get deterministic results during the grouping below</comment>
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>T</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>sortedFiles</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>T</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><name>files</name></expr></argument>)</argument_list></call></expr></init></decl>;</decl_stmt>
+        <expr_stmt><expr><call><name><name>Collections</name>.<name>sort</name></name><argument_list>(<argument><expr><name>sortedFiles</name></expr></argument>, <argument><expr>new <class><super><name><name>Comparator</name><argument_list>&lt;<argument><name><name>Pair</name><argument_list>&lt;<argument><name>T</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></super><argument_list>()</argument_list>
+        <block>{
+            <function><type><specifier>public</specifier> <name>int</name></type> <name>compare</name><parameter_list>(<param><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>T</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>p1</name></decl></param>, <param><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>T</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>p2</name></decl></param>)</parameter_list>
+            <block>{
+                <return>return <expr><call><name><name>p1</name>.<name>right</name>.<name>compareTo</name></name><argument_list>(<argument><expr><name><name>p2</name>.<name>right</name></name></expr></argument>)</argument_list></call></expr>;</return>
+            }</block></function>
+        }</block></class></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+
+        <decl_stmt><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>Long</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>buckets</name> <init>= <expr>new <call><name><name>HashMap</name><argument_list>&lt;<argument><name>Long</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <label><name>outer</name>:</label>
+        <for>for (<init><decl><type><name><name>Pair</name><argument_list>&lt;<argument><name>T</name></argument>, <argument><name>Long</name></argument>&gt;</argument_list></name></type> <name>pair</name><range>: <expr><name>sortedFiles</name></expr></range></decl></init>)
+        <block>{
+            <decl_stmt><decl><type><name>long</name></type> <name>size</name> <init>= <expr><name><name>pair</name>.<name>right</name></name></expr></init></decl>;</decl_stmt>
+
+            <comment type="line">// look for a bucket containing similar-sized files:</comment>
+            <comment type="line">// group in the same bucket if it's w/in 50% of the average for this bucket,</comment>
+            <comment type="line">// or this file and the bucket are all considered "small" (less than `minSSTableSize`)</comment>
+            <for>for (<init><decl><type><name><name>Entry</name><argument_list>&lt;<argument><name>Long</name></argument>, <argument><name><name>List</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>entry</name> <range>: <expr><call><name><name>buckets</name>.<name>entrySet</name></name><argument_list>()</argument_list></call></expr></range></decl></init>)
+            <block>{
+                <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>bucket</name> <init>= <expr><call><name><name>entry</name>.<name>getValue</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <decl_stmt><decl><type><name>long</name></type> <name>oldAverageSize</name> <init>= <expr><call><name><name>entry</name>.<name>getKey</name></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+                <if>if <condition>(<expr>(<name>size</name> &gt; (<name>oldAverageSize</name> / 2) &amp;&amp; <name>size</name> &lt; (3 * <name>oldAverageSize</name>) / 2)
+                    || (<name>size</name> &lt; <name>minSSTableSize</name> &amp;&amp; <name>oldAverageSize</name> &lt; <name>minSSTableSize</name>)</expr>)</condition><then>
+                <block>{
+                    <comment type="line">// remove and re-add under new new average size</comment>
+                    <expr_stmt><expr><call><name><name>buckets</name>.<name>remove</name></name><argument_list>(<argument><expr><name>oldAverageSize</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <decl_stmt><decl><type><name>long</name></type> <name>totalSize</name> <init>= <expr><call><name><name>bucket</name>.<name>size</name></name><argument_list>()</argument_list></call> * <name>oldAverageSize</name></expr></init></decl>;</decl_stmt>
+                    <decl_stmt><decl><type><name>long</name></type> <name>newAverageSize</name> <init>= <expr>(<name>totalSize</name> + <name>size</name>) / (<call><name><name>bucket</name>.<name>size</name></name><argument_list>()</argument_list></call> + 1)</expr></init></decl>;</decl_stmt>
+                    <expr_stmt><expr><call><name><name>bucket</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>pair</name>.<name>left</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <expr_stmt><expr><call><name><name>buckets</name>.<name>put</name></name><argument_list>(<argument><expr><name>newAverageSize</name></expr></argument>, <argument><expr><name>bucket</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+                    <continue>continue outer;</continue>
+                }</block></then></if>
+            }</block></for>
+
+            <comment type="line">// no similar bucket found; put it in a new one</comment>
+            <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></type> <name>bucket</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+            <expr_stmt><expr><call><name><name>bucket</name>.<name>add</name></name><argument_list>(<argument><expr><name><name>pair</name>.<name>left</name></name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+            <expr_stmt><expr><call><name><name>buckets</name>.<name>put</name></name><argument_list>(<argument><expr><name>size</name></expr></argument>, <argument><expr><name>bucket</name></expr></argument>)</argument_list></call></expr>;</expr_stmt>
+        }</block></for>
+
+        <return>return <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>T</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name><argument_list>(<argument><expr><call><name><name>buckets</name>.<name>values</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>private</specifier> <name>void</name></type> <name>updateEstimatedCompactionsByTasks</name><parameter_list>(<param><decl><type><name><name>List</name><argument_list>&lt;<argument><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></argument>&gt;</argument_list></name></type> <name>tasks</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name>int</name></type> <name>n</name> <init>= <expr>0</expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>bucket</name><range>: <expr><name>tasks</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr><call><name><name>bucket</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt;= <call><name><name>cfs</name>.<name>getMinimumCompactionThreshold</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><name>n</name> += <call><name><name>Math</name>.<name>ceil</name></name><argument_list>(<argument><expr>(<name>double</name>)<call><name><name>bucket</name>.<name>size</name></name><argument_list>()</argument_list></call> / <call><name><name>cfs</name>.<name>getMaximumCompactionThreshold</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+        <expr_stmt><expr><name>estimatedRemainingTasks</name> = <name>n</name></expr>;</expr_stmt>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getMinSSTableSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>minSSTableSize</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>long</name></type> <name>getMaxSSTableSize</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name><name>Long</name>.<name>MAX_VALUE</name></name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>boolean</name></type> <name>isKeyExistenceExpensive</name><parameter_list>(<param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SSTable</name></extends></argument>&gt;</argument_list></name></type> <name>sstablesToIgnore</name></decl></param>)</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>cfs</name>.<name>getSSTables</name></name><argument_list>()</argument_list></call>.<call><name>size</name><argument_list>()</argument_list></call> - <call><name><name>sstablesToIgnore</name>.<name>size</name></name><argument_list>()</argument_list></call> &gt; 20</expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name>String</name></type> <name>toString</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><call><name><name>String</name>.<name>format</name></name><argument_list>(<argument><expr>"SizeTieredCompactionStrategy[%s/%s]"</expr></argument>,
+            <argument><expr><call><name><name>cfs</name>.<name>getMinimumCompactionThreshold</name></name><argument_list>()</argument_list></call></expr></argument>,
+            <argument><expr><call><name><name>cfs</name>.<name>getMaximumCompactionThreshold</name></name><argument_list>()</argument_list></call></expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

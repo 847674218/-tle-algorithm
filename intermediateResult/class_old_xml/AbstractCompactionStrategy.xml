@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<unit xmlns="http://www.sdml.info/srcML/src" language="Java" filename="C:\Users\mrahimi1\Desktop\FSE-2015-LinkEvolution\srcML-Win\srcML-Win\cassandra-cassandra-1.1.12\src\java\org\apache\cassandra\db\compaction\AbstractCompactionStrategy.java"><comment type="block" format="javadoc">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */</comment>
+
+<package>package <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>compaction</name></name>;</package>
+
+<import>import <name><name>java</name>.<name>io</name>.<name>IOException</name></name>;</import>
+<import>import <name><name>java</name>.<name>util</name></name>.*;</import>
+<import>import <name><name>java</name>.<name>util</name>.<name>concurrent</name>.<name>TimeUnit</name></name>;</import>
+
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>db</name>.<name>ColumnFamilyStore</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Range</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>dht</name>.<name>Token</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTable</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>io</name>.<name>sstable</name>.<name>SSTableReader</name></name>;</import>
+<import>import <name><name>org</name>.<name>apache</name>.<name>cassandra</name>.<name>service</name>.<name>StorageService</name></name>;</import>
+
+<comment type="block" format="javadoc">/**
+ * Pluggable compaction strategy determines how SSTables get merged.
+ *
+ * There are two main goals:
+ *  - perform background compaction constantly as needed; this typically makes a tradeoff between
+ *    i/o done by compaction, and merging done at read time.
+ *  - perform a full (maximum possible) compaction if requested by the user
+ */</comment>
+<class><specifier>public</specifier> <specifier>abstract</specifier> class <name>AbstractCompactionStrategy</name>
+<block>{
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name>ColumnFamilyStore</name></type> <name>cfs</name></decl>;</decl_stmt>
+    <decl_stmt><decl><type><specifier>protected</specifier> <specifier>final</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>options</name></decl>;</decl_stmt>
+
+    <constructor><specifier>protected</specifier> <name>AbstractCompactionStrategy</name><parameter_list>(<param><decl><type><name>ColumnFamilyStore</name></type> <name>cfs</name></decl></param>, <param><decl><type><name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>options</name></decl></param>)</parameter_list>
+    <block>{
+        <assert>assert <expr><name>cfs</name> != null</expr>;</assert>
+        <expr_stmt><expr><name><name>this</name>.<name>cfs</name></name> = <name>cfs</name></expr>;</expr_stmt>
+        <expr_stmt><expr><name><name>this</name>.<name>options</name></name> = <name>options</name></expr>;</expr_stmt>
+    }</block></constructor>
+
+    <function><type><specifier>public</specifier> <name><name>Map</name><argument_list>&lt;<argument><name>String</name></argument>, <argument><name>String</name></argument>&gt;</argument_list></name></type> <name>getOptions</name><parameter_list>()</parameter_list>
+    <block>{
+        <return>return <expr><name>options</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Releases any resources if this strategy is shutdown (when the CFS is reloaded after a schema change).
+     * Default is to do nothing.
+     */</comment>
+    <function><type><specifier>public</specifier> <name>void</name></type> <name>shutdown</name><parameter_list>()</parameter_list> <block>{ }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * @return the next background/minor compaction task to run; null if nothing to do.
+     * @param gcBefore throw away tombstones older than this
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>AbstractCompactionTask</name></type> <name>getNextBackgroundTask</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * @return a compaction task that should be run to compact this columnfamilystore
+     * as much as possible.  Null if nothing to do.
+     * @param gcBefore throw away tombstones older than this
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>AbstractCompactionTask</name></type> <name>getMaximalTask</name><parameter_list>(<param><decl><type><specifier>final</specifier> <name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * @return a compaction task corresponding to the requested sstables.
+     * Will not be null. (Will throw if user requests an invalid compaction.)
+     * @param gcBefore throw away tombstones older than this
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>AbstractCompactionTask</name></type> <name>getUserDefinedTask</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><specifier>final</specifier> <name>int</name></type> <name>gcBefore</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * @return the number of background tasks estimated to still be needed for this columnfamilystore
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>int</name></type> <name>getEstimatedRemainingTasks</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * @return size in bytes of the largest sstables for this strategy
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>long</name></type> <name>getMaxSSTableSize</name><parameter_list>()</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * @return true if checking for whether a key exists, ignoring @param sstablesToIgnore,
+     * is going to be expensive
+     */</comment>
+    <function_decl><type><specifier>public</specifier> <specifier>abstract</specifier> <name>boolean</name></type> <name>isKeyExistenceExpensive</name><parameter_list>(<param><decl><type><name><name>Set</name><argument_list>&lt;<argument><name>?</name> <extends>extends <name>SSTable</name></extends></argument>&gt;</argument_list></name></type> <name>sstablesToIgnore</name></decl></param>)</parameter_list>;</function_decl>
+
+    <comment type="block" format="javadoc">/**
+     * Filters SSTables that are to be blacklisted from the given collection
+     *
+     * @param originalCandidates The collection to check for blacklisted SSTables
+     *
+     * @return list of the SSTables with blacklisted ones filtered out
+     */</comment>
+    <function><type><specifier>public</specifier> <specifier>static</specifier> <name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>filterSuspectSSTables</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>originalCandidates</name></decl></param>)</parameter_list>
+    <block>{
+        <decl_stmt><decl><type><name><name>List</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>filteredCandidates</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>candidate</name> <range>: <expr><name>originalCandidates</name></expr></range></decl></init>)
+        <block>{
+            <if>if <condition>(<expr>!<call><name><name>candidate</name>.<name>isMarkedSuspect</name></name><argument_list>()</argument_list></call></expr>)</condition><then>
+                <expr_stmt><expr><call><name><name>filteredCandidates</name>.<name>add</name></name><argument_list>(<argument><expr><name>candidate</name></expr></argument>)</argument_list></call></expr>;</expr_stmt></then></if>
+        }</block></for>
+
+        <return>return <expr><name>filteredCandidates</name></expr>;</return>
+    }</block></function>
+
+    <comment type="block" format="javadoc">/**
+     * Returns a list of KeyScanners given sstables and a range on which to scan.
+     * The default implementation simply grab one SSTableScanner per-sstable, but overriding this method
+     * allow for a more memory efficient solution if we know the sstable don't overlap (see
+     * LeveledCompactionStrategy for instance).
+     */</comment>
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ICompactionScanner</name></argument>&gt;</argument_list></name></type> <name>getScanners</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>sstables</name></decl></param>, <param><decl><type><name><name>Range</name><argument_list>&lt;<argument><name>Token</name></argument>&gt;</argument_list></name></type> <name>range</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <decl_stmt><decl><type><name><name>ArrayList</name><argument_list>&lt;<argument><name>ICompactionScanner</name></argument>&gt;</argument_list></name></type> <name>scanners</name> <init>= <expr>new <call><name><name>ArrayList</name><argument_list>&lt;<argument><name>ICompactionScanner</name></argument>&gt;</argument_list></name><argument_list>()</argument_list></call></expr></init></decl>;</decl_stmt>
+        <for>for (<init><decl><type><name>SSTableReader</name></type> <name>sstable</name> <range>: <expr><name>sstables</name></expr></range></decl></init>)
+            <expr_stmt><expr><call><name><name>scanners</name>.<name>add</name></name><argument_list>(<argument><expr><call><name><name>sstable</name>.<name>getDirectScanner</name></name><argument_list>(<argument><expr><name>range</name></expr></argument>)</argument_list></call></expr></argument>)</argument_list></call></expr>;</expr_stmt></for>
+        <return>return <expr><name>scanners</name></expr>;</return>
+    }</block></function>
+
+    <function><type><specifier>public</specifier> <name><name>List</name><argument_list>&lt;<argument><name>ICompactionScanner</name></argument>&gt;</argument_list></name></type> <name>getScanners</name><parameter_list>(<param><decl><type><name><name>Collection</name><argument_list>&lt;<argument><name>SSTableReader</name></argument>&gt;</argument_list></name></type> <name>toCompact</name></decl></param>)</parameter_list> <throws>throws <argument><expr><name>IOException</name></expr></argument></throws>
+    <block>{
+        <return>return <expr><call><name>getScanners</name><argument_list>(<argument><expr><name>toCompact</name></expr></argument>, <argument><expr>null</expr></argument>)</argument_list></call></expr>;</return>
+    }</block></function>
+}</block></class>
+</unit>

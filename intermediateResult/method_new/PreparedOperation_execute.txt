@@ -1,0 +1,78 @@
+public void execute(ColumnFamily cf,
+                        ColumnNameBuilder builder,
+                        AbstractType<?> validator,
+                        UpdateParameters params,
+                        List<Pair<ByteBuffer, IColumn>> list) throws InvalidRequestException
+    {
+        if (validator instanceof CollectionType)
+        {
+            switch (((CollectionType)validator).kind)
+            {
+                case LIST:
+                    switch (kind)
+                    {
+                        case SET:
+                            ListOperation.doSetFromPrepared(cf, builder, (ListType)validator, preparedValue, params);
+                            break;
+                        case PREPARED_PLUS:
+                            ListOperation.doPrependFromPrepared(cf, builder, (ListType)validator, preparedValue, params);
+                            break;
+                        case PLUS_PREPARED:
+                            ListOperation.doAppendFromPrepared(cf, builder, (ListType)validator, preparedValue, params);
+                            break;
+                        case MINUS_PREPARED:
+                            ListOperation.doDiscardFromPrepared(cf, builder, (ListType)validator, preparedValue, params, list);
+                            break;
+                    }
+                    break;
+                case SET:
+                    switch (kind)
+                    {
+                        case SET:
+                            SetOperation.doSetFromPrepared(cf, builder, (SetType)validator, preparedValue, params);
+                            break;
+                        case PREPARED_PLUS:
+                            throw new InvalidRequestException("Unsupported syntax, cannot add to a prepared set");
+                        case PLUS_PREPARED:
+                            SetOperation.doAddFromPrepared(cf, builder, (SetType)validator, preparedValue, params);
+                            break;
+                        case MINUS_PREPARED:
+                            SetOperation.doDiscardFromPrepared(cf, builder, (SetType)validator, preparedValue, params);
+                            break;
+                    }
+                    break;
+                case MAP:
+                    switch (kind)
+                    {
+                        case SET:
+                            MapOperation.doSetFromPrepared(cf, builder, (MapType)validator, preparedValue, params);
+                            break;
+                        case PREPARED_PLUS:
+                            throw new InvalidRequestException("Unsupported syntax, cannot put to a prepared map");
+                        case PLUS_PREPARED:
+                            MapOperation.doPutFromPrepared(cf, builder, (MapType)validator, preparedValue, params);
+                            break;
+                        case MINUS_PREPARED:
+                            throw new InvalidRequestException("Unsuppoted syntax, discard syntax for map not supported");
+                    }
+                    break;
+            }
+        }
+        else
+        {
+            switch (kind)
+            {
+                case SET:
+                    ColumnOperation.Set(preparedValue).execute(cf, builder, validator, params, null);
+                    break;
+                case PREPARED_PLUS:
+                    throw new InvalidRequestException("Unsupported syntax for increment, must be of the form X = X + <value>");
+                case PLUS_PREPARED:
+                    ColumnOperation.CounterInc(preparedValue).execute(cf, builder, validator, params, null);
+                    break;
+                case MINUS_PREPARED:
+                    ColumnOperation.CounterDec(preparedValue).execute(cf, builder, validator, params, null);
+                    break;
+            }
+        }
+    }
